@@ -1,0 +1,30 @@
+{"turns": [{"role": "user", "content": "What screws are in the MIS set?"}], "expected_system": "MIS", "expects_clarification": false}
+{"turns": [{"role": "user", "content": "What's the difference between the two 1.4mm wires in the MIS set?"}], "expected_system": "MIS", "expects_clarification": false}
+{"turns": [{"role": "user", "content": "What's the difference in the wires in the top vs. the bottom of the MIS tray?"}], "expected_system": "MIS", "expects_clarification": false}
+{"turns": [{"role": "user", "content": "What's the difference in the guidepins in the top vs. the bottom levels of the MIS tray?"}], "expected_system": "MIS", "expects_clarification": false}
+{"turns": [{"role": "user", "content": "Walk me through how I need to set up the back table for an MIS bunion case? Surgeon typically uses a 4.0 and 3.5 screw for their bunion, and a 3.0 PT screw for their Akin"}], "expected_system": "MIS", "expects_clarification": false}
+{"turns": [{"role": "user", "content": "What's the part number for the MIS 1.4 wire?"}], "expected_system": "MIS", "expects_clarification": false}
+{"turns": [{"role": "user", "content": "Whats the SKU for the 1.4 wire in the MIS set"}], "expected_system": "MIS", "expects_clarification": false}
+{"turns": [{"role": "user", "content": "Whats the SKU for the 1.5 wire in the MIS set"}], "expected_system": "MIS", "expects_clarification": false}
+{"turns": [{"role": "user", "content": "What 3.5mm plating screws are in the MIS set"}], "expected_system": "MIS", "expects_clarification": false}
+{"turns": [{"role": "user", "content": "What's the difference between the two 1.4mm guidepins in the MIS tray?"}], "expected_system": "MIS", "expects_clarification": false}
+{"turns": [{"role": "user", "content": "What does the laser line on the MIS screwdriver mean?"}], "expected_system": "MIS", "expects_clarification": false}
+{"turns": [{"role": "user", "content": "How do I tell the three different 26mm TETRA staples apart?"}], "expected_system": "REFLEX", "expects_clarification": false}
+{"turns": [{"role": "user", "content": "Which direction do I place the hybrid MTP plate ?"}], "expected_system": "REFLEX", "expects_clarification": false}
+{"turns": [{"role": "user", "content": "How long are the staple legs on the hybrid implants?"}], "expected_system": "REFLEX", "expects_clarification": false}
+{"turns": [{"role": "user", "content": "How wide is the reflex hybrid MTP implant"}], "expected_system": "REFLEX", "expects_clarification": false}
+{"turns": [{"role": "user", "content": "What are the dimensions of the reflex hybrid MTP implant"}], "expected_system": "REFLEX", "expects_clarification": false}
+{"turns": [{"role": "user", "content": "How do I assemble the tetra guide when targeting a medial staple"}], "expected_system": "REFLEX", "expects_clarification": false}
+{"turns": [{"role": "user", "content": "Outline back table setup for a lapidus procedure using the 30mm TETRA and medial staple, listing all items necessary in order to do the case"}], "expected_system": "REFLEX", "expects_clarification": false}
+{"turns": [{"role": "user", "content": "What reamer sizes are in the reflex tray"}], "expected_system": "REFLEX", "expects_clarification": false}
+{"turns": [{"role": "user", "content": "What’s the difference between the metatarsal and phalanges reamers in the reflex tray"}], "expected_system": "REFLEX", "expects_clarification": false}
+{"turns": [{"role": "user", "content": "How many 4.5mm discs are in the reflex tray"}], "expected_system": "REFLEX", "expects_clarification": false}
+{"turns": [{"role": "user", "content": "How do I use the skin stepped blade"}], "expected_system": "REFLEX", "expects_clarification": false}
+{"turns": [{"role": "user", "content": "Where is the akin stepped blade located?"}], "expected_system": "REFLEX", "expects_clarification": false}
+{"turns": [{"role": "user", "content": "Pull the tray overhead guide for the reflex hybrid tray"}], "expected_system": "REFLEX", "expects_clarification": false}
+{"turns": [{"role": "user", "content": "How do I know which dorsal tetra guide to use from the reflex tray when assembling the full targeting guide?"}], "expected_system": "REFLEX", "expects_clarification": false}
+{"turns": [{"role": "user", "content": "What’s the sku for the 7mm dynamic disc"}], "expected_system": "REFLEX", "expects_clarification": false}
+{"turns": [{"role": "user", "content": "What’s the locator pin used for in the reflex tray"}], "expected_system": "REFLEX", "expects_clarification": false}
+{"turns": [{"role": "user", "content": "When would you use the short vs long drill from the reflex tray"}], "expected_system": "REFLEX", "expects_clarification": false}
+{"turns": [{"role": "user", "content": "If I’m doing a reflex hybrid MTP fusion case, do I only need the reflex hybrid tray?"}], "expected_system": "REFLEX", "expects_clarification": false}
+{"turns": [{"role": "user", "content": "the threaded lag pin in the reflex hybrid tray isn’t fitting into the hybrid template holes. What’s wrong?"}], "expected_system": "REFLEX", "expects_clarification": false}

@@ -1,0 +1,36 @@
+# Local Postgres (pgvector) + Neo4j for development. Credentials match
+# DATABASE_URL / NEO4J_* in .env.example — change both together if you
+# customize this. No Azure services: OpenAI and deployment run on Railway,
+# so there's nothing here to emulate for them.
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: orthopedics-postgres
+    environment:
+      POSTGRES_USER: orthopedics
+      POSTGRES_PASSWORD: orthopedics-dev
+      POSTGRES_DB: orthopedics_agents
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U orthopedics -d orthopedics_agents"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  neo4j:
+    image: neo4j:5-community
+    container_name: orthopedics-neo4j
+    environment:
+      NEO4J_AUTH: neo4j/orthopedics-dev
+    ports:
+      - "7474:7474" # browser
+      - "7687:7687" # bolt
+    volumes:
+      - neo4j-data:/data
+
+volumes:
+  postgres-data:
+  neo4j-data:

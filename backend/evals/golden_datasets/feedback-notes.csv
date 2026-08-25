@@ -1,0 +1,221 @@
+Table 1
+Indexed System,Prompt,Provided Answer,Perferred Answer (Content + Format Feedback),Content Feedback,Formatting Feedback,Question Type,Expected Top Sources/Citation (listed in order of hierarchy)
+MIS,What screws are in the MIS set?,"The MIS set includes headless, chamfered, cannulated screws available in Ø3.0mm, Ø3.5mm, and Ø4.0mm diameters with full or partial thread options designed for minimally invasive foot reconstruction.Key PointsScrews are part of the MIS Foot Recon System tailored for minimally invasive surgeryDiameter options: 3.0mm, 3.5mm, 4.0mmThread types: Full thread or partial (1/3) threadHead style: Headless, chamferedCannulated design for guided insertionLength ranges from 16mm up to 66mm depending on screw size and thread typeCompatible guidewires and drivers specified for each screw size","The MIS system contains the following headless, chamfered, cannulated screws in both full and partial thread options. Each screw offers lengths in increments of 2mm
+Ø3.0 mm FT: 20-50 mm
+Ø3.0 mm PT: 16-40 mm
+Ø3.5 mm FT: 26-66 mm
+Ø3.5 mm PT: 20-60 mm
+Ø4.0 mm FT: 26-66 mm
+Ø3.5 mm PT: 30-60 mm
+
+The tray also includes Ø3.5 polyaxial locking and non-locking screws for use with the Bailout and Revision Plates:
+Ø3.5 mm Polyaxial Locking: 10-22mm (every 2mm)
+Ø3.5 mm Non-Locking: 10-22mm (every 2mm)","Relevant screw specs to include: 
+- style(s) of screws offered: cannulated, chamfered screws; partial and full thread
+-diameters offered
+-lengths for each diameter
+-expand scope to include the plating screws that are also in set (even though they technically aren't MIS screws, they're available in the tray)
+
+can omit blurb on compatible guidewires and drivers as its not relevant for initial presenting question","Initial answer + ""Key points"" is redundant- consolidate, preferred that spec info is consolidated into digestable, bulleted lists with relevant info",Specs - system contents; SKU/ordering info,"MIS Inventory Control Form
+MIS Brochure and Surgical Technique"
+MIS,What's the difference between the two 1.4mm wires in the MIS set?,"The two 1.4mm wires in the MIS set differ in material and length: the full thread (MIS Bunion) wire is 1.4 × 200mm made of cobalt chrome, while the partial thread (MIS Fusion) wire is 1.4 × 150mm made of titanium.Key PointsFull Thread (MIS Bunion) wire:Diameter: 1.4mmLength: 200mmMaterial: Cobalt ChromePartial Thread (MIS Fusion) wire:Diameter: 1.4mmLength: 150mmMaterial: Titanium","The two 1.4mm wires in the MIS Foot Recon Tray correspond to the Ø3.5mm full thread (MIS bunion) and partial thread (MIS fusion) screws, which result in different wire materials and length: 
+
+MGW14200: 1.4 x 200mm guidepin
+-Corresponds to 3.5 mm full thread MIS screw and teal instrumentation
+-Material: cobalt chrome
+
+MGT14150: 1.4 x 150mm guidepin
+-Corresponds to 3.5 mm partial thread MIS screw and gold isntrumentation
+-Material: titanium","Current content is correct. Relevant details for wire info include: length, size, what screw(s) it corresponds to, SKU, material (for MIS wires only), what system they're in",Omit key points section and list specs for more clear presentation. Could alternatively be presented as a table if that is a reasonable ask here ,Specs - product characteristics,"MIS Inventory Control Form
+MIS Brochure and Surgical Technique (currently has a typo on the tray overhead portion, but this info is also  summarized on the product overview pages at the beginning)"
+MIS,What's the difference in the wires in the top vs. the bottom of the MIS tray?,"The wires at the top of the MIS tray are Ø1.1 x 50mm guidewires (Snapwire), designed for initial guidance, while the wires at the bottom are parallel wire guides and wire guide sleeves in varying diameters (Ø1.2mm, Ø1.4mm, Ø1.6mm) used for precise wire placement and stability during surgery.Key Points:Top wires (Snapwire):Ø1.1mm diameter, 50mm lengthServe as initial guidewires for wire placementBottom wires:Parallel wire guides in Ø1.2mm, Ø1.4mm, Ø1.6mm sizesWire guide sleeves matching these diametersUsed to maintain parallel alignment and stability during fixation","The wires in the top of the tray are for the Ø3.0 mm screws, along with the Ø3.5 and Ø4.0 mm MIS bunion screws. The Ø1.4 and Ø1.6 mm wires, which respectively correspond to the the Ø3.5 and Ø4.0 mm MIS bunion screws, are longer in length (200 mm) than their counterparts on the bottom of the tray (150 mm), and are made of a stiffer material (cobalt chrome vs. titanium/stainless steel), both to accomodate longer screws. 
+Top tray level:
+Ø1.2 x 150 mm Guidepins (SKU): Use: Ø3.0 mm full and partial thread MIS screws; Material: Stainless steel
+Ø1.4 x 200 mm Guidepins (SKU): Use: Ø3.5 mm full thread/MIS bunion screws; Material: Cobalt chrome
+Ø1.6 x 200 mm Guidepins (SKU): Use: Ø4.0 mm full thread/MIS bunion screws; Material: Cobalt chrome
+
+Bottom tray level:
+Ø1.4 x 150 mm Guidepins (SKU): Use: Ø3.5 mm partial thread/MIS fusion screws; Material: titanium
+Ø1.6 x 150 mm Guidepins (SKU): Use: Ø4.0 mm partial thread/MIS fusion screws; Material: titanium ","Top/bottom more commonly refers to the levels in the tray, not left vs. right. Not totally sure if this model is equipped to handle this type of question yet, but users WILL be asking for assistance navigating trays. 
+'Guidepin' vs. 'Wire' - focus is instead on the 1.2, 1.4, and 1.6mm guidepins, not the 'snap wires'. Probably because the bot isn't programmed to understand synonyms yet.
+""1.1 x 50mm guidewires (Snapwire), designed for initial guidance"": These wires are not designed for initial guidance, and are instead for temorarily fixing the burr cut guide - this is explained in the MIS Foot Recon Surgical Technique. I also am unsure where ""snapwire"" is coming from as that is not the correct term.
+""Wires at the bottom are parallel wire guides and wire guide sleeves in varying diameters"": Likely impacted by wire/guidepin being interchangeable, but this is incorrect. Wires, parallel wire guides, and wire guide sleeves are all totally separate items.
+
+I'm assuming the answer is incorrect because the tray overhead guide PDF has a typo. 
+
+Need-to-know info would include:
+-What guidewires/guidepins are located on the top level vs bottom level of the tray
+-Key differences: what they're used for (what screws they correspond to), length differences (150 vs. 200mm), and material (cobalt chrome, titanium, or stainless steel)
+-not essential, but seemingly simple and short enough to also include the SKU with each bullet
+-do not need to include the 1.1x50mm wire info. someone could ask this in a followup as needed","High-level summary answering the question to begin + rationale
+Top level wires:
+list format, including key differences for each wire
+
+Bottom level wires:
+list format, including key differences",Specs - product characteristics,"Master Item File (doesn't include info on where the wires are located in the tray, but could confirm against second resource) 
+MIS Brochure and Surgical Technique (currently has a typo on the tray overhead portion)"
+MIS,What's the difference in the guidepins in the top vs. the bottom levels of the MIS tray?,"The guidepins in the top level of the tray are generally shorter (50mm) and smaller in diameter (e.g., Ø1.2mm, Ø1.4mm), while the bottom level contains longer guidepins (up to 200mm) with larger diameters (e.g., Ø1.4mm x 200mm, Ø1.6mm x 200mm), designed for different surgical needs and anatomical access.
+Key PointsTop level guidepins:Typically 50mm in length (e.g., MGT14150 Ø1.4 x 50mm)Smaller diameters suited for precise, localized guidanceBottom level guidepins:Longer lengths, up to 200mm (e.g., MGW14200 Ø1.4 x 200mm)Larger diameters for deeper or more robust fixation guidanceThis differentiation supports varied procedural requirements in foot & ankle surgeries, balancing precision and reach",see above,"This is on the right track to be more correct than the similar question above where the user asks about ""wires"". 
+Top level guidepins:Typically 50mm in length (e.g., MGT14150 Ø1.4 x 50mm) -- '50mm' is incorrect, as we uncovered with the brochure/tray overhead guide, same comment as above with confirming against multiple sources; ""suited 
+""Smaller diameters"" - incorrect. all three diameters are included on the top level (1.2, 1.4, 1.6mm)
+""suited for precise, localized guidance"" -- this appears to be some inference here, which im expecting this bot to do, but this is incorrect. the wires on the top are longer as they are for MIS bunion procedures, which typically use longer screws, therefore needing longer wires.
+""larger diameters for deeper or more robust fixation guidance"" - this is correct in that these are larger diameters than what some of the competition offers, but the rationale is incorrect. the purpose is for the wire to be more stiff to prevent skiving (bending) on insertion for accurate screw trajectory. this is a touch of an inference, but is listed in the launch presentation.
+
+Last sentence feels like AI fluff/filler - no need to include","format is mostly ok, as it shows a summary statement at the top. It would be cleaner to read if 'key points' were removed and then each wire's key descriptors were on their own line, and separated by top vs. bottom level",Specs - product characteristics,"Master Item File (doesn't include info on where the wires are located in the tray, but could confirm against second resource) 
+MIS Brochure and Surgical Technique (currently has a typo on the tray overhead portion)"
+MIS,"Walk me through how I need to set up the back table for an MIS bunion case? Surgeon typically uses a 4.0 and 3.5 screw for their bunion, and a 3.0 PT screw for their Akin","For an MIS bunion case, set up the back table with the MIS Bunion Instruments tray, Screw Prep Instruments tray, and the MIS Bunion and Fusion Screws tray. Include 4.0 and 3.5 screws for the bunion fixation and 3.0 PT screws for the Akin procedure.Key Points:Use the MIS Bunion Instruments tray for surgical tools specific to bunion correction.Include the Screw Prep Instruments tray to prepare screws efficiently.Have the MIS Bunion and Fusion Screws tray ready with:4.0 and 3.5 screws for bunion fixation3.0 PT screws for the Akin osteotomyKeep bailout and revision plates available in case of complications or failed MIS bunions (optional backup).","for back table setup of an MIS bunion using 3.5 and 4.0mms screws, plus a 3.0mm Akin screw, the technique necessitates the following. Items with an asterisk (*) are optional steps/items; defer to your surgeon's technique preferences for exact items.
+Osteotomy prep:
+1. Periosteal elevator and rasp
+2. Burr cut guide* + two 1.1 x 50mm wires*
+3. Desired burr - Sterile-packed; confirm desired burr prior to case (review MIS Burr Reference Guide for options), attach to 4:1 reducer*
+4. Capital fragment translator (may be fixed with wires if preferred)
+
+Wire placement:
+5. Guidewire for proximal screw (Likely the Ø4.0 mm screw) - Ø1.6 x 200 mm guidewire
+6. Assemble parallel wire guide: Ø1.6 mm parallel wire guide + Ø1.4 mm parallel wire sleeve + wire guide handle
+7. Guidewire for distal screw (likely the Ø3.5 mm screw) - Ø1.4 x 200 mm guidewire
+
+MIS Bunion Screw Prep/Insertion
+8. Depth gauge for 200 mm wire
+9. Screw insetion instruments for proximal screw (Ø4.0 mm): Ø4.0mm tissue protector, Ø3.6mm drill bit, Ø4.0mm countersink*, T15 driver
+10. Screw insertion instruments for distal screw (Ø3.5 mm): Ø3.5mm tissue protector, Ø2.9mm drill bit, Ø3.5mm countersink*, T10 driver
+
+Akin screw prep and insertion:
+11. Second MIS burr (Sterile item, confirm desired burr prior to case (review MIS Burr Reference Guide for options)
+12. Ø1.2 x 150mm guidewire 
+13. Depth gauge for 150mm wire
+14. Screw insertion instruments for Akin screw (Ø3.0mm): Ø3.0mm tissue protector, Ø2.3mm drill, Ø3.0mm countersink*, ØT9 driver
+
+If utilizing Medline UNITE's MIS Power system, ensure that this is also setup prior to the case
+
+Followups: [Instructions for setting up MIS power system] , [Burrs commonly used for MIS Bunion and Akin osteotomies]","similar answer to 'summarize setup instructions for…', where the bot would summarize the surgical steps. The difference is that the user is asking about specific instruments that will be needed in order, so the bot would parse down the technique steps even further and instead focus on the order of which each instrument will be used. this type of question WILL get asked frequently across all systems.
+current answer is very high-level, but on the right track, as the surgeon would use items first from the MIS bunion instruments tray, then the corresponding screw prep instruments, and then the three screws currently listed in the answer. content would include specific items used-- names are important, but no need to include SKUs for each item.","user is expecting a stepwise answer, so numbered list. Can include a setup sentence to kick of the answer, but no need for a summary at the beginnig or end.",Technique/procedural,MIS Brochure and Surgical Technique (surgical technique portion)
+MIS,What's the part number for the MIS 1.4 wire? ,"The part number for the MIS 1.4mm parallel wire guide is MSN40022.Key Points:It is listed as ""GUIDE, PARALLEL WIRE, MIS, 1.4MM""Included in the UNITE® Foot & Ankle MIS Foot Recon SystemCorresponding sleeves and accessories are also available for 1.4mm wire (e.g., MSN40019 for the wire guide sleeve)","MGW14200: Ø1.4x200mm guidewire, used with 3.5mm FT/MIS bunion screws
+
+MGW14150: Ø1.4x150mm guidewire, used with 3.5mm PT/MIS Fusion screws","This is pulling the ""parallel wire guide"" SKU, which is a separate item. The bot answers the question correctly if its referred to as a 'guidepin'. There are two 1.4 wires in the set, so the correct answer would list SKU, description, and corresponding screw only","no need for summary or key points, list format preferred for spec questions. Only answer the question with necessary details: SKU numbers, descriptions, corresponding screws",Specs - system contents; SKU/ordering info,"MIS Inventory Control Form and/or Master Item File
+Backup = MIS Brochure (although this one has a typo)"
+MIS,Whats the SKU for the 1.4 wire in the MIS set,"The SKU for the 1.4mm wire in the MIS set is SNAPWIRE Ø1.1 x 50mm Guidewire for 1.1mm wire, but specifically for 1.4mm wire, the SKU is not explicitly listed as a wire but the guidewire sizes include MSN40022 (Ø1.6mm Parallel Wire Guide) and related sleeves. However, the closest specific 1.4mm wire SKU is MGW14200 (Ø1.4 x 200mm Guidepin).Key Points:The MIS set includes various wire guides and sleeves for 1.2mm, 1.4mm, and 1.6mm wires (MSN40021, MSN40022, MSN40023).The actual 1.4mm guidewire SKU is MGW14200 (Ø1.4 x 200mm Guidepin), used as a guidewire in the system.The SNAPWIRE listed is for Ø1.1mm wire, not 1.4mm.",same as above,"content is largely incorrect; likely related to synonyms 'wire/pin/guidewire/guidepin', along with typo on brochure/tray overhead guide. Content feedback is same as above. ",same as above,Specs - system contents; SKU/ordering info,"MIS Inventory Control Form and/or Master Item File
+Backup = MIS Brochure (although this one has a typo)"
+MIS,Whats the SKU for the 1.5 wire in the MIS set,"The SKU for the 1.5mm wire is not explicitly listed in the MIS Power Kit contents or the parallel wire guides provided in the context.Key Points:The MIS Power Kit includes various components like speed reducers, irrigation nozzles, and power systems but no specific 1.5mm wire SKU (Source: [4]).Parallel wire guides are available in 1.2mm, 1.4mm, and 1.6mm sizes, but 1.5mm is not mentioned (Source: [2]).No direct reference to a 1.5mm wire SKU in the provided inventory lists.If you need a wire close to 1.5mm, the 1.4mm (MSN40022) or 1.6mm (MSN40023) parallel wire guides might be alternatives.","The MIS Foot Recon System does not contain Ø1.5 mm wires. The system includes the following guidewires (listed in order of appearance within tray)
+
+Ø1.2 x 150 mm (MGW12150), used with Ø3.0 mm MIS PT / FT screws
+Ø1.4 x 200 mm (MGW14200), used with Ø3.5 mm MIS bunion / FT screws
+Ø1.6 x 200 mm (MGW16200), used with Ø4.0 mm MIS bunion / FT screws
+Ø1.4 x 150 mm (MGW14150), used with Ø3.5 mm MIS fusion / PT screws
+Ø1.6 x 150 mm (MGW16150), used with Ø4.0 mm MIS fusion / PT screws","Purposely asked this as there is no 1.5 wire in the set. This appears to be pulling from MIS Power Kit, and defaults to the Parallel wire guides being the alternative option, as opposed to the actual 1.4 and 1.6mm wires.
+Guidewires = guidepins = pins = wires
+corrected content to include: wire sizes, skus, what screw they go with","short answer, followed by list format. No need for Key Points",Specs - system contents; SKU/ordering info,"MIS Inventory Control Form and/or Master Item File
+Backup = MIS Brochure (although this one has a typo)"
+MIS,What 3.5mm plating screws are in the MIS set,"The MIS Foot Recon System offers 3.5mm headless, chamfered, cannulated screws in both full and partial thread options within the MIS set.
+
+Key Points:Ø3.5mm Headless, Chamfer, Cannulated screws available in:Full thread (REF# MSCF35xx, Aqua color)Partial thread (REF# MSCP35xx, Gold color)Guidewire sizes:Full thread: Ø1.4 x 200mm (Cobalt Chrome)Partial thread: Ø1.4 x 150mm (Titanium)Driver sizes:Full thread: T10Partial thread: T10Length ranges:Full thread: 26-66mmPartial thread: 20-60mm",The MIS Foot Recon System includes Ø3.5mm polyaxial locking and non-locking plating screws that both range from 10-22mm in increments of 2mm. ,"Question is asking about plating screws, not MIS chamfered screws (SKUs MPSL35xx and MPSN35xx). These are different types of screws from the MIS chamfered screws.
+
+Content to include: screw diameter (3.5), type (locking/non-locking), length, increments","short answer, not much needed here. No key points necessary.",Specs - system contents; SKU/ordering info,"MIS Inventory Control Form and/or Master Item File
+Backup = MIS Brochure, tray overhead guide portion"
+MIS,What's the difference between the two 1.4mm guidepins in the MIS tray?,"The MIS tray includes two types of Ø1.4 guidepins differentiated by length: one is 50mm long (MGT14150), and the other is not specified separately, implying the primary Ø1.4 guidepin available is 50mm in length. Both serve as guidepins but may differ in application based on length or specific procedural needs (Sources: [1]).Key PointsThe listed Ø1.4 guidepin (MGT14150) is 50mm long.There is no second distinct Ø1.4 guidepin with a different length mentioned in the tray.Guidepins assist in accurate placement of screws and implants during MIS procedures.","The key differences between the two Ø1.4mm guidepins are related to their application. The longer wires are used for the FT 
+
+Ø1.4 x 200 mm (MGW14200)
+- Used with Ø3.5 mm MIS bunion / FT screws
+- Material: Cobalt chrome
+- Housed in teal wire tube on top tray level
+
+Ø1.4 x 150 mm (MGW14150)
+- Used with Ø3.5 mm MIS fusion / PT screws
+- Material: Stainless Steel
+- Housed in gold wire tube on bottom tray level","likely incorrect r/t typo on brochure + technique, along with knowledge gap about synonyms for product type. Distinguishing features for these wires: dimensions/descriptions, SKU, application, material, location in tray","short intro sentence, then listed summary of differences",Specs - product characteristics,"Master Item File (for SKU/specs)
+MIS Brochure and Surgical Technique (confirm remaining details; currently has typo in it, but differences/details are also summarized in the product overview section at the beginning of the document)"
+MIS,What does the laser line on the MIS screwdriver mean?,"The laser line on the MIS screwdriver aligns with the screw head bevel to ensure optimal driver engagement and proper orientation of the screw during insertion.
+
+Key Points:The laser marking on the driver shaft must line up with the laser mark on the screw head.This alignment helps maintain the correct trajectory and orientation of the screw in the bone.A secondary diagonal mark on the driver corresponds to the screw head bevel orientation, serving as a visual reference during insertion.Proper alignment is confirmed using fluoroscopy to ensure the screw head chamfer is correctly positioned",The laser line on the MIS screwdriver aligns with the screw head bevel to ensure optimal driver engagement and proper orientation of the screw during insertion.,"correct answer, no comments",exclude 'key points' section,Specs - product characteristics,"MIS Brochure
+MIS Launch Presentation"
+REFLEX,How do I tell the three different 26mm TETRA staples apart?,"The three different 26mm TETRA staples are distinguished by their specific fusion applications: MTP Fusion, TMT Fusion, and TN/Lapidus. Each is labeled accordingly with the item numbers
+
+ MSTX2600NS, MSTX2601NS, and MSTX2602NS respectively.Key Points:MSTX2600NS: 26mm MTP Fusion TETRA StapleMSTX2601NS: 26mm TMT Fusion TETRA StapleMSTX2602NS: 26mm TN/Lapidus TETRA StapleThis labeling helps identify the staple based on the targeted joint fusion site.","The three 26mm TETRA implants are differentiated by their indication-specific leg configurations:
+- 26mm MTP: 16mm x 18mm x 14mm x 12mm
+- 26mm TMT: 20mm x 20mm x 16mm x 14mm
+- 26mm TN/Lapidus: 20mm x 20mm x 20mm x 20mm
+
+The easiest identifier is the leg pattern:
+- MTP = shortest distal legs (12/14 mm)
+- TMT = mixed 20/20/16/14 mm pattern
+- TN/Lapidus = all four legs are 20 mm","distinguished by their fusion applications is correct, however, the real ask is WHY/HOW they differ between their applications (what makes them different enough to be classified for diffeernt indications). The answer is the sizes/dimensions, which are specific to their indications.
+different part #s is also correct.
+last portion on 'easiest identifiers' is a bit of a summary statement, but provides a more personalized answer that the rep can relate to when trying to quickly identify implants from each other","summary statement, followed by list format for cleanest appearance",Specs - product characteristics,"REFLEX ninotol implant system brochure
+REFLEX TETRA
+(will be in another slide deck once indexed)"
+REFLEX,Which direction do I place the hybrid MTP plate ?,"The hybrid MTP plate should be placed with the legs proximal and screws distal for the left foot, which is the named placement. Alternatively, the right implant can be used on the left foot with legs distal and screws proximal if preferred by the surgeon (Sources: [3]).Key Points:Named placement for left MTP fusion: legs proximal, screws distalRight implant can be reversed for left foot: legs distal, screws proximalPlacement choice may depend on surgeon preference and anatomyHybrid implants require the Core Foot Recon Plating System and cannot be contoured by bending","If the REFLEX HYBRID MTP Implant is to be used on a left foot, the implant is oriented in its named placement (""Left"") when the legs are proximal and screws are distal. Alternatively, the right-sided implant can be used on the left foot if the surgeon prefers that the construct oriented with legs distally and screws proximally.","key points not needed. Answer is largely correct. Slight refinement by saying that the ""LEFT hybrid implant is placed properly on the LEFT foot when…."". Current answer implies that L/R implants both go on the left foot with the legs proximal, which is not true.",prefer to keep answer short to directly answer the question,Specs - product characteristics,"REFLEX HYBRID launch presentation
+REFLEX HYBRID customer presentation"
+REFLEX,How long are the staple legs on the hybrid implants?,"The staple legs on the hybrid implants are available in lengths of 14 mm, 16 mm, and 20 mm depending on the specific implant size.Key Points:Medial 2-leg staples come in sizes:20x14 mm20x16 mm23x16 mmThese dimensions correspond to staple leg lengths of 14 mm, 16 mm, and 20 mm respectively.The staples feature an ultra-low profile wide bridge for stability and minimal prominence (1.5 mm thickness).","REFLEX HYBRID MTP Implants: 16mm leg length
+REFLEX HYBRID Lapidus Implants: 18mm leg length ",it appears that this is pulling values for REFLEX MAX/ULTRA staples. This is referring to the staple legs on the REFLEX HYBRID implants. ,,Specs - product characteristics,"REFLEX HYBRID launch presentation
+REFLEX HYBRID customer presentation"
+REFLEX,How wide is the reflex hybrid MTP implant,The REFLEX Hybrid MTP implant has a plate length of 39mm and a leg length of 16mm. The width is not explicitly stated in the provided data.Key Points:Plate Length: 39mmLeg Length: 16mmWidth dimension is not specified in the available implant options tables,The bridge width for the RELFEX HYBRID MTP fusion implant is 7.3 mm.,implant length and leg length are correct; bridge width is located in the same documents,keep sentence short and direct,Specs - product characteristics,"REFLEX HYBRID launch presentation
+REFLEX HYBRID customer presentation"
+REFLEX,What are the dimensions of the reflex hybrid MTP implant,The REFLEX HYBRID MTP implant has a plate length of 39mm and a leg length of 16mm.Key Points:Plate Length: 39mmLeg Length: 16mmDesigned specifically for metatarsophalangeal (MTP) joint fixation,"Specifications for the RELFEX HYBRID MTP fusion implant: 
+- Bridge width: 7.3mm
+- Implant length: 39mm
+- Staple leg length: 16mm
+- 10° Valgus
+- 3° Dorsiflexion","implant length and leg length are correct; bridge width, valgus angle, and dorsiflexion angle are located in the same documents/slide",cleanest appearance to provide as a list format,Specs - product characteristics,"REFLEX HYBRID launch presentation
+REFLEX HYBRID customer presentation"
+REFLEX,How do I assemble the tetra guide when targeting a medial staple,"To assemble the TETRA guide for targeting a medial staple, first screw the medial and dorsal targeting guide components together by inserting the protruding slot on the medial guide into the keyhole slot on the dorsal guide, then tighten the dorsal guide knob by hand or with a T15 driver until secure. Ensure the guides are firmly connected and not loose before proceeding.Key Points:Insert the medial staple guide's protruding slot into the dorsal guide's keyhole slot.Thread and tighten the dorsal guide knob by hand or with a T15 driver.Confirm the assembled guide is tight and stable before use.This assembly facilitates precise placement of the medial staple during surgery.","To assemble the TETRA guide for targeting a medial staple, first screw the medial and dorsal targeting guide components together by inserting the protruding slot on the medial guide into the keyhole slot on the dorsal guide, then tighten the dorsal guide knob by hand or with a T15 driver until secure. Ensure the guides are firmly connected and not loose before proceeding.","no feedback, just remove key points",no feedback,Technique/procedural,REFLEX Foot Recon Nitinol Implant System Brochure and Surgical Technique
+REFLEX,"Outline back table setup for a lapidus procedure using the 30mm TETRA and medial staple, listing all items necessary in order to do the case","For a Lapidus procedure using the 30mm TETRA and medial staple, the back table setup should include the 30mm dorsal targeting guide, medial staple guide, 4-leg TETRA staple, 2-leg ULTRA staple, K-wires (Ø1.4mm), drill bits (Ø3.0mm), locator pins (Ø3.0mm), T15 driver, and necessary fixation pins for provisional pinning and guide stabilization.Key Points:Staples: 4-leg TETRA staple (30mm) for dorsal position and 2-leg ULTRA staple for medial positionGuides: Dorsal targeting guide (30mm bridge length) and medial staple guide assembled togetherFixation: K-wires (Ø1.4mm) for provisional pinning and temporary fixation of guidesDrilling: Ø3.0mm drill bit and Ø3.0mm locator pins for precise hole placementTools: T15 driver for tightening the dorsal guide knob and assembling guides securelyAdditional: Ensure all items are ready for biplanar fixation and compression across the plantar aspect of the 1st TMT joint","Joint Preparation (based on surgeon preference)
+1. Arthrotome
+2. Curette
+3. Fenestration drill pins
+4. Fixed AO Handle
+
+Staple Preparation
+5. 1.4 x 150mm wires
+6. 30mm dorsal targeting guide
+7. 30 × 23 medial targeting guide
+8. Drill sleeves
+9. Short 3.0mm drill
+10. Locator pins
+11. Long 3.0mm drill
+
+Staple Insertion
+12. Staple inserter
+13. 30mm Lapidus TETRA staple
+14. Medial ULTRA staple (23 × 16 mm)
+15. Staple tamp","remove key point section
+
+specify: 
+-which TETRA and ULTRA staple sizes (30mm and 23x16mm, respectively)
+-23mm medial staple guide
+-'neessary fixation pins' (1.4mm x 150mm wires)
+-long vs short 3.0 mm drills
+
+add: 
+-joint prep instruments
+-drill sleeves
+-staple inserter
+-staple tamp","list format, in order of use from surgical technique",Technique/procedural,REFLEX Foot Recon Nitinol Implant System Brochure and Surgical Technique
+REFLEX,What reamer sizes are in the reflex tray,"The REFLEX® Foot Recon Nitinol Implant System tray includes phalangeal and metatarsal reamers in sizes 16mm, 18mm, 20mm, and 22mm.Key Points:Phalangeal Reamers: 16mm, 18mm, 20mm, 22mmMetatarsal Reamers: 16mm, 18mm, 20mm, 22mmThese reamers are part of the MTP Fusion Reamer Caddy in the system tray","The REFLEX Nitinol Implant System has metatarsal and phalangeal reamers in the following sizes: 
+16mm, 18mm, 20mm, and 22mm",content is correct. No need for 'Key points'.,could condense down further,Specs - product characteristics,"REFLEX Inventory Control Form 
+REFLEX Foot Recon Nitinol Implant System Brochure and Surgical Technique"
+REFLEX,What’s the difference between the metatarsal and phalanges reamers in the reflex tray,"The metatarsal and phalangeal reamers in the REFLEX® Foot Recon Nitinol Implant System differ primarily in their intended bone targets and sizes, with metatarsal reamers designed for metatarsal bones and phalangeal reamers for phalanges, each available in multiple lengths to accommodate anatomical variations.Key Points:Both reamer types come in sizes of 16mm, 18mm, 20mm, and 22mm.Metatarsal reamers (MPN20116, MPN20118, MPN20120, MPN20122) are specifically shaped and sized for metatarsal bone preparation.Phalangeal reamers (MPN20016, MPN20018, MPN20020, MPN20022) are tailored for phalangeal bone preparation.These reamers are part of the surgical tray designed to optimize bone preparation for implant placement in their respective anatomical locations.","They vary based upon their intended use. The varied shapes between the two styles allow for proper joint preparation of the MTP joint
+- Phalangeal reamers for the proximal phalanx surface.
+- Metatarsal reamers for the metatarsal head surface.","the #s are the diameters, not length. Phalangeal reamer is for proximal phalanx head, metatarsal reamer is for the metatarsal head.",list format or short statement- no more than 2-3 sentences needed to answer this.,Specs - product characteristics,
+REFLEX,How many 4.5mm discs are in the reflex tray,"The REFLEX tray includes 4 discs of 4.5mm size in the Nitinol Dynamic Disc System.Key Points:The REFLEX Nitinol Dynamic Disc System contains discs in sizes 4.0mm, 4.5mm, 5.5mm, and 7.0mm.Each size, including the 4.5mm discs, is supplied in sets of 4 implants per size.The tray also contains corresponding countersinks and surgical instruments for these discs.",The REFLEX Nitinol Implant System tray contains a quantity of 4 of the Ø4.5mm Dynamic Discs.,"no feedback. The current answer gives more context than is needed to answer the question, but the info included is related. ",sentence case is fine. Could also just be ,Specs - system contents; SKU/ordering info,
+REFLEX,How do I use the skin stepped blade,"The Akin Stepped Saw Blade (2.5mm) is used for reproducible closing wedge osteotomies of the proximal phalanx. It has dual-cutting features that provide a distinct tactile feel, so advance carefully to avoid sawing through the far cortex.Key Points:Use the 2.5mm Akin Stepped Saw Blade for closing wedge osteotomies.Expect a different tactile sensation compared to traditional blades due to dual-cutting edges.Advance the blade cautiously to prevent cutting through the far cortex.",Use the 2.5mm Akin Stepped Saw Blade for closing wedge osteotomies.Expect a different tactile sensation compared to traditional blades due to dual-cutting edges.Advance the blade cautiously to prevent cutting through the far cortex.,"the key points section is the preferred answer. The first sentence positions more of a 'features and benefits' statement, whereas the 'key points' section is more directions-based. ",,Technique/procedural,
+REFLEX,Where is the akin stepped blade located?,"The Akin Stepped Saw Blade is part of the REFLEX® Foot Recon Nitinol Implant System and is used for reproducible closing wedge osteotomies of the proximal phalanx. However, the exact storage location within the system is not explicitly stated in the provided context.Key Points:The blade is 2.5mm and features dual-cutting edges for precise osteotomies.It is mentioned alongside other instrumentation tips in the REFLEX® system documentation.The system includes various drill guides and forceps, but the blade’s specific storage location is not detailed in the inventory list provided (Sources: [1],[2],[4]).If you need the precise tray or compartment location, consulting the full surgical technique guide or system tray layout may be necessary.","The Akin blade is located within the REFLEX MINI staple tray, and the sterile-packed MINI Staple Kits. ","the Akin stepped blade is listed within the inventory control form for REFLEX MINI. its possible that the answer pointing to the sterile-packed MINI kits is not available explicitly within any of the currently indexed resources, so we'll evaluate that later. if possible, a picture of the akin blade is shown in the (currently indexed) tray overhead images of the MINI tray and MINI sterile kits",,Specs - system contents; SKU/ordering info,"inventory control form - REFLEX MINI
+REFLEX brochure/tray overhead"
+REFLEX,Pull the tray overhead guide for the reflex hybrid tray,"The REFLEX HYBRID Implant System tray includes an Instrument Tray and an Instrument Caddy, designed to organize all necessary tools and implants efficiently for foot and ankle procedures.Key Points:The tray is divided into two main sections:Section 1: Instrument TraySection 2: Instrument CaddyThe Instrument Tray contains joint prep tools, drill guides (various sizes), drill bits, locator pins, and sleeves.The Instrument Caddy holds staples, staple inserters, tamp, dynamic discs, countersinks, and implants.Additional components like guidewires and reamers are organized in the bottom level or separate caddies.","Attached is the tray overhead guide for the REFLEX HYBRID Implant System Tray.
+[attached file]",no true content really needed beyond pulling the document,sentence + attachment,Pull resource,REFLEX HYBRID Tray Overhead Guide
+REFLEX,How do I know which dorsal tetra guide to use from the reflex tray when assembling the full targeting guide?,"You select the dorsal TETRA targeting guide based on the size of the 4-leg TETRA staple chosen for the patient's anatomy, choosing either the 26mm or 30mm bridge length guide accordingly (Sources: [1],[3],[2]).Key Points:The dorsal guides come in two bridge lengths: 26mm and 30mm.Select the dorsal guide that matches the size of the 4-leg TETRA staple you plan to implant.Assemble the dorsal guide by inserting it into the medial staple guide and tightening the knob until secure.The guides should fit tightly without looseness after assembly.","The dorsal guide is selected based on whether you're implanting a 26mm or 30mm TETRA construct (TETRA staple length)
+- 26mm TETRA implants → MSTG2600 26mm Dorsal Staple Targeting Guide
+- 30mm TETRA implants → MSTG3000 30mm Dorsal Staple Targeting Guide",Basically correct. The current bot answer answers the question in a roundabout way without giving the reader clear direction,"see desired answer-- list format is a cleaner read, but this could be converted to sentence-case if needed. ","Technique/procedural steps
+Specs - product characteristics",REFLEX Foot Recon Nitinol Implant System Brochure and Surgical Technique
+REFLEX,What’s the sku for the 7mm dynamic disc,The SKU for the 7.0 mm REFLEX™ Nitinol Dynamic Disc is MSWN3000.Key Points:The 7.0 mm dynamic disc is listed under implants.It is part of the REFLEX™ Nitinol Dynamic Disc System for foot and ankle surgery.Corresponding countersink SKU for 7.0 mm disc is MSN21003 (disposable).,The SKU for the 7.0 mm REFLEX Nitinol Dynamic Disc is MSWN3000,content is correct,omit key points section.,Specs - system contents; SKU/ordering info,
+REFLEX,What’s the locator pin used for in the reflex tray ,The Ø2.8mm locator pins in the REFLEX tray are used to assist in precise implant placement by serving as guides during the surgical procedure.Key PointsLocator pins help position implants accurately according to patient anatomy.They work in conjunction with the Ø2.8mm drill bit and other instruments for proper alignment.Essential for both Lapidus and MTP procedures using the REFLEX HYBRID system.,The locator pin in the REFLEX tray is primarily a temporary positioning tool used after drilling to verify and maintain guide/template position for the planned implant trajectory before the implant is inserted.,"""precise implant placement service as guides during surgical procedure"" is somewhat correct but is too vague and therefore doesnt answer the question.
+Don’t need to specify specs (size), as they vary across reflex trays (MINI, Ninitol Implant System, and HYBRID). Instead, the focus is on the purpose",,Technique/procedural,
+REFLEX,When would you use the short vs long drill from the reflex tray,"Short drills from the REFLEX tray are typically used for precise, shallow drilling such as staple placement or initial pilot holes, while long drills are intended for deeper bone penetration required in procedures like MTP fusion or when using longer screws and implants (Sources: [2]).Key Points:Short drills assist with controlled, superficial drilling tasks (e.g., staple drill guides).Long drills are used for deeper fixation, such as reaming or placing longer guidewires and screws.The tray includes various drill guides and sleeves to accommodate both short and long drills for specific surgical needs.","Ø3.0 mm Short Drill Bit (MSTD1030) is used when drilling directly through the dorsal targeting guide for TETRA staple placement.
+
+Ø3.0 mm Long Drill Bit (MSTD1130) is used when drilling through the medial targeting guide. The longer length is needed to reach through the guide assembly to create the medial staple holes while the dorsal guide remains fixed with locator pins.","current answer is too vague, therefore doesn’t fully answer the question. User would like specific technique insights when the two drill types are used.","indvidual statements on purposes of the two drill bits, separated by line breaks for a clean read",Technique/procedural,
+REFLEX,"If I’m doing a reflex hybrid MTP fusion case, do I only need the reflex hybrid tray?","No, for a REFLEX® Hybrid MTP fusion case, you will need both the REFLEX® Hybrid tray and the Core Foot Recon Plating System for screws and instrumentation.Key Points:The REFLEX® Hybrid implant requires the Core Foot Recon Plating System for screws and instruments.The REFLEX® Hybrid tray alone does not include all necessary screws or instruments.The Core Foot Recon Plating System provides 3.5 mm locking and non-locking screws compatible with REFLEX® Hybrid implants.","No, for a REFLEX Hybrid MTP fusion case, you will need both the REFLEX® Hybrid tray and the Core Foot Recon Plating System
+
+The REFLEX HYBRID tray contains the implant and specific instrumentation unique to that implant
+
+The Core Foot Recon Plating System contains joint prep, reamers, and screws + associated instrumentation needed to complete the case.","largely correct, just consolidate. Would be helpful to include what types of items are within the core foot tray that you'd need for the case (screws are mentioned in the 'key points' section)",answer statement. Follow up on line breaks stating what is in each tray for the case,Technique/procedural,
+REFLEX,the threaded lag pin in the reflex hybrid tray isn’t fitting into the hybrid template holes. What’s wrong?,"The threaded lag pin does not fit through the holes in the REFLEX HYBRID drill template because it is not designed for that purpose; only the Ø1.1mm smooth temporary fixation pins are compatible with the template holes. Using the threaded lag pin through the template holes can cause improper seating and excessive stress at the pin interface.Key Points:The drill template holes are sized for Ø1.1mm smooth temporary fixation pins, not threaded lag pins.Threaded lag pins should be used cautiously and only after template removal for final implant seating.Aggressive insertion of the threaded lag pin through the template holes may damage the olive/pin interface.The Core Foot Recon Tray includes the appropriate Ø1.1mm smooth pins for provisional fixation through the template.",The threaded lag pin does not fit through the holes in the REFLEX HYBRID drill template because it is not designed for that purpose; only the Ø1.1mm smooth temporary fixation pins are compatible with the template holes. Using the threaded lag pin through the template holes can cause improper seating and excessive stress at the pin interface,content is correct. No need for 'Key points'.,consolidate info between statement and key points,Technique/procedural,"REFELX HYBRID Launch / customer presentations 
+REFLEX Foot Recon Nitinol Implant System Brochure and Surgical Technique"
