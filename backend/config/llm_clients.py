@@ -10,6 +10,8 @@ from functools import lru_cache
 
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 
+from config import tiktoken_cache  # noqa: F401  (sets TIKTOKEN_CACHE_DIR)
+
 
 @lru_cache
 def get_chat_model(model: str | None = None) -> ChatOpenAI:

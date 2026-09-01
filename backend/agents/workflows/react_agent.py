@@ -8,10 +8,10 @@ from agents.registry import register
 from agents.state import BaseAgentState  # noqa: F401
 
 
-def build_graph():
+def build_graph(checkpointer):
     # TODO: StateGraph(BaseAgentState), bind tools from backend/agents/tools,
     # add a ReAct loop with interrupt() for clarification, then
-    # graph.compile(checkpointer=...)
+    # graph.compile(checkpointer=checkpointer)
     raise NotImplementedError("Wire up ReAct agentic graph nodes")
 
 

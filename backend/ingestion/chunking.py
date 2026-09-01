@@ -13,23 +13,12 @@ matching text-embedding-3-small's token accounting) with a 100-token
 overlap; a single paragraph that alone exceeds the window budget is
 token-windowed on its own.
 """
-import os
-from pathlib import Path
-
 import tiktoken
+
+from config import tiktoken_cache  # noqa: F401  (sets TIKTOKEN_CACHE_DIR)
 
 DEFAULT_CHUNK_SIZE = 800
 DEFAULT_OVERLAP = 100
-
-# tiktoken fetches cl100k_base's merge table from Azure Blob Storage over
-# HTTPS on first use if it isn't already in its local cache -- fine in most
-# environments, but this sandbox's Python doesn't trust the same CA store
-# curl/the system do (the same class of issue documented in build-log.md for
-# next/font), and requiring outbound network access on a cold Railway
-# container for a static, versioned file is fragile regardless. Vendoring
-# the file (see backend/ingestion/.tiktoken_cache/) and pointing
-# TIKTOKEN_CACHE_DIR at it sidesteps the fetch entirely, everywhere.
-os.environ.setdefault("TIKTOKEN_CACHE_DIR", str(Path(__file__).parent / ".tiktoken_cache"))
 
 _ENCODING = tiktoken.get_encoding("cl100k_base")
 

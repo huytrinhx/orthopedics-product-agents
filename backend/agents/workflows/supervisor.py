@@ -8,9 +8,10 @@ from agents.registry import register
 from agents.state import BaseAgentState  # noqa: F401
 
 
-def build_graph():
+def build_graph(checkpointer):
     # TODO: StateGraph(BaseAgentState), define specialist sub-graphs and a
-    # supervisor node that routes between them, then graph.compile()
+    # supervisor node that routes between them, then
+    # graph.compile(checkpointer=checkpointer)
     raise NotImplementedError("Wire up supervisor multi-agent graph")
 
 

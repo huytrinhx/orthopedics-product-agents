@@ -16,6 +16,10 @@ out/
 .env
 .env.local
 
+# Local machine-specific TLS trust (e.g. corporate MITM proxy CA bundle) —
+# see .env.example's SSL_CERT_FILE/REQUESTS_CA_BUNDLE comment
+certs/
+
 # Ingested documents (INGEST_DATA_DIR) — a Railway volume in production
 data/
 

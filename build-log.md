@@ -280,3 +280,54 @@ feedback-promotion workflow), worked one at a time in dependency order.
     end: real chunks, real `text-embedding-3-small` embeddings, and
     `hybrid_search` correctly ranking a torque-related query above an
     unrelated sterilization chunk.
+- **Ticket 08 — Chat baseline (`deterministic`) workflow, end-to-end.**
+  `backend/agents/workflows/deterministic.py`'s fixed pipeline
+  (`resolve_synonyms -> hybrid_retrieve -> rerank -> generate -> self_eval`,
+  looping through `reformulate` back to `resolve_synonyms` when faithfulness
+  or relevance score low, bounded by `MAX_RETRIEVAL_LOOPS`) is real, backed
+  by a real `judge_answer` (`backend/agents/judge.py`, structured-output
+  LLM scoring on the same four axes as the feedback UI). `hybrid_retrieve`
+  calls `vector_search` (ticket 06) only — `graph_query` isn't part of this
+  fixed pipeline; choosing which entity to look up from free text is exactly
+  the kind of judgment call a "no agentic tool choice" baseline doesn't
+  make, that's `react_agent`'s job later. Full design, including why
+  `query` and a new `search_query` field are kept separate, in
+  `.scratch/chat-documents-evals/issues/08-chat-baseline-workflow.md`.
+  - `backend/memory/checkpointer.py`'s `get_checkpointer` wraps
+    `AsyncPostgresSaver.from_conn_string()` (itself an async context
+    manager) the same way `retrieval/vector_store.py`'s `get_vector_store`
+    already does; `backend/api/main.py` opens it once in a FastAPI
+    `lifespan` and stores it on `app.state.checkpointer` -- one checkpointer
+    for the process's life, matching `graph_client.py`'s Neo4j-driver
+    singleton pattern rather than a fresh pool per chat request.
+    `agents/registry.py`'s factory signature changed to take the
+    checkpointer as a parameter (`react_agent.py`/`supervisor.py`'s stubs
+    updated to match, still otherwise unimplemented).
+  - `backend/api/routes/chat.py`'s `POST /chat/{workflow}/stream` streams
+    `astream_events` over hand-rolled SSE (`thread`/`status`/`token`/`done`/
+    `error` frames) -- it's a POST, so the native GET-only `EventSource`
+    can't consume it; `frontend/lib/api.ts`'s `streamChat` parses the frames
+    itself on the frontend side too. `thread_id` is server-generated as
+    `{user_id}:{uuid4()}`; a client-resumed thread_id is checked by prefix
+    and rejected (403) if it doesn't belong to the caller.
+  - Real, not simulated: `frontend/app/chat/page.tsx` replaces the ticket-04
+    placeholder with a live streaming UI (progressive status → token-by-token
+    answer → citations), verified in an actual browser (Playwright), not
+    just via `curl`.
+  - Four real bugs found only by running the pipeline end-to-end (each now
+    has a regression test, detailed in the ticket doc): `generate` was
+    silently ignoring every prior conversation turn despite the checkpointer
+    correctly persisting them; a retry appended *two* AI turns to permanent
+    history instead of replacing the discarded draft (fixed by a new
+    `finalize` node that's the only place `messages` gets written to);
+    `retrieval_loop_count` had no reducer and could leak a spent retry
+    budget across turns via the checkpointer; and the `done` event's
+    `citations` listed every passage in the context window rather than only
+    the ones the answer actually cited.
+  - Also fixed: ticket 06's `TIKTOKEN_CACHE_DIR` vendoring fix only
+    covered `backend/ingestion/chunking.py`'s own direct tiktoken call --
+    `langchain_openai`'s embeddings client calls `tiktoken.encoding_for_model()`
+    internally too, on a different code path that skipped the fix entirely
+    whenever `chunking.py` hadn't already been imported first. Centralized
+    into `backend/config/tiktoken_cache.py`, imported for its side effect
+    wherever tiktoken gets used, directly or indirectly.

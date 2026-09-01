@@ -28,3 +28,35 @@ export interface DocumentRecord {
   system: Tag | null;
   document_type: Tag | null;
 }
+
+export type EvalScores = Partial<{
+  faithfulness: number;
+  relevance: number;
+  style: number;
+  citation: number;
+}>;
+
+// Mirrors backend/api/routes/chat.py's SSE event payloads.
+export type ChatStreamEvent =
+  | { event: "thread"; data: { thread_id: string } }
+  | { event: "status"; data: { node: string } }
+  | { event: "token"; data: { content: string } }
+  | {
+      event: "done";
+      data: {
+        thread_id: string;
+        answer: string;
+        citations: string[];
+        eval_scores: EvalScores | null;
+      };
+    }
+  | { event: "error"; data: { message: string } };
+
+export interface ChatMessage {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  citations?: string[];
+  status?: string;
+  pending?: boolean;
+}

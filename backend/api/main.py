@@ -3,6 +3,7 @@ store, and route modules. Deployed as a single Railway service, which also
 serves the built frontend as static files (see root Dockerfile).
 """
 import os
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -11,8 +12,22 @@ from fastapi.staticfiles import StaticFiles
 
 from agents import workflows  # noqa: F401  (registers all workflows)
 from api.routes import auth, chat, documents, feedback, tags
+from memory.checkpointer import get_checkpointer
 
-app = FastAPI(title="OrthoMate")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # One checkpointer for the process's whole lifetime, matching
+    # backend/retrieval/graph_client.py's Neo4j-driver singleton pattern --
+    # AsyncPostgresSaver's connection pool is scoped to this `async with`
+    # block (see backend/memory/checkpointer.py), so it can't be built fresh
+    # per request without paying for a new pool every chat turn.
+    async with get_checkpointer(os.environ["DATABASE_URL"]) as checkpointer:
+        app.state.checkpointer = checkpointer
+        yield
+
+
+app = FastAPI(title="OrthoMate", lifespan=lifespan)
 
 # In production the frontend is served same-origin (mounted below), so this
 # never applies there. Locally the frontend runs on Next's own dev server
