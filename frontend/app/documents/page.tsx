@@ -149,11 +149,11 @@ export default function DocumentsPage() {
     }
   }
 
-  if (loading) return <main className="page"><p>Loading…</p></main>;
+  if (loading) return <main className="page-wide"><p>Loading…</p></main>;
 
   if (!user || !user.is_admin) {
     return (
-      <main className="page">
+      <main className="page-wide">
         <h1>Document Manager</h1>
         <p>This page is admin-only.</p>
         <Link href="/">Back home</Link>
@@ -162,7 +162,7 @@ export default function DocumentsPage() {
   }
 
   return (
-    <main className="page">
+    <main className="page-wide">
       <span className="eyebrow">Source library</span>
       <h1>Document Manager</h1>
       <p className="lede">

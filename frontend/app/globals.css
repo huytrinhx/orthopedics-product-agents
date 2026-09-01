@@ -165,6 +165,16 @@ a {
   padding: 64px 24px;
 }
 
+/* Wider than .page's 960px -- for pages built around a data table (Document
+   Manager) that benefit from the extra columns' room on a normal desktop
+   viewport. The max() floor keeps it from shrinking below .page's width on
+   a narrow viewport, where 2/3 of the viewport would be worse than useless. */
+.page-wide {
+  max-width: max(66vw, 960px);
+  margin-inline: auto;
+  padding: 48px 24px 72px;
+}
+
 .eyebrow {
   font-family: var(--font-mono);
   font-size: 0.72rem;
