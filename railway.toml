@@ -6,3 +6,6 @@ dockerfilePath = "Dockerfile"
 healthcheckPath = "/health"
 healthcheckTimeout = 100
 restartPolicyType = "ON_FAILURE"
+# Runs once per deploy, before the new container takes traffic — applies
+# backend/migrations/ against DATABASE_URL ahead of the app starting.
+releaseCommand = "cd backend && alembic upgrade head"

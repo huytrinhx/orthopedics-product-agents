@@ -98,8 +98,9 @@ railway.toml           tells Railway to build with that Dockerfile
    ```
    Open `http://localhost:3000`, create a project, and copy the generated
    public/secret keys into `.env` (`LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY`).
-5. **Run the backend**: `cd backend && uv venv .venv --python 3.11 && .venv/bin/pip install -e ".[dev]" && .venv/bin/uvicorn api.main:app --reload` — serves on `http://localhost:8000`.
-6. **Run the frontend**: `cd frontend && npm install && npm run dev` — serves on `http://localhost:3000` (or a different port if Langfuse is already on 3000).
+5. **Run the backend**: `cd backend && uv venv .venv --python 3.11 && .venv/bin/pip install -e ".[dev]" && .venv/bin/alembic upgrade head && .venv/bin/uvicorn api.main:app --reload` — serves on `http://localhost:8000`. The `alembic upgrade head` step applies schema migrations (`backend/migrations/`) against `DATABASE_URL`; rerun it after pulling new migrations.
+6. **Seed the knowledge graph** (once — in a second terminal, from `backend/`, once step 5's `pip install` has run): `.venv/bin/python -m ingestion.seed_master_catalog && .venv/bin/python -m ingestion.seed_synonyms` — populates Neo4j from the real fixtures in `backend/evals/` (`unite-master-csv.txt`, `synonyms-map.csv`). Per-document prose extraction (ticket 07) only attaches facts to parts this seed already created, so uploaded documents won't produce any graph facts until this has run at least once.
+7. **Run the frontend**: `cp frontend/.env.local.example frontend/.env.local`, then `cd frontend && npm install && npm run dev` — serves on `http://localhost:3000` (or a different port if Langfuse is already on 3000). `.env.local` points the frontend at the backend on `:8000`, since Next's dev server and FastAPI run as two separate processes locally (they're one process in production — see ADR 0004).
 
 Unlike a prior draft of this project, there's no enterprise-cloud dependency
 for local dev — `OPENAI_API_KEY` works the same way locally and in

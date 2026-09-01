@@ -8,11 +8,19 @@ dependencies = [
     "langchain-openai>=0.2",
     "langgraph-checkpoint-postgres>=2.0",
     "fastapi>=0.115",
+    "python-multipart>=0.0.9",
     "uvicorn[standard]>=0.30",
     "pydantic>=2.9",
     "psycopg[binary]>=3.2",
     "pgvector>=0.3",
     "neo4j>=5.24",
+    "pdfplumber>=0.11",
+    "tiktoken>=0.14",
+    "alembic>=1.13",
+    "bcrypt>=4.2",
+    "pyjwt>=2.9",
+    "email-validator>=2.2",
+    "httpx>=0.27",
     "opentelemetry-sdk>=1.27",
     "opentelemetry-exporter-otlp>=1.27",
     "langfuse>=2.50",
@@ -23,14 +31,28 @@ dev = [
     "pytest>=8.3",
     "pytest-asyncio>=0.24",
     "ruff>=0.6",
+    "fpdf2>=2.7",
 ]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+# Session-scoped: backend/retrieval/graph_client.py's get_graph_client() is a
+# process-wide (@lru_cache) Neo4j driver singleton, matching production's one
+# event loop for the app's whole lifetime -- the default per-test loop scope
+# would tear it down and rebuild it between tests, breaking that cache.
+asyncio_default_test_loop_scope = "session"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["agents", "api", "config", "retrieval", "ingestion", "memory", "evals", "observability"]
+packages = ["agents", "api", "auth", "config", "documents", "tags", "retrieval", "ingestion", "memory", "evals", "observability"]
 
 [tool.ruff]
 line-length = 100
+
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI's own recommended pattern is Depends(...)/Query(...) etc. as an
+# argument default — not the mutable-default bug B008 usually flags.
+extend-immutable-calls = ["fastapi.Depends", "fastapi.Query", "fastapi.Body", "fastapi.Header", "fastapi.Path", "fastapi.Form"]

@@ -1,0 +1,455 @@
+/* OrthoMate design tokens — same identity as the marketing page (dark
+   "light table" nav, bone-white working surface, amber for citations,
+   teal for verified/primary actions), reapplied here as a calm, functional
+   product shell rather than the marketing page's editorial hero.
+   Single fixed visual world by design, not adapted to viewer light/dark
+   preference — see build-log.md / the OrthoMate artifact for the reasoning. */
+
+:root {
+  --light-table: #0d1a22;
+  --table-edge: #16262f;
+  --diffuser: #f5f7f5;
+  --diffuser-dim: #e9ede9;
+  --surface: #ffffff;
+  --ink: #10181d;
+  --ink-soft: #45535a;
+  --steel: #7f8f97;
+  --steel-line: #d7dedd;
+  --highlighter: #c98a2b;
+  --verify: #2e8577;
+  --verify-dark: #256e62;
+  --verify-wash: #e2efec;
+  --danger: #a8452f;
+  --danger-wash: #f7e9e5;
+
+  --font-display: "Instrument Serif", Georgia, "Times New Roman", serif;
+  --font-body: "IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+
+  color-scheme: light;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--diffuser);
+  color: var(--ink);
+  font-family: var(--font-body);
+  font-size: 16px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+}
+
+h1,
+h2,
+h3 {
+  font-family: var(--font-display);
+  font-weight: 400;
+  margin: 0 0 8px;
+  text-wrap: balance;
+}
+
+h1 {
+  font-size: 2rem;
+}
+h2 {
+  font-size: 1.5rem;
+}
+
+p {
+  margin: 0 0 12px;
+}
+
+a {
+  color: var(--verify);
+}
+
+::selection {
+  background: var(--highlighter);
+  color: #fff;
+}
+
+:focus-visible {
+  outline: 2px solid var(--verify);
+  outline-offset: 2px;
+}
+
+/* ---------------- nav ---------------- */
+
+.nav {
+  background: var(--light-table);
+  border-bottom: 1px solid var(--table-edge);
+}
+
+.nav-inner {
+  max-width: 960px;
+  margin-inline: auto;
+  padding: 14px 24px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+}
+
+.logo {
+  font-family: var(--font-display);
+  font-style: italic;
+  font-size: 1.3rem;
+  color: var(--diffuser);
+  text-decoration: none;
+}
+
+.logo em {
+  font-style: normal;
+  color: var(--highlighter);
+}
+
+.nav-links {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  font-size: 0.88rem;
+}
+
+.nav-links a {
+  color: #b7c3c8;
+  text-decoration: none;
+}
+
+.nav-links a:hover,
+.nav-links a:focus-visible {
+  color: var(--diffuser);
+}
+
+.nav-right {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  font-size: 0.85rem;
+  color: #b7c3c8;
+}
+
+.nav-right .email {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+}
+
+.nav-right .admin-tag {
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--highlighter);
+}
+
+/* ---------------- layout ---------------- */
+
+.page {
+  max-width: 960px;
+  margin-inline: auto;
+  padding: 48px 24px 72px;
+}
+
+.page-narrow {
+  max-width: 440px;
+  margin-inline: auto;
+  padding: 64px 24px;
+}
+
+.eyebrow {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--steel);
+  display: block;
+  margin-bottom: 10px;
+}
+
+.lede {
+  color: var(--ink-soft);
+  font-size: 1.02rem;
+  max-width: 56ch;
+  margin-bottom: 32px;
+}
+
+/* ---------------- buttons & controls ---------------- */
+
+.btn {
+  font-family: var(--font-body);
+  font-weight: 600;
+  font-size: 0.88rem;
+  padding: 10px 18px;
+  border-radius: 3px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+.btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.btn-primary {
+  background: var(--verify);
+  color: #fff;
+}
+
+.btn-primary:hover:not(:disabled) {
+  background: var(--verify-dark);
+}
+
+.btn-ghost {
+  background: transparent;
+  border-color: var(--steel-line);
+  color: var(--ink);
+}
+
+.btn-ghost:hover:not(:disabled) {
+  border-color: var(--steel);
+}
+
+.btn-text {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--verify);
+  font-weight: 600;
+  font-size: 0.85rem;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 18px;
+  font-size: 0.92rem;
+  font-weight: 600;
+}
+
+.field input {
+  font-family: var(--font-body);
+  font-size: 0.98rem;
+  font-weight: 400;
+  padding: 10px 12px;
+  border: 1px solid var(--steel-line);
+  border-radius: 3px;
+  background: var(--surface);
+  color: var(--ink);
+}
+
+.field input:focus-visible {
+  border-color: var(--verify);
+}
+
+select {
+  font-family: var(--font-body);
+  font-size: 0.86rem;
+  padding: 7px 10px;
+  border: 1px solid var(--steel-line);
+  border-radius: 3px;
+  background: var(--surface);
+  color: var(--ink);
+}
+
+select:focus-visible {
+  border-color: var(--verify);
+}
+
+.tag-add-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.tag-add-row input {
+  font-family: var(--font-body);
+  font-size: 0.86rem;
+  padding: 6px 10px;
+  border: 1px solid var(--steel-line);
+  border-radius: 3px;
+}
+
+.tag-picker-row {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 20px;
+}
+
+.tag-add-error {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  color: var(--danger);
+}
+
+/* ---------------- surfaces ---------------- */
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--steel-line);
+  padding: 32px;
+}
+
+.divider-link {
+  margin-top: 20px;
+  font-size: 0.9rem;
+  color: var(--ink-soft);
+}
+
+.alert {
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  background: var(--danger-wash);
+  color: var(--danger);
+  border: 1px solid var(--danger);
+  padding: 10px 14px;
+  margin-bottom: 18px;
+}
+
+.empty-state {
+  border: 1px dashed var(--steel-line);
+  padding: 32px;
+  text-align: center;
+  color: var(--ink-soft);
+  font-size: 0.94rem;
+}
+
+/* ---------------- home links ---------------- */
+
+.link-grid {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 28px;
+}
+
+.link-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 18px 20px;
+  border: 1px solid var(--steel-line);
+  background: var(--surface);
+  text-decoration: none;
+  color: var(--ink);
+  transition: border-color 0.15s ease, transform 0.1s ease;
+}
+
+.link-card:hover {
+  border-color: var(--verify);
+}
+
+.link-card .title {
+  font-family: var(--font-display);
+  font-size: 1.2rem;
+}
+
+.link-card .arrow {
+  font-family: var(--font-mono);
+  color: var(--verify);
+}
+
+/* ---------------- table ---------------- */
+
+.table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--steel-line);
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.92rem;
+}
+
+th {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--steel);
+  text-align: left;
+  padding: 12px 16px;
+  background: var(--diffuser-dim);
+  border-bottom: 1px solid var(--steel-line);
+}
+
+td {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--steel-line);
+  color: var(--ink);
+}
+
+tr:last-child td {
+  border-bottom: none;
+}
+
+/* ---------------- status badges ---------------- */
+
+.badge {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 3px 8px;
+  border-radius: 2px;
+  display: inline-block;
+}
+
+.badge-pending {
+  background: var(--diffuser-dim);
+  color: var(--steel);
+}
+
+.badge-queued {
+  background: var(--diffuser-dim);
+  color: var(--steel);
+}
+
+.badge-processing {
+  background: #f6ead4;
+  color: var(--highlighter);
+}
+
+.badge-done {
+  background: var(--verify-wash);
+  color: var(--verify-dark);
+}
+
+.badge-failed {
+  background: var(--danger-wash);
+  color: var(--danger);
+}
+
+/* ---------------- upload form ---------------- */
+
+.upload-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 24px;
+}
+
+.upload-row input[type="file"] {
+  font-family: var(--font-body);
+  font-size: 0.88rem;
+  color: var(--ink-soft);
+}

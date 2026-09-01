@@ -4,9 +4,10 @@
 // message, submitted to POST /feedback/.
 export default function ChatPage() {
   return (
-    <main>
+    <main className="page">
+      <span className="eyebrow">Ask OrthoMate</span>
       <h1>Chat</h1>
-      <p>TODO: streaming chat interface</p>
+      <div className="empty-state">Streaming chat interface — coming in ticket 08.</div>
     </main>
   );
 }

@@ -62,8 +62,7 @@ def build_intent_record(row: list[str]) -> dict:
 
 def write_jsonl(path: Path, records: list[dict]) -> None:
     with open(path, "w", encoding="utf-8") as f:
-        for record in records:
-            f.write(json.dumps(record, ensure_ascii=False) + "\n")
+        f.writelines(json.dumps(record, ensure_ascii=False) + "\n" for record in records)
 
 
 def main() -> None:

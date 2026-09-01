@@ -54,6 +54,20 @@ picking this repo up cold, read this before making structural changes.
   retrieval. `backend/evals/golden_datasets/build_dataset.py` regenerates
   these from `feedback-notes.csv` (human-reviewed Q&A) — rerun it after new
   rows land there, don't hand-edit the JSONL.
+- **Auth is JWT-based, stateless, client-held.** `backend/auth/` issues a
+  signed JWT on signup/login (`JWT_SECRET`); the frontend stores it in
+  `localStorage` (`frontend/lib/auth.ts`) and attaches it as a Bearer token —
+  there's no server-side session store to invalidate on logout. `is_admin` is
+  decided once, at signup, from the `ADMIN_EMAILS` allowlist — it's not
+  editable via any UI yet. Admin-gated pages (Documents, Evals) check this
+  flag; regular chat access doesn't require it.
+- **Schema changes go through Alembic (`backend/migrations/`), not hand-run
+  SQL.** `alembic upgrade head` reads `DATABASE_URL` (same env var as
+  everything else) and applies pending migrations; it's a required step in
+  local setup (README), CI (runs against a throwaway Postgres service before
+  `pytest`), and production (`railway.toml`'s `releaseCommand`, once per
+  deploy before the new container takes traffic). Add new tables via
+  `alembic revision -m "..."`, not a one-off script.
 
 ## Deployment direction (as of this writing)
 

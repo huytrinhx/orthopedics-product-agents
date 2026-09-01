@@ -1,0 +1,7 @@
+Prompt type,Description,Priority 1,P2,P3,P4
+Spec,"Product info, ordering info, basic product attributes, tray contents, compatibility",Master Item File,Respective system's inventory control form,respective system's tray ocevrhead guide,respective system's brochure/surgical technique guide
+Procedural,"Surgical technique, procedural setup",respective system's brochure/surgical technique guide,respective system's launch presentation,,
+Features & Benefits,"product features/benefits, selling",respective system's brochure/surgical technique guide,respective system's launch presentation,,
+,,,,,
+,,,,,
+"Note: would be of benefit if the bot leverages multiple sources to confirm info, with hierarchy established. I would say confirming against at least 1 source prior to providing response (minimum two total sources confirmed)",,,,,

@@ -4,9 +4,12 @@ Individual workflows may extend this with extra fields, but the API layer,
 streaming transport, and eval harness only rely on the fields defined here —
 that's what lets any workflow be run interchangeably.
 """
-from typing import Annotated, TypedDict
+from typing import Annotated
 
 from langgraph.graph.message import add_messages
+from typing_extensions import (
+    TypedDict,  # pydantic v2 needs this, not typing.TypedDict, on Python <3.12
+)
 
 
 class EvalScores(TypedDict, total=False):
