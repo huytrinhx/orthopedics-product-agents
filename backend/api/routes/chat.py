@@ -1,12 +1,21 @@
-"""Streaming chat endpoint. Streams LangGraph astream_events over SSE and
-exposes a /resume endpoint for the suspend/resume human-clarification
-pattern (interrupt() -> UI prompt -> resume with human input) -- that
-pattern itself is ticket 09's scope; /resume stays a stub until then.
+"""Streaming chat endpoint. Streams LangGraph astream_events over SSE.
+
+Also exposes the suspend/resume human-clarification pattern (ticket 09):
+detect_intent (agents/workflows/deterministic.py, the graph's entry node)
+calls interrupt() when it can't confidently tell which product system a
+query is about; astream_events surfaces that as an on_chain_stream "LangGraph"
+chunk carrying an "__interrupt__" tuple rather than raising, so _stream_graph
+below watches for that chunk shape and emits a "clarification" SSE event
+instead of "done". POST /{workflow_name}/resume (and its default-workflow
+sibling POST /resume, mirroring the /stream pair) resumes the same suspended
+graph via langgraph.types.Command(resume=...) -- not a fresh turn, so no new
+create_thread/HumanMessage, just touch_thread for recency.
 
 POST /stream (no workflow name) is what the chat UI actually calls -- it
 runs whatever workflow is configured as the admin default (ticket 14,
 settings/repository.py). POST /{workflow_name}/stream still exists
-alongside it for explicit selection (evals/testing).
+alongside it for explicit selection (evals/testing); /resume mirrors that
+same pairing for the same reason.
 
 Also exposes the ticket 10 (chat history sidebar) read endpoints:
 GET /threads (a user's threads, most-recent-first) and
@@ -16,10 +25,13 @@ chat_threads/repository.py's docstring).
 """
 import json
 import uuid
+from collections.abc import AsyncIterator
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
 from langchain_core.messages import HumanMessage
+from langgraph.graph.state import CompiledStateGraph
+from langgraph.types import Command
 from pydantic import BaseModel
 
 from agents.registry import get_workflow, list_workflows
@@ -65,6 +77,16 @@ class ChatStreamRequest(BaseModel):
     # thread_id resumes that thread's history via the checkpointer. Never
     # trust a client-supplied thread_id as-is -- see _owns_thread below.
     thread_id: str | None = None
+
+
+class ChatResumeRequest(BaseModel):
+    thread_id: str
+    # Either the exact text of a clicked clarification option, or free
+    # text -- detect_intent's _match_option tries to match it against the
+    # options it offered, and falls back to leaving resolved_system
+    # unresolved (not the raw text) if nothing matches, rather than
+    # recording an answer that isn't actually one of the real systems.
+    human_input: str
 
 
 def _sse(event: str, data: dict) -> str:
@@ -164,65 +186,156 @@ async def _stream_chat(
         await touch_thread(thread_id)
 
     graph = get_workflow(workflow_name, request.app.state.checkpointer)
+    handler, langfuse_config = new_callback_handler(
+        user_id=str(user.id), session_id=thread_id, tags=[workflow_name]
+    )
+    config = {"configurable": {"thread_id": thread_id}, **langfuse_config}
+    inputs = {
+        "messages": [HumanMessage(content=body.message)],
+        "query": body.message,
+        "user_id": str(user.id),
+        "thread_id": thread_id,
+        # search_query/retrieval_loop_count have no reducer, so an earlier
+        # turn's checkpointed value would otherwise silently carry over
+        # (e.g. a prior turn's retry already having spent the loop budget)
+        # -- explicitly reset both for every new turn.
+        "search_query": body.message,
+        "retrieval_loop_count": 0,
+    }
 
-    async def event_generator():
-        yield _sse("thread", {"thread_id": thread_id})
+    return StreamingResponse(
+        _stream_graph(graph, workflow_name, thread_id, inputs, config, handler),
+        media_type="text/event-stream",
+    )
 
-        handler, langfuse_config = new_callback_handler(
-            user_id=str(user.id), session_id=thread_id, tags=[workflow_name]
-        )
-        config = {"configurable": {"thread_id": thread_id}, **langfuse_config}
-        inputs = {
-            "messages": [HumanMessage(content=body.message)],
-            "query": body.message,
-            "user_id": str(user.id),
-            "thread_id": thread_id,
-            # search_query/retrieval_loop_count have no reducer, so an
-            # earlier turn's checkpointed value would otherwise silently
-            # carry over (e.g. a prior turn's retry already having spent
-            # the loop budget) -- explicitly reset both for every new turn.
-            "search_query": body.message,
-            "retrieval_loop_count": 0,
-        }
 
-        try:
-            async for event in graph.astream_events(inputs, config, version="v2"):
-                node = event.get("metadata", {}).get("langgraph_node")
-                if event["event"] == "on_chain_start" and event.get("name") == node:
-                    yield _sse("status", {"node": node})
-                elif event["event"] == "on_chat_model_stream" and node in _STREAMED_NODES:
-                    chunk_content = event["data"]["chunk"].content
-                    if chunk_content:
-                        yield _sse("token", {"content": chunk_content})
-                elif event["event"] == "on_chain_end" and event.get("name") == "LangGraph":
-                    output = event["data"].get("output") or {}
-                    loop_count_field = _LOOP_COUNT_FIELD.get(workflow_name)
-                    loop_count = output.get(loop_count_field) if loop_count_field else None
-                    score_trace(
-                        handler.last_trace_id,
-                        eval_scores=output.get("eval_scores"),
-                        loop_count=loop_count,
-                    )
-                    citations = await _resolve_citations(output.get("citations") or [])
+async def _stream_graph(
+    graph: CompiledStateGraph,
+    workflow_name: str,
+    thread_id: str,
+    run_input,
+    config: dict,
+    handler,
+) -> AsyncIterator[str]:
+    """Drives one graph run (a fresh turn's `inputs` dict, or a resume's
+    `Command(resume=...)`) and turns its astream_events into SSE frames --
+    shared by stream_chat/stream_chat_default and resume_chat/
+    resume_chat_default below, since both sides of the suspend/resume pair
+    need identical status/token/done handling, just a different `run_input`.
+
+    A node calling interrupt() doesn't raise through astream_events -- it
+    surfaces as an on_chain_stream event named "LangGraph" whose chunk is
+    `{"__interrupt__": (Interrupt(value=..., id=...),)}` (verified against
+    the installed langgraph 1.2 directly, since the docs don't show this
+    astream_events shape). The graph's own on_chain_end "LangGraph" event
+    still fires right after with the pre-interrupt state as `output` --
+    `interrupted` is what stops that from being mistaken for a real answer
+    and emitted as "done".
+    """
+    yield _sse("thread", {"thread_id": thread_id})
+
+    interrupted = False
+    try:
+        async for event in graph.astream_events(run_input, config, version="v2"):
+            node = event.get("metadata", {}).get("langgraph_node")
+            if event["event"] == "on_chain_start" and event.get("name") == node:
+                yield _sse("status", {"node": node})
+            elif event["event"] == "on_chat_model_stream" and node in _STREAMED_NODES:
+                chunk_content = event["data"]["chunk"].content
+                if chunk_content:
+                    yield _sse("token", {"content": chunk_content})
+            elif event["event"] == "on_chain_stream" and event.get("name") == "LangGraph":
+                interrupt_tuple = (event["data"].get("chunk") or {}).get("__interrupt__")
+                if interrupt_tuple:
+                    interrupted = True
+                    payload = interrupt_tuple[0].value or {}
                     yield _sse(
-                        "done",
+                        "clarification",
                         {
                             "thread_id": thread_id,
-                            "answer": output.get("answer"),
-                            "citations": [c.model_dump(mode="json") for c in citations],
-                            "eval_scores": output.get("eval_scores"),
-                            "trace_url": get_trace_url(handler.last_trace_id),
+                            "question": payload.get("question", ""),
+                            "options": payload.get("options", []),
                         },
                     )
-        except Exception as exc:  # noqa: BLE001 - report over the stream rather than a bare 500 mid-stream
-            yield _sse("error", {"message": str(exc)})
-
-    return StreamingResponse(event_generator(), media_type="text/event-stream")
+            elif event["event"] == "on_chain_end" and event.get("name") == "LangGraph":
+                if interrupted:
+                    continue
+                output = event["data"].get("output") or {}
+                loop_count_field = _LOOP_COUNT_FIELD.get(workflow_name)
+                loop_count = output.get(loop_count_field) if loop_count_field else None
+                score_trace(
+                    handler.last_trace_id,
+                    eval_scores=output.get("eval_scores"),
+                    loop_count=loop_count,
+                )
+                citations = await _resolve_citations(output.get("citations") or [])
+                yield _sse(
+                    "done",
+                    {
+                        "thread_id": thread_id,
+                        "answer": output.get("answer"),
+                        "citations": [c.model_dump(mode="json") for c in citations],
+                        "eval_scores": output.get("eval_scores"),
+                        "trace_url": get_trace_url(handler.last_trace_id),
+                    },
+                )
+    except Exception as exc:  # noqa: BLE001 - report over the stream rather than a bare 500 mid-stream
+        yield _sse("error", {"message": str(exc)})
 
 
 @router.post("/{workflow_name}/resume")
-async def resume_chat(workflow_name: str, thread_id: str, human_input: str):
-    raise NotImplementedError
+async def resume_chat(
+    workflow_name: str,
+    body: ChatResumeRequest,
+    request: Request,
+    user: UserRecord = Depends(get_current_user),
+) -> StreamingResponse:
+    """Explicit-workflow counterpart to resume_chat_default below, same
+    split as stream_chat/stream_chat_default and for the same reason."""
+    return await _resume_chat(workflow_name, body, request, user)
+
+
+@router.post("/resume")
+async def resume_chat_default(
+    body: ChatResumeRequest,
+    request: Request,
+    user: UserRecord = Depends(get_current_user),
+) -> StreamingResponse:
+    settings = await get_settings()
+    return await _resume_chat(settings.default_workflow, body, request, user)
+
+
+async def _resume_chat(
+    workflow_name: str,
+    body: ChatResumeRequest,
+    request: Request,
+    user: UserRecord,
+) -> StreamingResponse:
+    if workflow_name not in list_workflows():
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"Unknown workflow: {workflow_name}")
+    if not _owns_thread(str(user.id), body.thread_id):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Not your thread")
+
+    graph = get_workflow(workflow_name, request.app.state.checkpointer)
+    config = {"configurable": {"thread_id": body.thread_id}}
+    state = await graph.aget_state(config)
+    if not state.next:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "Thread is not waiting on a clarification"
+        )
+
+    await touch_thread(body.thread_id)
+
+    handler, langfuse_config = new_callback_handler(
+        user_id=str(user.id), session_id=body.thread_id, tags=[workflow_name]
+    )
+    config = {**config, **langfuse_config}
+    return StreamingResponse(
+        _stream_graph(
+            graph, workflow_name, body.thread_id, Command(resume=body.human_input), config, handler
+        ),
+        media_type="text/event-stream",
+    )
 
 
 @router.get("/threads", response_model=list[ChatThreadOut])

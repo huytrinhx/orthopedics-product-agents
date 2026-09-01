@@ -1,6 +1,6 @@
 """Deterministic retrieval workflow: fixed pipeline, no agentic tool choice.
 
-query -> resolve_synonyms -> hybrid_retrieve -> rerank -> generate -> self_eval
+query -> detect_intent -> resolve_synonyms -> hybrid_retrieve -> rerank -> generate -> self_eval
        -> (loop: reformulate + retry if self_eval faithfulness/relevance low)
        -> finalize
 
@@ -14,12 +14,18 @@ lookup against the whole query text, not per-extracted-entity: picking which
 terms in a free-text question are worth resolving is exactly the kind of
 judgment call this workflow deliberately doesn't make, so most turns are a
 no-op here and that's fine for a fixed baseline.
+
+detect_intent (ticket 09) is the one exception to "no judgment calls": it
+classifies which product system the query is about and, when it can't tell
+confidently, calls interrupt() to ask rather than letting hybrid_retrieve
+search unfiltered -- see its own docstring below.
 """
 import re
 from typing import Literal
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langgraph.graph import END, StateGraph
+from langgraph.types import interrupt
 from pydantic import BaseModel, Field
 
 from agents.judge import judge_answer
@@ -28,6 +34,7 @@ from agents.state import BaseAgentState, RetrievedPassage
 from agents.tools.synonym_resolve import synonym_resolve
 from agents.tools.vector_search import vector_search
 from config.llm_clients import get_chat_model
+from tags.repository import list_systems
 
 MAX_RETRIEVAL_LOOPS = 2
 # Below this on faithfulness or relevance, the answer is worth one more
@@ -39,6 +46,18 @@ RETRY_SCORE_THRESHOLD = 0.6
 # choose among.
 RETRIEVE_TOP_K = 12
 RERANK_TOP_N = 5
+
+# The real taxonomy from evals/golden_datasets/feedback-notes.csv's
+# "Question Type" column (build_dataset.py carries it into mis.jsonl/
+# reflex.jsonl already; intent_detection.jsonl now does too) -- fixed,
+# unlike systems below, since new question types aren't something an admin
+# adds through the tags UI.
+QUESTION_TYPES = [
+    "Specs - product characteristics",
+    "Specs - system contents; SKU/ordering info",
+    "Technique/procedural",
+    "Pull resource",
+]
 
 
 class DeterministicState(BaseAgentState, total=False):
@@ -56,6 +75,26 @@ class DeterministicState(BaseAgentState, total=False):
     answer: str
     citations: list[str]
     retrieval_loop_count: int
+    # Set by detect_intent, the graph's entry node. resolved_system_id is
+    # what hybrid_retrieve actually filters on; resolved_system is kept
+    # alongside it (rather than looked up again) for the done/eval payload
+    # and because a resume answer that doesn't match any known system name
+    # still gets recorded as itself, resolved_system_id just stays None.
+    # resolved_question_type has no retrieval-filtering role -- it's
+    # observability only, not wired into hybrid_retrieve -- but when the
+    # classifier finds more than one type genuinely applies, detect_intent
+    # DOES interrupt to ask which retrieval/reasoning path to take (see its
+    # docstring), so this ends up a single-element list in that case too.
+    # It's a list, not a single value, since a question can genuinely span
+    # more than one type (e.g. feedback-notes.csv's row 25,
+    # "Technique/procedural steps\nSpecs - product characteristics"),
+    # matching expected_question_type's shape in
+    # evals/golden_datasets/intent_detection.jsonl. Always sanitized to
+    # exactly the canonical QUESTION_TYPES strings -- see
+    # _normalize_question_types.
+    resolved_system: str | None
+    resolved_system_id: str | None
+    resolved_question_type: list[str]
 
 
 class _RerankScores(BaseModel):
@@ -73,6 +112,123 @@ class _ReformulatedQuery(BaseModel):
     )
 
 
+class _IntentClassification(BaseModel):
+    system: str | None = Field(
+        default=None,
+        description=(
+            "The one product system name (from the allowed list given in the "
+            "prompt) the query is clearly about, or null if it doesn't "
+            "clearly name or imply exactly one -- don't guess between two "
+            "plausible systems."
+        ),
+    )
+    question_type: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Zero or more of the allowed question types that apply -- most "
+            "questions are exactly one, but include more than one only when "
+            "the question genuinely asks about more than one kind of thing "
+            "(e.g. both a technique/procedural step and a product spec in "
+            "the same question). Empty if none clearly apply."
+        ),
+    )
+
+
+def _match_option(answer: str, options: list[str]) -> str | None:
+    normalized = answer.strip().lower()
+    for option in options:
+        if option.lower() == normalized:
+            return option
+    return None
+
+
+def _normalize_question_types(raw: list[str]) -> list[str]:
+    """Sanitizes the classifier's free-form question_type strings down to
+    exactly the canonical QUESTION_TYPES values -- an LLM asked to echo a
+    long fixed string back (e.g. "Specs - system contents; SKU/ordering
+    info") will occasionally paraphrase, drop punctuation, or vary casing
+    even when told to use the list verbatim. Matches case/whitespace-
+    insensitively and drops (rather than guesses at) anything that still
+    doesn't match one of the four, so a hallucinated or malformed label
+    never leaks into resolved_question_type. Also dedupes and drops blanks,
+    since a list output can repeat or include stray empty strings.
+    """
+    by_normalized = {qt.strip().lower(): qt for qt in QUESTION_TYPES}
+    seen: dict[str, None] = {}
+    for item in raw:
+        canonical = by_normalized.get(item.strip().lower())
+        if canonical is not None:
+            seen.setdefault(canonical, None)
+    return list(seen)
+
+
+async def _classify_intent(query: str, system_names: list[str]) -> _IntentClassification:
+    model = get_chat_model().with_structured_output(_IntentClassification)
+    return await model.ainvoke(
+        [
+            SystemMessage(
+                content=(
+                    "Classify the sales rep's question below.\n\n"
+                    f"Allowed systems: {', '.join(system_names) or '(none configured)'}\n"
+                    f"Allowed question types: {', '.join(QUESTION_TYPES)}\n\n"
+                    "Set system to null if the question doesn't clearly name "
+                    "or imply exactly one of the allowed systems. Use the "
+                    "question type strings exactly as given -- most "
+                    "questions are exactly one type; only include more than "
+                    "one if the question genuinely spans more than one."
+                )
+            ),
+            {"role": "user", "content": query},
+        ]
+    )
+
+
+async def detect_intent(state: DeterministicState) -> dict:
+    """Entry node: classifies which product system and question type the
+    query is about. A query that doesn't clearly name or imply one system
+    (e.g. it never mentions MIS, REFLEX, or any distinguishing product
+    term) pauses the graph via interrupt() for a clarifying answer, rather
+    than letting hybrid_retrieve search unfiltered across every system's
+    documents -- backend/api/routes/chat.py's resume_chat is the other half
+    of this suspend/resume pair, and _match_option is what turns either a
+    clicked option or free text back into a real system name on resume.
+
+    Systems come from tags.list_systems() rather than a fixed enum,
+    matching ticket 05's system tag -- adding a new system in the admin UI
+    makes it selectable here with no code change. If none are configured
+    yet (a fresh environment with nothing tagged), there's nothing to
+    disambiguate against, so this skips straight past the interrupt and
+    leaves resolved_system None -- retrieval runs unfiltered, the same
+    baseline behavior as before this node existed.
+
+    question_type never triggers this interrupt -- it has no
+    retrieval-filtering role today, only an observability one, so an
+    unclear (or multi-type) classification there is left as whatever
+    _normalize_question_types resolves rather than blocking the turn on a
+    second question. It's a list, not a single value, since a question can
+    genuinely be more than one type (see _normalize_question_types, which
+    also sanitizes the model's raw output down to the canonical
+    QUESTION_TYPES strings).
+    """
+    systems = await list_systems()
+    system_names = [s.name for s in systems]
+
+    result = await _classify_intent(state["query"], system_names)
+
+    if result.system is None and system_names:
+        answer = interrupt(
+            {"question": "Which product system is this about?", "options": system_names}
+        )
+        result.system = _match_option(answer, system_names)
+
+    system_id = next((s.id for s in systems if s.name == result.system), None)
+    return {
+        "resolved_system": result.system,
+        "resolved_system_id": str(system_id) if system_id else None,
+        "resolved_question_type": _normalize_question_types(result.question_type),
+    }
+
+
 async def resolve_synonyms(state: DeterministicState) -> dict:
     search_query = state.get("search_query") or state["query"]
     synonyms = await synonym_resolve.ainvoke({"term": search_query})
@@ -80,6 +236,14 @@ async def resolve_synonyms(state: DeterministicState) -> dict:
 
 
 async def hybrid_retrieve(state: DeterministicState) -> dict:
+    # Deliberately NOT filtered by detect_intent's resolved_system_id --
+    # system_id is nullable on documents/chunks (ticket 05: tagging is
+    # optional, done separately from upload), so a hard filter would
+    # silently exclude every untagged document from an otherwise-answerable
+    # query. resolved_system stays informational (returned in the "done"
+    # payload, available for observability/future use) rather than wired
+    # into retrieval -- ticket 09's acceptance criteria only need the
+    # interrupt()/resume mechanic, not a filtering behavior change.
     search_query = state.get("search_query") or state["query"]
     search_text = " ".join([search_query, *state.get("resolved_synonyms", [])])
     results = await vector_search.ainvoke({"query": search_text, "top_k": RETRIEVE_TOP_K})
@@ -234,6 +398,7 @@ def _should_retry(state: DeterministicState) -> Literal["reformulate", "finalize
 
 def build_graph(checkpointer):
     graph = StateGraph(DeterministicState)
+    graph.add_node("detect_intent", detect_intent)
     graph.add_node("resolve_synonyms", resolve_synonyms)
     graph.add_node("hybrid_retrieve", hybrid_retrieve)
     graph.add_node("rerank", rerank)
@@ -242,7 +407,8 @@ def build_graph(checkpointer):
     graph.add_node("reformulate", reformulate)
     graph.add_node("finalize", finalize)
 
-    graph.set_entry_point("resolve_synonyms")
+    graph.set_entry_point("detect_intent")
+    graph.add_edge("detect_intent", "resolve_synonyms")
     graph.add_edge("resolve_synonyms", "hybrid_retrieve")
     graph.add_edge("hybrid_retrieve", "rerank")
     graph.add_edge("rerank", "generate")

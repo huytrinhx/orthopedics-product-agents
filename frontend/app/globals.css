@@ -640,6 +640,28 @@ tr:last-child td {
   color: var(--steel);
 }
 
+.chat-clarification {
+  margin-top: 10px;
+}
+
+.chat-clarification-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.chat-clarification-option {
+  padding: 6px 14px;
+  font-size: 0.85rem;
+}
+
+.chat-clarification-hint {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  color: var(--steel);
+}
+
 .chat-citations {
   display: flex;
   flex-wrap: wrap;

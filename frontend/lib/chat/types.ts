@@ -21,6 +21,10 @@ export type ChatStreamEvent =
   | { event: "status"; data: { node: string } }
   | { event: "token"; data: { content: string } }
   | {
+      event: "clarification";
+      data: { thread_id: string; question: string; options: string[] };
+    }
+  | {
       event: "done";
       data: {
         thread_id: string;
@@ -31,6 +35,14 @@ export type ChatStreamEvent =
     }
   | { event: "error"; data: { message: string } };
 
+// Ticket 09: detect_intent's interrupt() payload, once resolved to what the
+// UI needs to show -- a question plus zero or more clickable options (a
+// free-text answer is always accepted too, via the normal chat input).
+export interface ChatClarification {
+  question: string;
+  options: string[];
+}
+
 export interface ChatMessage {
   id: string;
   role: "user" | "assistant";
@@ -38,6 +50,7 @@ export interface ChatMessage {
   citations?: ChatCitation[];
   status?: string;
   pending?: boolean;
+  clarification?: ChatClarification;
 }
 
 // Mirrors backend/chat_threads/models.py -- the sidebar (ticket 10).

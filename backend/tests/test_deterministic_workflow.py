@@ -37,6 +37,7 @@ def test_build_graph_compiles_with_the_expected_nodes():
     graph = det.build_graph(InMemorySaver())
     nodes = set(graph.get_graph().nodes) - {"__start__", "__end__"}
     assert nodes == {
+        "detect_intent",
         "resolve_synonyms",
         "hybrid_retrieve",
         "rerank",
@@ -49,6 +50,9 @@ def test_build_graph_compiles_with_the_expected_nodes():
 
 async def test_retry_loop_reformulates_and_only_commits_the_accepted_answer(monkeypatch):
     self_eval_calls = 0
+
+    async def fake_detect_intent(state):
+        return {"resolved_system": None, "resolved_system_id": None, "resolved_question_type": []}
 
     async def fake_resolve_synonyms(state):
         return {"resolved_synonyms": []}
@@ -79,6 +83,7 @@ async def test_retry_loop_reformulates_and_only_commits_the_accepted_answer(monk
             "retrieval_loop_count": state.get("retrieval_loop_count", 0) + 1,
         }
 
+    monkeypatch.setattr(det, "detect_intent", fake_detect_intent)
     monkeypatch.setattr(det, "resolve_synonyms", fake_resolve_synonyms)
     monkeypatch.setattr(det, "hybrid_retrieve", fake_hybrid_retrieve)
     monkeypatch.setattr(det, "rerank", fake_rerank)
@@ -101,6 +106,9 @@ async def test_retry_loop_reformulates_and_only_commits_the_accepted_answer(monk
 
 async def test_retry_loop_is_bounded_by_max_retrieval_loops(monkeypatch):
     self_eval_calls = 0
+
+    async def fake_detect_intent(state):
+        return {"resolved_system": None, "resolved_system_id": None, "resolved_question_type": []}
 
     async def fake_resolve_synonyms(state):
         return {"resolved_synonyms": []}
@@ -126,6 +134,7 @@ async def test_retry_loop_is_bounded_by_max_retrieval_loops(monkeypatch):
             "retrieval_loop_count": state.get("retrieval_loop_count", 0) + 1,
         }
 
+    monkeypatch.setattr(det, "detect_intent", fake_detect_intent)
     monkeypatch.setattr(det, "resolve_synonyms", fake_resolve_synonyms)
     monkeypatch.setattr(det, "hybrid_retrieve", fake_hybrid_retrieve)
     monkeypatch.setattr(det, "rerank", fake_rerank)
@@ -151,6 +160,9 @@ async def test_retrieval_loop_count_does_not_leak_into_a_fresh_turn(monkeypatch)
     """
     self_eval_calls = 0
 
+    async def fake_detect_intent(state):
+        return {"resolved_system": None, "resolved_system_id": None, "resolved_question_type": []}
+
     async def fake_resolve_synonyms(state):
         return {"resolved_synonyms": []}
 
@@ -174,6 +186,7 @@ async def test_retrieval_loop_count_does_not_leak_into_a_fresh_turn(monkeypatch)
             "retrieval_loop_count": state.get("retrieval_loop_count", 0) + 1,
         }
 
+    monkeypatch.setattr(det, "detect_intent", fake_detect_intent)
     monkeypatch.setattr(det, "resolve_synonyms", fake_resolve_synonyms)
     monkeypatch.setattr(det, "hybrid_retrieve", fake_hybrid_retrieve)
     monkeypatch.setattr(det, "rerank", fake_rerank)

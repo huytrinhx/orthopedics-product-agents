@@ -1,27 +1,32 @@
 "use client";
 
-// Streaming chat UI: connects to POST /chat/{workflow}/stream (SSE over a
-// POST, parsed by hand in lib/chat/api.ts's streamChat -- native
-// EventSource is GET-only). Ticket 09 (clarification interrupt()/resume)
-// and tickets 11/12 (per-message 4-axis feedback) extend this. Ticket 10
-// added the history sidebar (past threads, resuming a transcript, a
-// separate "New conversation" action -- backend/api/routes/chat.py's
-// stream_chat keeps chat_threads up to date as a side effect of every
-// turn). This pass adds the third pane: clicking a citation chip opens the
-// cited document's chunks on the right, scrolled to and highlighting the
-// exact one the answer drew from (GET /documents/{id}/chunks) -- "the
-// paragraph", in the sense of backend/ingestion/chunking.py's chunk
-// boundaries, which is the finest-grained unit actually stored; there's no
-// PDF page/position tracked to scroll a rendered original to instead.
+// Streaming chat UI: connects to POST /chat/stream (SSE over a POST,
+// parsed by hand in lib/chat/api.ts -- native EventSource is GET-only).
+// Tickets 11/12 (per-message 4-axis feedback) extend this. Ticket 10 added
+// the history sidebar (past threads, resuming a transcript, a separate
+// "New conversation" action). A citation chip opens the cited document's
+// chunks on the right, scrolled to and highlighting the exact one the
+// answer drew from (GET /documents/{id}/chunks) -- "the paragraph", in the
+// sense of backend/ingestion/chunking.py's chunk boundaries, which is the
+// finest-grained unit actually stored; there's no PDF page/position
+// tracked to scroll a rendered original to instead.
+//
+// Ticket 09 (clarification interrupt()/resume): a "clarification" SSE
+// event (consumeStream below) means detect_intent couldn't confidently
+// tell which product system the query is about -- pendingClarification
+// tracks the paused thread_id, and the next submit (a suggested option's
+// button, or free text typed into the same input) calls resumeChat instead
+// of starting a new streamChat turn. See answerClarification.
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import Link from "next/link";
-import { getChatThread, listChatThreads, streamChat } from "../../lib/chat/api";
+import { getChatThread, listChatThreads, resumeChat, streamChat } from "../../lib/chat/api";
 import { useAuth } from "../../lib/auth-context";
-import type { ChatCitation, ChatMessage, ChatThread } from "../../lib/chat/types";
+import type { ChatCitation, ChatMessage, ChatStreamEvent, ChatThread } from "../../lib/chat/types";
 import { getDocumentChunks } from "../../lib/documents/api";
 import type { DocumentChunk } from "../../lib/documents/types";
 
 const STATUS_LABELS: Record<string, string> = {
+  detect_intent: "Understanding your question…",
   resolve_synonyms: "Checking terminology…",
   hybrid_retrieve: "Searching documents…",
   rerank: "Ranking results…",
@@ -57,6 +62,11 @@ export default function ChatPage() {
   const [activeThreadId, setActiveThreadId] = useState<string | undefined>(undefined);
   const [threadLoading, setThreadLoading] = useState(false);
 
+  // Ticket 09: set while a clarification question is waiting on an answer --
+  // routes the next submit (button click or free-text) to resumeChat against
+  // this thread instead of starting a fresh streamChat turn.
+  const [pendingClarification, setPendingClarification] = useState<string | null>(null);
+
   const [openCitation, setOpenCitation] = useState<ChatCitation | null>(null);
   const [docChunks, setDocChunks] = useState<DocumentChunk[] | null>(null);
   const [docPaneLoading, setDocPaneLoading] = useState(false);
@@ -89,6 +99,7 @@ export default function ChatPage() {
     setMessages([]);
     setError(null);
     setInput("");
+    setPendingClarification(null);
     closeCitation();
   }
 
@@ -96,6 +107,7 @@ export default function ChatPage() {
     if (sending || threadId === activeThreadId) return;
     setThreadLoading(true);
     setError(null);
+    setPendingClarification(null);
     closeCitation();
     try {
       const transcript = await getChatThread(threadId);
@@ -140,57 +152,61 @@ export default function ChatPage() {
     }
   }
 
-  async function handleSubmit(e: FormEvent) {
-    e.preventDefault();
-    const text = input.trim();
-    if (!text || sending) return;
+  function updateMessage(id: string, patch: Partial<ChatMessage>) {
+    setMessages((prev) => prev.map((m) => (m.id === id ? { ...m, ...patch } : m)));
+  }
 
-    const userMessage: ChatMessage = { id: uid(), role: "user", content: text };
-    const assistantId = uid();
-    setMessages((prev) => [
-      ...prev,
-      userMessage,
-      { id: assistantId, role: "assistant", content: "", pending: true, status: "Thinking…" },
-    ]);
-    setInput("");
+  // Shared by a fresh turn (streamChat) and a clarification answer
+  // (resumeChat, ticket 09) -- both yield the same ChatStreamEvent shape
+  // (backend/api/routes/chat.py's _stream_graph drives both), so status/
+  // token/done/error handling only needs writing once. "clarification" is
+  // the one event type only a fresh turn's detect_intent can produce (a
+  // resume answer either resolves it or the graph runs straight to "done").
+  async function consumeStream(gen: AsyncGenerator<ChatStreamEvent>, assistantId: string) {
+    for await (const evt of gen) {
+      if (evt.event === "thread") {
+        threadIdRef.current = evt.data.thread_id;
+        setActiveThreadId(evt.data.thread_id);
+      } else if (evt.event === "status") {
+        updateMessage(assistantId, { status: STATUS_LABELS[evt.data.node] ?? evt.data.node });
+      } else if (evt.event === "token") {
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === assistantId
+              ? { ...m, content: m.content + evt.data.content, status: undefined }
+              : m
+          )
+        );
+      } else if (evt.event === "clarification") {
+        setPendingClarification(evt.data.thread_id);
+        updateMessage(assistantId, {
+          content: evt.data.question,
+          clarification: { question: evt.data.question, options: evt.data.options },
+          status: undefined,
+          pending: false,
+        });
+      } else if (evt.event === "done") {
+        setPendingClarification(null);
+        updateMessage(assistantId, {
+          content: evt.data.answer,
+          citations: evt.data.citations,
+          status: undefined,
+          pending: false,
+        });
+      } else if (evt.event === "error") {
+        updateMessage(assistantId, { pending: false, status: undefined });
+        setError(evt.data.message);
+      }
+    }
+  }
+
+  async function runTurn(gen: AsyncGenerator<ChatStreamEvent>, assistantId: string) {
     setSending(true);
     setError(null);
-
-    function updateAssistant(patch: Partial<ChatMessage>) {
-      setMessages((prev) =>
-        prev.map((m) => (m.id === assistantId ? { ...m, ...patch } : m))
-      );
-    }
-
     try {
-      for await (const evt of streamChat(text, threadIdRef.current)) {
-        if (evt.event === "thread") {
-          threadIdRef.current = evt.data.thread_id;
-          setActiveThreadId(evt.data.thread_id);
-        } else if (evt.event === "status") {
-          updateAssistant({ status: STATUS_LABELS[evt.data.node] ?? evt.data.node });
-        } else if (evt.event === "token") {
-          setMessages((prev) =>
-            prev.map((m) =>
-              m.id === assistantId
-                ? { ...m, content: m.content + evt.data.content, status: undefined }
-                : m
-            )
-          );
-        } else if (evt.event === "done") {
-          updateAssistant({
-            content: evt.data.answer,
-            citations: evt.data.citations,
-            status: undefined,
-            pending: false,
-          });
-        } else if (evt.event === "error") {
-          updateAssistant({ pending: false, status: undefined });
-          setError(evt.data.message);
-        }
-      }
+      await consumeStream(gen, assistantId);
     } catch (err) {
-      updateAssistant({ pending: false, status: undefined });
+      updateMessage(assistantId, { pending: false, status: undefined });
       setError(err instanceof Error ? err.message : "Something went wrong");
     } finally {
       setSending(false);
@@ -200,6 +216,48 @@ export default function ChatPage() {
         .then(setThreads)
         .catch(() => {});
     }
+  }
+
+  async function handleSubmit(e: FormEvent) {
+    e.preventDefault();
+    const text = input.trim();
+    if (!text || sending) return;
+    setInput("");
+
+    if (pendingClarification) {
+      await answerClarification(text);
+      return;
+    }
+
+    const userMessage: ChatMessage = { id: uid(), role: "user", content: text };
+    const assistantId = uid();
+    setMessages((prev) => [
+      ...prev,
+      userMessage,
+      { id: assistantId, role: "assistant", content: "", pending: true, status: "Thinking…" },
+    ]);
+    await runTurn(streamChat(text, threadIdRef.current), assistantId);
+  }
+
+  // Ticket 09: answers a clarification question, either by clicking one of
+  // its suggested options or by typing free text into the normal input
+  // (handleSubmit routes here when pendingClarification is set). Adds a new
+  // user/assistant bubble pair rather than mutating the clarification
+  // message in place, so the exchange reads like the rest of the
+  // conversation instead of the question silently turning into the answer.
+  async function answerClarification(answer: string) {
+    const threadId = pendingClarification;
+    if (!threadId) return;
+    setPendingClarification(null);
+
+    const userMessage: ChatMessage = { id: uid(), role: "user", content: answer };
+    const assistantId = uid();
+    setMessages((prev) => [
+      ...prev,
+      userMessage,
+      { id: assistantId, role: "assistant", content: "", pending: true, status: "Thinking…" },
+    ]);
+    await runTurn(resumeChat(threadId, answer), assistantId);
   }
 
   if (loading) return <main className="page"><p>Loading…</p></main>;
@@ -266,6 +324,26 @@ export default function ChatPage() {
                 <div key={m.id} className={`chat-bubble chat-bubble-${m.role}`}>
                   {m.content && <div className="chat-bubble-text">{m.content}</div>}
                   {m.status && <div className="chat-status">{m.status}</div>}
+                  {m.clarification && (
+                    <div className="chat-clarification">
+                      {m.clarification.options.length > 0 && (
+                        <div className="chat-clarification-options">
+                          {m.clarification.options.map((option) => (
+                            <button
+                              key={option}
+                              type="button"
+                              className="btn btn-ghost chat-clarification-option"
+                              onClick={() => answerClarification(option)}
+                              disabled={sending || pendingClarification === null}
+                            >
+                              {option}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                      <div className="chat-clarification-hint">Or type your answer below.</div>
+                    </div>
+                  )}
                   {m.citations && m.citations.length > 0 && (
                     <div className="chat-citations">
                       {m.citations.map((c, i) => (
@@ -296,7 +374,7 @@ export default function ChatPage() {
             <input
               value={input}
               onChange={(e) => setInput(e.target.value)}
-              placeholder="Ask a question…"
+              placeholder={pendingClarification ? "Type your answer…" : "Ask a question…"}
               disabled={sending}
               autoFocus
             />

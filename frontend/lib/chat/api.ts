@@ -1,20 +1,13 @@
 import { API_BASE, authHeaders, request } from "../api/client";
 import type { ChatStreamEvent, ChatThread, ChatTranscript } from "./types";
 
-// POST /chat/stream is SSE (event: <name>\ndata: <json>\n\n) but over a
-// POST, so the native EventSource API (GET-only) can't consume it -- this
-// reads the fetch response body's stream and parses frames by hand. No
-// workflow name here -- the backend runs whichever workflow the admin has
-// configured as default (ticket 14); the chat UI never picks one itself.
-export async function* streamChat(
-  message: string,
-  threadId?: string
-): AsyncGenerator<ChatStreamEvent> {
-  const res = await fetch(`${API_BASE}/chat/stream`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", ...authHeaders() },
-    body: JSON.stringify({ message, thread_id: threadId }),
-  });
+// SSE (event: <name>\ndata: <json>\n\n) but over a POST, so the native
+// EventSource API (GET-only) can't consume it -- reads the fetch response
+// body's stream and parses frames by hand. Shared by streamChat and
+// resumeChat below, since both hit a POST .../stream-shaped endpoint that
+// emits the same frame format (backend/api/routes/chat.py's _stream_graph
+// drives both).
+async function* parseSseStream(res: Response): AsyncGenerator<ChatStreamEvent> {
   if (!res.ok || !res.body) {
     const body = await res.json().catch(() => ({}));
     throw new Error(body.detail ?? `request failed: ${res.status}`);
@@ -41,6 +34,36 @@ export async function* streamChat(
       }
     }
   }
+}
+
+// No workflow name here -- the backend runs whichever workflow the admin
+// has configured as default (ticket 14); the chat UI never picks one
+// itself.
+export async function* streamChat(
+  message: string,
+  threadId?: string
+): AsyncGenerator<ChatStreamEvent> {
+  const res = await fetch(`${API_BASE}/chat/stream`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify({ message, thread_id: threadId }),
+  });
+  yield* parseSseStream(res);
+}
+
+// Ticket 09: answers a pending detect_intent clarification (a clicked
+// option's exact text, or free text) and resumes the same suspended graph
+// run -- not a new turn, so no message param, just the answer.
+export async function* resumeChat(
+  threadId: string,
+  humanInput: string
+): AsyncGenerator<ChatStreamEvent> {
+  const res = await fetch(`${API_BASE}/chat/resume`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify({ thread_id: threadId, human_input: humanInput }),
+  });
+  yield* parseSseStream(res);
 }
 
 export async function listChatThreads(): Promise<ChatThread[]> {

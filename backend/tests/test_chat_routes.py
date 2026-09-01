@@ -277,22 +277,26 @@ def test_thread_appears_in_sidebar_and_transcript_round_trips_both_turns():
         token = _user_token(client)
         headers = {"Authorization": f"Bearer {token}"}
 
+        # Names REFLEX HYBRID explicitly so detect_intent (ticket 09) resolves
+        # confidently and doesn't pause the turn on a clarification -- this
+        # test is about the sidebar/transcript round-trip, not intent
+        # detection, so the message just needs to be unambiguous.
         first = client.post(
             "/chat/deterministic/stream",
             headers=headers,
-            json={"message": "What torque should I use on a locking screw?"},
+            json={"message": "What torque should I use on a REFLEX HYBRID locking screw?"},
         )
         thread_id = _sse_events(first.text)[0][1]["thread_id"]
 
         listing = client.get("/chat/threads", headers=headers).json()
         assert len(listing) == 1
         assert listing[0]["thread_id"] == thread_id
-        assert listing[0]["title"] == "What torque should I use on a locking screw?"
+        assert listing[0]["title"] == "What torque should I use on a REFLEX HYBRID locking screw?"
 
         second = client.post(
             "/chat/deterministic/stream",
             headers=headers,
-            json={"message": "And in inch-pounds?", "thread_id": thread_id},
+            json={"message": "And in inch-pounds for the REFLEX HYBRID?", "thread_id": thread_id},
         )
         assert dict(_sse_events(second.text))["thread"]["thread_id"] == thread_id
 
@@ -301,8 +305,98 @@ def test_thread_appears_in_sidebar_and_transcript_round_trips_both_turns():
     assert transcript["thread_id"] == thread_id
     roles = [m["role"] for m in transcript["messages"]]
     assert roles == ["user", "assistant", "user", "assistant"]
-    assert transcript["messages"][0]["content"] == "What torque should I use on a locking screw?"
-    assert transcript["messages"][2]["content"] == "And in inch-pounds?"
+    assert (
+        transcript["messages"][0]["content"]
+        == "What torque should I use on a REFLEX HYBRID locking screw?"
+    )
+    assert transcript["messages"][2]["content"] == "And in inch-pounds for the REFLEX HYBRID?"
+
+
+@needs_openai_key
+def test_ambiguous_query_pauses_for_clarification_and_resume_completes_the_turn(
+    monkeypatch, tmp_path
+):
+    """Ticket 09's core acceptance criterion, end to end: a query that names
+    no product system (matching evals/golden_datasets/intent_detection.jsonl's
+    hand-authored expects_clarification: true fixtures --
+    build_dataset.py's _AMBIGUOUS_FIXTURES, since the real feedback-notes.csv
+    rows all confidently name one) pauses detect_intent's interrupt() rather
+    than guessing, and answering it via POST /chat/resume resumes the same
+    thread to a real "done" instead of starting a new turn.
+
+    Creates and tags its own document (rather than relying on whatever
+    systems already exist in this shared dev Postgres) so the clarification
+    options this test asserts against are deterministic.
+    """
+    monkeypatch.setenv("INGEST_DATA_DIR", str(tmp_path))
+    with TestClient(app) as client:
+        admin_email = _unique_email()
+        monkeypatch.setenv("ADMIN_EMAILS", admin_email)
+        admin_token = client.post(
+            "/auth/signup", json={"email": admin_email, "password": "correct horse battery"}
+        ).json()["access_token"]
+        admin_headers = {"Authorization": f"Bearer {admin_token}"}
+
+        system_name = f"ClarifySys-{uuid.uuid4().hex[:8]}"
+        system_id = client.post(
+            "/systems", headers=admin_headers, json={"name": system_name}
+        ).json()["id"]
+        upload = client.post(
+            "/documents/upload",
+            headers=admin_headers,
+            data={"system_id": system_id},
+            files={"file": ("clarify-doc.txt", b"placeholder content", "text/plain")},
+        )
+        doc_id = upload.json()["id"]
+
+        user_headers = {"Authorization": f"Bearer {_user_token(client)}"}
+
+        first = client.post(
+            "/chat/deterministic/stream",
+            headers=user_headers,
+            json={"message": "What screws are in the set?"},
+        )
+        events = dict(_sse_events(first.text))
+        assert "done" not in events  # paused, not finished
+        clarification = events["clarification"]
+        thread_id = clarification["thread_id"]
+        assert clarification["question"]
+        assert system_name in clarification["options"]
+
+        second = client.post(
+            "/chat/resume",
+            headers=user_headers,
+            json={"thread_id": thread_id, "human_input": system_name},
+        )
+        events2 = dict(_sse_events(second.text))
+        assert events2["thread"]["thread_id"] == thread_id
+        assert "done" in events2
+
+        client.delete(f"/documents/{doc_id}", headers=admin_headers)
+
+
+@needs_openai_key
+def test_resume_without_a_pending_clarification_is_rejected(monkeypatch, tmp_path):
+    """resume_chat's aget_state guard: resuming a thread that isn't actually
+    paused on an interrupt (a fresh thread, or one that already finished)
+    should 409 rather than silently no-op or error obscurely.
+    """
+    monkeypatch.setenv("INGEST_DATA_DIR", str(tmp_path))
+    with TestClient(app) as client:
+        user_headers = {"Authorization": f"Bearer {_user_token(client)}"}
+        first = client.post(
+            "/chat/deterministic/stream",
+            headers=user_headers,
+            json={"message": "How much torque should I use on the REFLEX HYBRID locking screw?"},
+        )
+        thread_id = dict(_sse_events(first.text))["thread"]["thread_id"]
+
+        resume = client.post(
+            "/chat/resume",
+            headers=user_headers,
+            json={"thread_id": thread_id, "human_input": "anything"},
+        )
+    assert resume.status_code == 409
 
 
 @needs_openai_key

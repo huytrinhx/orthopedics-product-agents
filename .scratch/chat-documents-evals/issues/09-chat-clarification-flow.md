@@ -4,10 +4,18 @@
 
 **Blocked by:** 08 (Chat baseline workflow, end-to-end)
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] The workflow calls `interrupt()` when intent detection is ambiguous, matching the `expects_clarification` cases in `intent_detection.jsonl`
-- [ ] `POST /chat/{workflow_name}/resume` resumes the suspended graph with the user's answer
-- [ ] The chat UI shows the clarifying question, with any suggested options as clickable buttons plus a free-text fallback
-- [ ] Answering (by button or free text) resumes the same conversation turn rather than starting a new one
-- [ ] An ambiguous query from the golden dataset (e.g. one flagged `expects_clarification: true`) is verified to actually trigger this path end-to-end
+- [x] The workflow calls `interrupt()` when intent detection is ambiguous, matching the `expects_clarification` cases in `intent_detection.jsonl`
+- [x] `POST /chat/{workflow_name}/resume` resumes the suspended graph with the user's answer
+- [x] The chat UI shows the clarifying question, with any suggested options as clickable buttons plus a free-text fallback
+- [x] Answering (by button or free text) resumes the same conversation turn rather than starting a new one
+- [x] An ambiguous query from the golden dataset (e.g. one flagged `expects_clarification: true`) is verified to actually trigger this path end-to-end
+
+**Implementation notes (2026-09-01):**
+- "Intent" ended up covering two axes, not just system: `agents/workflows/deterministic.py`'s new `detect_intent` node (the graph's entry point) classifies both `system` (dynamic, from `tags.list_systems()` — not a fixed enum, so a new system added via the admin UI is selectable with no code change) and `question_type` (fixed taxonomy, the four real values from `feedback-notes.csv`'s "Question Type" column). Only an unresolved `system` triggers `interrupt()` — `question_type` is classified and returned (`resolved_question_type`) but stays informational only; it has no retrieval-filtering role yet, so an unclear or multi-type classification there doesn't block the turn on a second question.
+- `evals/golden_datasets/intent_detection.jsonl` had zero `expects_clarification: true` rows (the real feedback-notes.csv rows all confidently name one system) and `build_dataset.py` hardcoded `False` for every row — `_AMBIGUOUS_FIXTURES`/`_PULL_RESOURCE_FIXTURES` in `build_dataset.py` add hand-authored fixture rows (documented inline) so this criterion has something real to verify against; `intent_detection.jsonl` also gained `expected_question_type` alongside `expected_system`.
+- Considered filtering `hybrid_retrieve`'s vector search by `resolved_system_id` for real retrieval-scoping value, not just a clarifying question — reverted after it broke a real test: `system_id` is nullable on `chunks` (ticket 05, tagging is optional), so a hard filter silently excluded every untagged document. Left unfiltered; `resolved_system` stays informational for now.
+- `POST /chat/{workflow_name}/resume` and a `POST /chat/resume` default-workflow sibling (mirroring the `/stream` pair ticket 14 established) both resume via `langgraph.types.Command(resume=...)`; `astream_events` surfaces an `interrupt()` call as an `on_chain_stream` "LangGraph" chunk carrying `{"__interrupt__": (...)}` rather than raising — `api/routes/chat.py`'s `_stream_graph` (factored out of `stream_chat`, shared by both stream and resume) watches for that shape and emits a `clarification` SSE event instead of `done`. `resume_chat` 409s if the thread isn't actually paused on an interrupt (`graph.aget_state(config).next`).
+- Verified real end-to-end (not just curl) via Playwright against the running dev app: an ambiguous query ("What screws are in the set?") renders the clarifying question with real system options, clicking one option resumes the same thread to a real generated answer; a second run confirmed the free-text fallback (input placeholder switches to "Type your answer…") also resumes the same thread rather than creating a new sidebar entry. Backend: `test_chat_routes.py` gained `test_ambiguous_query_pauses_for_clarification_and_resume_completes_the_turn` (creates and tags its own document so the clarification options are deterministic, independent of this shared dev Postgres's accumulated test data) and `test_resume_without_a_pending_clarification_is_rejected`. Full suite: 124 passed.
+- **Found and fixed along the way:** this shared dev Postgres has accumulated ~80 stray `systems` rows from other tests' unique-per-run tag names, never cleaned up — harmless to correctness (the new test creates its own system rather than relying on this) but worth a cleanup pass at some point; it makes the real clarification dropdown in manual testing show ~80 options instead of 2.
