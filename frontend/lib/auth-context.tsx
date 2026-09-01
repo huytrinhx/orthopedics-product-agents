@@ -1,9 +1,9 @@
 "use client";
 
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
-import { getCurrentUser, login as apiLogin, signup as apiSignup } from "./api";
-import { clearToken, getToken, setToken } from "./auth";
-import type { AuthUser } from "./types";
+import { getCurrentUser, login as apiLogin, signup as apiSignup } from "./auth/api";
+import { clearToken, getToken, setToken } from "./auth/token";
+import type { AuthUser } from "./auth/types";
 
 interface AuthContextValue {
   user: AuthUser | null;

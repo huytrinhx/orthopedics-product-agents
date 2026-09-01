@@ -3,18 +3,21 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import Link from "next/link";
 import {
-  createDocumentType,
-  createSystem,
   deleteDocument,
   indexDocument,
-  listDocumentTypes,
   listDocuments,
-  listSystems,
   setDocumentTags,
   uploadDocument,
-} from "../../lib/api";
+} from "../../lib/documents/api";
+import {
+  createDocumentType,
+  createSystem,
+  listDocumentTypes,
+  listSystems,
+} from "../../lib/documents/tags/api";
 import { useAuth } from "../../lib/auth-context";
-import type { DocumentRecord, Tag } from "../../lib/types";
+import type { DocumentRecord } from "../../lib/documents/types";
+import type { Tag } from "../../lib/documents/tags/types";
 import { TagSelect } from "./tag-select";
 
 // Polls while anything's still in flight -- the background task (see

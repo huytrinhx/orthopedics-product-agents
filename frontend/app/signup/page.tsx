@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState, type FormEvent } from "react";
-import { API_BASE } from "../../lib/api";
+import { API_BASE } from "../../lib/api/client";
 import { useAuth } from "../../lib/auth-context";
 
 export default function SignupPage() {

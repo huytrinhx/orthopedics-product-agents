@@ -10,9 +10,9 @@
 // recency) up to date as a side effect of every turn.
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import Link from "next/link";
-import { getChatThread, listChatThreads, streamChat } from "../../lib/api";
+import { getChatThread, listChatThreads, streamChat } from "../../lib/chat/api";
 import { useAuth } from "../../lib/auth-context";
-import type { ChatMessage, ChatThread } from "../../lib/types";
+import type { ChatMessage, ChatThread } from "../../lib/chat/types";
 
 const WORKFLOW = "deterministic";
 

@@ -48,6 +48,29 @@ picking this repo up cold, read this before making structural changes.
   state schema (`agents/state.py`) — the API and eval harness select by
   name. New architectures plug in via `agents/workflows/__init__.py`; they
   shouldn't require changes to callers.
+- **Domain package pattern.** A domain's logic lives in its own package —
+  `models.py` + `repository.py` (+ `service.py` where there's real
+  processing, see `backend/documents/`) — with exactly one seam: the route
+  file that imports from it (`backend/api/routes/chat.py` importing
+  `chat_threads.models`/`chat_threads.repository`, `documents.py` importing
+  `documents.*` and `tags.models`, etc.). No route file inlines model or
+  persistence logic, and packages don't cross-import except where one
+  domain genuinely depends on another (documents on tags, for tagging).
+  This is why ticket 10 (chat history sidebar) needed zero `main.py`
+  edits — `chat_threads/` is a self-contained package a ticket can own
+  end-to-end. New domains follow this shape by default; don't grow logic
+  directly inside `backend/api/routes/*.py`.
+  - The frontend mirrors this 1:1 under `frontend/lib/`: one folder per
+    domain (`auth/`, `documents/`, `chat/`), each holding `api.ts` +
+    `types.ts` (+ `token.ts` for auth's session storage). `tags` nests
+    under `documents/tags/` there — frontend only ever reads tags in
+    service of the documents page, unlike the backend's dedicated
+    `tags.py` admin route — so the two sides deliberately diverge in
+    shape while sharing the same packaging convention. The one exception
+    is `frontend/lib/api/client.ts`: shared HTTP plumbing (`API_BASE`,
+    `authHeaders`, `request`, `unwrap`) that every domain imports — not a
+    domain itself, low-churn, so it isn't a collision risk the way a flat
+    `lib/api.ts` with every domain's functions appended to it was.
 - **Golden datasets are per-product-system, not generic.** `mis.jsonl` /
   `reflex.jsonl` correspond to real implant systems (MIS, REFLEX); the
   intent-detection dataset routes a query to the right system before

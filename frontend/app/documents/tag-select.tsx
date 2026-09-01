@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, type FormEvent } from "react";
-import type { Tag } from "../../lib/types";
+import type { Tag } from "../../lib/documents/tags/types";
 
 const NEW_VALUE = "__new__";
 
