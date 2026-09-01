@@ -2,6 +2,14 @@
 # DATABASE_URL / NEO4J_* in .env.example — change both together if you
 # customize this. No Azure services: OpenAI and deployment run on Railway,
 # so there's nothing here to emulate for them.
+#
+# postgres-test/neo4j-test (the "test" profile, `docker compose --profile
+# test up -d`) are a second, disposable pair on different ports (5433,
+# 7688/7475) that backend/tests/conftest.py points pytest at instead of the
+# dev instances above -- so running the test suite never writes fixture
+# data into the database you're doing manual dev work against. No named
+# volumes on purpose: `docker compose --profile test down` (or just
+# recreating the containers) drops all data, which is the point.
 services:
   postgres:
     image: pgvector/pgvector:pg16
@@ -30,6 +38,32 @@ services:
       - "7687:7687" # bolt
     volumes:
       - neo4j-data:/data
+
+  postgres-test:
+    image: pgvector/pgvector:pg16
+    container_name: orthopedics-postgres-test
+    profiles: ["test"]
+    environment:
+      POSTGRES_USER: orthopedics
+      POSTGRES_PASSWORD: orthopedics-dev
+      POSTGRES_DB: orthopedics_agents_test
+    ports:
+      - "5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U orthopedics -d orthopedics_agents_test"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  neo4j-test:
+    image: neo4j:5-community
+    container_name: orthopedics-neo4j-test
+    profiles: ["test"]
+    environment:
+      NEO4J_AUTH: neo4j/orthopedics-dev
+    ports:
+      - "7475:7474" # browser
+      - "7688:7687" # bolt
 
 volumes:
   postgres-data:
