@@ -13,10 +13,14 @@ from fastapi.staticfiles import StaticFiles
 from agents import workflows  # noqa: F401  (registers all workflows)
 from api.routes import auth, chat, documents, feedback, tags
 from memory.checkpointer import get_checkpointer
+from observability.langfuse_setup import configure_langfuse
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Initializes (and logs a warning if unconfigured) up front, rather than
+    # silently on the first chat request -- see langfuse_setup.py.
+    configure_langfuse()
     # One checkpointer for the process's whole lifetime, matching
     # backend/retrieval/graph_client.py's Neo4j-driver singleton pattern --
     # AsyncPostgresSaver's connection pool is scoped to this `async with`

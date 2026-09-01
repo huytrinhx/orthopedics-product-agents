@@ -88,16 +88,14 @@ railway.toml           tells Railway to build with that Dockerfile
    `localhost:7687`).
 3. **Configure env**: `cp .env.example .env`, then fill in `OPENAI_API_KEY`.
    The Neo4j/Postgres values already match `docker-compose.yml`'s defaults.
-4. **Optional — Langfuse (local LLM tracing)**: Langfuse's self-host stack
-   (web, worker, Postgres, ClickHouse, Redis, MinIO) is non-trivial enough
-   that we run their own maintained compose file rather than duplicating it
-   here:
-   ```
-   git clone https://github.com/langfuse/langfuse.git ../langfuse-local
-   cd ../langfuse-local && docker compose up -d
-   ```
-   Open `http://localhost:3000`, create a project, and copy the generated
-   public/secret keys into `.env` (`LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY`).
+4. **Optional — Langfuse (per-question LLM/agent tracing)**: no self-hosting
+   needed — sign up at [cloud.langfuse.com](https://cloud.langfuse.com),
+   create a project, and copy its keys into `.env`
+   (`LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` / `LANGFUSE_BASE_URL`).
+   The same project is used for local dev, production, and offline evals —
+   `LANGFUSE_TRACING_ENVIRONMENT` tags which is which, so traces stay
+   segmented within the one project rather than needing separate infra.
+   Leave the keys blank to disable tracing entirely (it no-ops safely).
 5. **Run the backend**: `cd backend && uv venv .venv --python 3.11 && .venv/bin/pip install -e ".[dev]" && .venv/bin/alembic upgrade head && .venv/bin/uvicorn api.main:app --reload` — serves on `http://localhost:8000`. The `alembic upgrade head` step applies schema migrations (`backend/migrations/`) against `DATABASE_URL`; rerun it after pulling new migrations.
 6. **Seed the knowledge graph** (once — in a second terminal, from `backend/`, once step 5's `pip install` has run): `.venv/bin/python -m ingestion.seed_master_catalog && .venv/bin/python -m ingestion.seed_synonyms` — populates Neo4j from the real fixtures in `backend/evals/` (`unite-master-csv.txt`, `synonyms-map.csv`). Per-document prose extraction (ticket 07) only attaches facts to parts this seed already created, so uploaded documents won't produce any graph facts until this has run at least once.
 7. **Run the frontend**: `cp frontend/.env.local.example frontend/.env.local`, then `cd frontend && npm install && npm run dev` — serves on `http://localhost:3000` (or a different port if Langfuse is already on 3000). `.env.local` points the frontend at the backend on `:8000`, since Next's dev server and FastAPI run as two separate processes locally (they're one process in production — see ADR 0004).

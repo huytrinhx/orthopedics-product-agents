@@ -24,6 +24,10 @@ dependencies = [
     "opentelemetry-sdk>=1.27",
     "opentelemetry-exporter-otlp>=1.27",
     "langfuse>=2.50",
+    # Only langchain-core/langchain-openai were needed until now --
+    # langfuse.langchain.CallbackHandler (backend/observability/langfuse_setup.py)
+    # requires the full langchain meta-package at import time.
+    "langchain>=1.0",
 ]
 
 [project.optional-dependencies]
