@@ -20,8 +20,9 @@ from pydantic import BaseModel
 from agents.registry import get_workflow, list_workflows
 from auth.dependencies import get_current_user
 from auth.repository import UserRecord
-from chat_threads.models import ChatMessageOut, ChatThreadOut, ChatTranscriptOut
+from chat_threads.models import ChatCitationOut, ChatMessageOut, ChatThreadOut, ChatTranscriptOut
 from chat_threads.repository import create_thread, get_thread, list_threads, touch_thread
+from documents.repository import get_document
 from observability.langfuse_setup import get_trace_url, new_callback_handler, score_trace
 
 router = APIRouter()
@@ -74,6 +75,37 @@ def _new_thread_id(user_id: str) -> str:
 
 def _owns_thread(user_id: str, thread_id: str) -> bool:
     return thread_id.startswith(f"{user_id}:")
+
+
+async def _resolve_citations(raw_citations: list[str]) -> list[ChatCitationOut]:
+    """Turns the graph state's raw "{document_id}#{chunk_index}" strings
+    (agents/workflows/deterministic.py's _extract_citations) into the
+    filename the UI actually shows and needs to open the citation viewer --
+    used both for a turn that just streamed and for a resumed thread's
+    transcript (get_chat_thread below), since both start from the same raw
+    strings. One documents lookup per unique document_id, not per citation
+    -- a single answer can (and often does) cite several chunks from the
+    same document.
+    """
+    filenames: dict[str, str] = {}
+    resolved: list[ChatCitationOut] = []
+    for raw in raw_citations:
+        document_id, _, chunk_index = raw.rpartition("#")
+        if document_id not in filenames:
+            doc = await get_document(uuid.UUID(document_id))
+            # A citation can outlive the document it points to (deleted
+            # after the answer was generated) -- still worth showing the
+            # chip rather than dropping the citation silently, just without
+            # a real filename to click through to.
+            filenames[document_id] = doc.filename if doc else "(document removed)"
+        resolved.append(
+            ChatCitationOut(
+                document_id=uuid.UUID(document_id),
+                filename=filenames[document_id],
+                chunk_index=int(chunk_index),
+            )
+        )
+    return resolved
 
 
 @router.post("/{workflow_name}/stream")
@@ -139,12 +171,13 @@ async def stream_chat(
                         eval_scores=output.get("eval_scores"),
                         loop_count=loop_count,
                     )
+                    citations = await _resolve_citations(output.get("citations") or [])
                     yield _sse(
                         "done",
                         {
                             "thread_id": thread_id,
                             "answer": output.get("answer"),
-                            "citations": output.get("citations") or [],
+                            "citations": [c.model_dump(mode="json") for c in citations],
                             "eval_scores": output.get("eval_scores"),
                             "trace_url": get_trace_url(handler.last_trace_id),
                         },
@@ -190,11 +223,18 @@ async def get_chat_thread(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Thread not found")
 
     messages = checkpoint_tuple.checkpoint["channel_values"].get("messages", [])
-    return ChatTranscriptOut(
-        thread_id=thread_id,
-        title=thread.title,
-        messages=[
-            ChatMessageOut(role="user" if m.type == "human" else "assistant", content=m.content)
-            for m in messages
-        ],
-    )
+    out_messages = []
+    for m in messages:
+        # Citations only ever live on the AI's turn (see deterministic.py's
+        # finalize) -- additional_kwargs is a plain dict on every message
+        # type, so .get is safe on a HumanMessage too, it's just always
+        # empty there.
+        citations = await _resolve_citations(m.additional_kwargs.get("citations") or [])
+        out_messages.append(
+            ChatMessageOut(
+                role="user" if m.type == "human" else "assistant",
+                content=m.content,
+                citations=citations,
+            )
+        )
+    return ChatTranscriptOut(thread_id=thread_id, title=thread.title, messages=out_messages)

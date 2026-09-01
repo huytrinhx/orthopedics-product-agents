@@ -13,3 +13,11 @@ export interface DocumentRecord {
   system: Tag | null;
   document_type: Tag | null;
 }
+
+// Mirrors backend/documents/models.py's ChunkOut -- backs the chat citation
+// viewer's right-hand pane (frontend/app/chat/page.tsx).
+export interface DocumentChunk {
+  chunk_index: number;
+  content: string;
+  section_title: string | null;
+}

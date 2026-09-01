@@ -112,6 +112,35 @@ async def delete_document(document_id: uuid.UUID) -> DocumentRecord | None:
     return doc
 
 
+@dataclass
+class ChunkRecord:
+    chunk_index: int
+    content: str
+    section_title: str | None
+
+
+async def list_chunks(document_id: uuid.UUID) -> list[ChunkRecord]:
+    """A document's retrieval chunks in order (backend/ingestion/chunking.py
+    wrote them, backend/retrieval/vector_store.py searches them) -- used to
+    back the chat citation viewer (backend/api/routes/chat.py), not
+    retrieval itself, so this is plain config/db.py SQL rather than
+    vector_store.py's pgvector-registered connection; no embedding column
+    is read here.
+    """
+    conn = await get_connection()
+    try:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                "SELECT chunk_index, content, section_title FROM chunks "
+                "WHERE document_id = %s ORDER BY chunk_index",
+                (document_id,),
+            )
+            rows = await cur.fetchall()
+            return [ChunkRecord(*row) for row in rows]
+    finally:
+        await conn.close()
+
+
 async def set_tags(
     document_id: uuid.UUID,
     system_id: uuid.UUID | None,

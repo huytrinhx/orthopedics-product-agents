@@ -5,6 +5,16 @@ export type EvalScores = Partial<{
   citation: number;
 }>;
 
+// Mirrors backend/chat_threads/models.py's ChatCitationOut -- a raw
+// "{document_id}#{chunk_index}" citation resolved to what the UI needs: a
+// filename to show and (document_id, chunk_index) to open the citation
+// viewer's right-hand pane on and scroll to.
+export interface ChatCitation {
+  document_id: string;
+  filename: string;
+  chunk_index: number;
+}
+
 // Mirrors backend/api/routes/chat.py's SSE event payloads.
 export type ChatStreamEvent =
   | { event: "thread"; data: { thread_id: string } }
@@ -15,7 +25,7 @@ export type ChatStreamEvent =
       data: {
         thread_id: string;
         answer: string;
-        citations: string[];
+        citations: ChatCitation[];
         eval_scores: EvalScores | null;
       };
     }
@@ -25,7 +35,7 @@ export interface ChatMessage {
   id: string;
   role: "user" | "assistant";
   content: string;
-  citations?: string[];
+  citations?: ChatCitation[];
   status?: string;
   pending?: boolean;
 }
@@ -41,5 +51,5 @@ export interface ChatThread {
 export interface ChatTranscript {
   thread_id: string;
   title: string;
-  messages: { role: "user" | "assistant"; content: string }[];
+  messages: { role: "user" | "assistant"; content: string; citations: ChatCitation[] }[];
 }

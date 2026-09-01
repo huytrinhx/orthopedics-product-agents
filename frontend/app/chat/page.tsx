@@ -1,18 +1,25 @@
 "use client";
 
 // Streaming chat UI: connects to POST /chat/{workflow}/stream (SSE over a
-// POST, parsed by hand in lib/api.ts's streamChat -- native EventSource is
-// GET-only). Ticket 09 (clarification interrupt()/resume) and tickets
-// 11/12 (per-message 4-axis feedback) extend this. This ticket (10) adds
-// the sidebar: past threads (GET /chat/threads), resuming one's transcript
-// (GET /chat/threads/{id}), and a separate "New conversation" action --
-// backend/api/routes/chat.py's stream_chat keeps chat_threads (title,
-// recency) up to date as a side effect of every turn.
+// POST, parsed by hand in lib/chat/api.ts's streamChat -- native
+// EventSource is GET-only). Ticket 09 (clarification interrupt()/resume)
+// and tickets 11/12 (per-message 4-axis feedback) extend this. Ticket 10
+// added the history sidebar (past threads, resuming a transcript, a
+// separate "New conversation" action -- backend/api/routes/chat.py's
+// stream_chat keeps chat_threads up to date as a side effect of every
+// turn). This pass adds the third pane: clicking a citation chip opens the
+// cited document's chunks on the right, scrolled to and highlighting the
+// exact one the answer drew from (GET /documents/{id}/chunks) -- "the
+// paragraph", in the sense of backend/ingestion/chunking.py's chunk
+// boundaries, which is the finest-grained unit actually stored; there's no
+// PDF page/position tracked to scroll a rendered original to instead.
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import Link from "next/link";
 import { getChatThread, listChatThreads, streamChat } from "../../lib/chat/api";
 import { useAuth } from "../../lib/auth-context";
-import type { ChatMessage, ChatThread } from "../../lib/chat/types";
+import type { ChatCitation, ChatMessage, ChatThread } from "../../lib/chat/types";
+import { getDocumentChunks } from "../../lib/documents/api";
+import type { DocumentChunk } from "../../lib/documents/types";
 
 const WORKFLOW = "deterministic";
 
@@ -51,6 +58,14 @@ export default function ChatPage() {
   const [threads, setThreads] = useState<ChatThread[]>([]);
   const [activeThreadId, setActiveThreadId] = useState<string | undefined>(undefined);
   const [threadLoading, setThreadLoading] = useState(false);
+
+  const [openCitation, setOpenCitation] = useState<ChatCitation | null>(null);
+  const [docChunks, setDocChunks] = useState<DocumentChunk[] | null>(null);
+  const [docPaneLoading, setDocPaneLoading] = useState(false);
+  const [docPaneError, setDocPaneError] = useState<string | null>(null);
+  const loadedDocumentIdRef = useRef<string | null>(null);
+  const activeChunkRef = useRef<HTMLDivElement>(null);
+
   const threadIdRef = useRef<string | undefined>(undefined);
   const bottomRef = useRef<HTMLDivElement>(null);
 
@@ -65,6 +80,10 @@ export default function ChatPage() {
       .catch(() => setError("Couldn't load your past conversations"));
   }, [user]);
 
+  useEffect(() => {
+    activeChunkRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, [openCitation, docChunks]);
+
   function startNewConversation() {
     if (sending) return;
     threadIdRef.current = undefined;
@@ -72,23 +91,54 @@ export default function ChatPage() {
     setMessages([]);
     setError(null);
     setInput("");
+    closeCitation();
   }
 
   async function selectThread(threadId: string) {
     if (sending || threadId === activeThreadId) return;
     setThreadLoading(true);
     setError(null);
+    closeCitation();
     try {
       const transcript = await getChatThread(threadId);
       threadIdRef.current = threadId;
       setActiveThreadId(threadId);
       setMessages(
-        transcript.messages.map((m) => ({ id: uid(), role: m.role, content: m.content }))
+        transcript.messages.map((m) => ({
+          id: uid(),
+          role: m.role,
+          content: m.content,
+          citations: m.citations,
+        }))
       );
     } catch (err) {
       setError(err instanceof Error ? err.message : "Couldn't load that conversation");
     } finally {
       setThreadLoading(false);
+    }
+  }
+
+  function closeCitation() {
+    setOpenCitation(null);
+    setDocChunks(null);
+    setDocPaneError(null);
+    loadedDocumentIdRef.current = null;
+  }
+
+  async function openCitationPane(citation: ChatCitation) {
+    setOpenCitation(citation);
+    if (loadedDocumentIdRef.current === citation.document_id) return; // already loaded, just re-scroll/highlight
+    setDocPaneLoading(true);
+    setDocPaneError(null);
+    try {
+      const chunks = await getDocumentChunks(citation.document_id);
+      loadedDocumentIdRef.current = citation.document_id;
+      setDocChunks(chunks);
+    } catch (err) {
+      setDocChunks(null);
+      setDocPaneError(err instanceof Error ? err.message : "Couldn't load that document");
+    } finally {
+      setDocPaneLoading(false);
     }
   }
 
@@ -168,12 +218,12 @@ export default function ChatPage() {
   }
 
   return (
-    <main className="page">
+    <main className="page-full">
       <span className="eyebrow">Ask OrthoMate</span>
       <h1>Chat</h1>
       <p className="lede">
         Ask about product specs, compatibility, or procedure requirements. Answers cite the
-        source documents they&rsquo;re drawn from.
+        source documents they&rsquo;re drawn from -- click a citation to open it.
       </p>
 
       <div className="chat-layout">
@@ -220,10 +270,20 @@ export default function ChatPage() {
                   {m.status && <div className="chat-status">{m.status}</div>}
                   {m.citations && m.citations.length > 0 && (
                     <div className="chat-citations">
-                      {m.citations.map((c) => (
-                        <span key={c} className="chat-citation">
-                          {c}
-                        </span>
+                      {m.citations.map((c, i) => (
+                        <button
+                          key={`${c.document_id}#${c.chunk_index}-${i}`}
+                          type="button"
+                          className={`chat-citation${
+                            openCitation?.document_id === c.document_id &&
+                            openCitation?.chunk_index === c.chunk_index
+                              ? " chat-citation-active"
+                              : ""
+                          }`}
+                          onClick={() => openCitationPane(c)}
+                        >
+                          {c.filename}
+                        </button>
                       ))}
                     </div>
                   )}
@@ -247,6 +307,43 @@ export default function ChatPage() {
             </button>
           </form>
         </div>
+
+        {openCitation && (
+          <aside className="chat-doc-pane">
+            <div className="chat-doc-pane-header">
+              <span className="chat-doc-pane-title">{openCitation.filename}</span>
+              <button
+                type="button"
+                className="chat-doc-pane-close"
+                onClick={closeCitation}
+                aria-label="Close document viewer"
+              >
+                ×
+              </button>
+            </div>
+            {docPaneLoading && <div className="empty-state">Loading document…</div>}
+            {docPaneError && <p className="alert" role="alert">{docPaneError}</p>}
+            {docChunks && (
+              <div className="chat-doc-pane-body">
+                {docChunks.map((chunk) => {
+                  const isActive = chunk.chunk_index === openCitation.chunk_index;
+                  return (
+                    <div
+                      key={chunk.chunk_index}
+                      ref={isActive ? activeChunkRef : undefined}
+                      className={`chat-doc-chunk${isActive ? " chat-doc-chunk-active" : ""}`}
+                    >
+                      {chunk.section_title && (
+                        <div className="chat-doc-chunk-section">{chunk.section_title}</div>
+                      )}
+                      <div className="chat-doc-chunk-text">{chunk.content}</div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </aside>
+        )}
       </div>
     </main>
   );

@@ -1,5 +1,5 @@
 import { API_BASE, authHeaders, request, unwrap } from "../api/client";
-import type { DocumentRecord } from "./types";
+import type { DocumentChunk, DocumentRecord } from "./types";
 
 export async function uploadDocument(
   file: File,
@@ -33,6 +33,10 @@ export async function setDocumentTags(
 
 export async function indexDocument(documentId: string): Promise<DocumentRecord> {
   return request(`/documents/${documentId}/index`, { method: "POST" });
+}
+
+export async function getDocumentChunks(documentId: string): Promise<DocumentChunk[]> {
+  return request(`/documents/${documentId}/chunks`);
 }
 
 export async function deleteDocument(documentId: string): Promise<void> {

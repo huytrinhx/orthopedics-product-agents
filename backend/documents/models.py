@@ -25,3 +25,9 @@ class DocumentOut(BaseModel):
 class SetDocumentTagsRequest(BaseModel):
     system_id: uuid.UUID | None = None
     document_type_id: uuid.UUID | None = None
+
+
+class ChunkOut(BaseModel):
+    chunk_index: int
+    content: str
+    section_title: str | None

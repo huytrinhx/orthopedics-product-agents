@@ -123,13 +123,76 @@ def test_full_pipeline_answers_with_citations_from_a_real_indexed_document(monke
 
     assert "1.2" in done["answer"]
     assert done["citations"]
-    assert all(citation.startswith(doc_id) for citation in done["citations"])
+    assert all(citation["document_id"] == doc_id for citation in done["citations"])
+    assert all(citation["filename"] == "torque-spec.txt" for citation in done["citations"])
     assert done["eval_scores"]["faithfulness"] > 0.5
     # Only asserted when Langfuse is actually configured (see
     # observability/langfuse_setup.py) -- the SDK no-ops safely without
     # LANGFUSE_PUBLIC_KEY/LANGFUSE_SECRET_KEY, so trace_url is None there.
     if os.environ.get("LANGFUSE_PUBLIC_KEY"):
         assert done["trace_url"]
+
+
+@needs_openai_key
+def test_citations_survive_a_thread_resume(monkeypatch, tmp_path):
+    """Citations only ever exist as long as a turn is actively streaming
+    unless they're persisted somewhere the checkpointer restores -- see
+    agents/workflows/deterministic.py's finalize, which rides them along in
+    the AIMessage's additional_kwargs for exactly this reason.
+
+    Deliberately a different fixture (product name, numbers, filename) from
+    test_full_pipeline_answers_with_citations_from_a_real_indexed_document's
+    -- both tests index-then-delete a document against the same real,
+    unisolated Postgres vector index, so identical fixture text let this
+    test's retrieval intermittently pick up the *other* test's still-live
+    document and cite its document_id instead, when both happened to run
+    close together.
+    """
+    monkeypatch.setenv("INGEST_DATA_DIR", str(tmp_path))
+    with TestClient(app) as client:
+        admin_email = _unique_email()
+        monkeypatch.setenv("ADMIN_EMAILS", admin_email)
+        admin_token = client.post(
+            "/auth/signup", json={"email": admin_email, "password": "correct horse battery"}
+        ).json()["access_token"]
+        admin_headers = {"Authorization": f"Bearer {admin_token}"}
+
+        content = (
+            b"MIRA APEX Torque Spec\n\n"
+            b"The MIRA APEX driver requires 2.4 Nm of torque when seating the "
+            b"5.5mm compression screw. Do not exceed 2.8 Nm or the screw head may strip."
+        )
+        upload = client.post(
+            "/documents/upload",
+            headers=admin_headers,
+            files={"file": ("mira-apex-torque-spec.txt", content, "text/plain")},
+        )
+        doc_id = upload.json()["id"]
+        client.post(f"/documents/{doc_id}/index", headers=admin_headers)
+        for _ in range(40):
+            if client.get(f"/documents/{doc_id}", headers=admin_headers).json()["status"] == "done":
+                break
+            time.sleep(0.25)
+
+        user_token = _user_token(client)
+        user_headers = {"Authorization": f"Bearer {user_token}"}
+        stream_res = client.post(
+            "/chat/deterministic/stream",
+            headers=user_headers,
+            json={"message": "How much torque should I use on the MIRA APEX compression screw?"},
+        )
+        events = dict(_sse_events(stream_res.text))
+        thread_id = events["thread"]["thread_id"]
+        live_citations = events["done"]["citations"]
+
+        transcript = client.get(f"/chat/threads/{thread_id}", headers=user_headers).json()
+
+        client.delete(f"/documents/{doc_id}", headers=admin_headers)
+
+    assert live_citations
+    assistant_message = transcript["messages"][1]
+    assert assistant_message["role"] == "assistant"
+    assert assistant_message["citations"] == live_citations
 
 
 def test_list_threads_requires_auth():

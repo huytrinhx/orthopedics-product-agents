@@ -1,9 +1,13 @@
 """Document upload/list/status endpoints, backing the Document Manager UI.
 Admin-only (see auth.dependencies.require_admin — the is_admin gating
-decided in agents.md). Upload writes the raw file under INGEST_DATA_DIR and
-leaves the document "pending" -- indexing only runs once an admin triggers
-it via POST /{document_id}/index (or re-tags the document), which kicks off
-backend/documents/service.py's background processing.
+decided in agents.md), except GET /{document_id}/chunks: any authenticated
+user can already surface a document's chunk text indirectly through chat
+retrieval, so reading it directly to back the chat citation viewer isn't a
+new exposure -- see backend/api/routes/chat.py. Upload writes the raw file
+under INGEST_DATA_DIR and leaves the document "pending" -- indexing only
+runs once an admin triggers it via POST /{document_id}/index (or re-tags
+the document), which kicks off backend/documents/service.py's background
+processing.
 """
 import os
 import uuid
@@ -12,13 +16,14 @@ from pathlib import Path
 import psycopg
 from fastapi import APIRouter, BackgroundTasks, Depends, Form, HTTPException, UploadFile, status
 
-from auth.dependencies import require_admin
+from auth.dependencies import get_current_user, require_admin
 from auth.repository import UserRecord
-from documents.models import DocumentOut, SetDocumentTagsRequest
+from documents.models import ChunkOut, DocumentOut, SetDocumentTagsRequest
 from documents.repository import (
     create_document,
     delete_document,
     get_document,
+    list_chunks,
     list_documents,
     set_status,
     set_tags,
@@ -98,6 +103,20 @@ async def get_one_document(
     if doc is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Document not found")
     return _document_out(doc)
+
+
+@router.get("/{document_id}/chunks", response_model=list[ChunkOut])
+async def get_document_chunks(
+    document_id: uuid.UUID, user: UserRecord = Depends(get_current_user)
+) -> list[ChunkOut]:
+    """Backs the chat citation viewer's right-hand pane -- any authenticated
+    user, not just admins (see module docstring)."""
+    if await get_document(document_id) is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Document not found")
+    return [
+        ChunkOut(chunk_index=c.chunk_index, content=c.content, section_title=c.section_title)
+        for c in await list_chunks(document_id)
+    ]
 
 
 @router.post("/{document_id}/index", response_model=DocumentOut)

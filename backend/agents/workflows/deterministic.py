@@ -201,8 +201,23 @@ async def finalize(state: DeterministicState) -> dict:
     kept-separate step (not done in generate) so a discarded draft from an
     earlier retry attempt never ends up alongside the accepted one -- only
     the answer self_eval actually accepted should shape future turns.
+
+    Citations ride along in additional_kwargs (a standard AIMessage field,
+    checkpointed like any other) rather than a separate state channel or
+    table -- that's what lets ticket 10's GET /chat/threads/{id} recover
+    them straight from the checkpointer on resume, the same way it recovers
+    message content, instead of them only existing for the turn that's
+    still streaming. Kept as the same raw "{document_id}#{chunk_index}"
+    strings _extract_citations produces (not resolved to a filename here) --
+    resolving is a display concern for the API layer
+    (backend/api/routes/chat.py's _resolve_citations), not something every
+    workflow architecture should have to know how to do.
     """
-    return {"messages": [AIMessage(content=state["answer"])]}
+    return {
+        "messages": [
+            AIMessage(content=state["answer"], additional_kwargs={"citations": state["citations"]})
+        ]
+    }
 
 
 def _should_retry(state: DeterministicState) -> Literal["reformulate", "finalize"]:

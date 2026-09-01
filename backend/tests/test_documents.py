@@ -1,14 +1,20 @@
 """Exercises upload/list/status against a real Postgres + real disk writes
 under a temp INGEST_DATA_DIR — no mocking, same approach as test_auth.py.
 """
+import os
 import time
 import uuid
 
+import pytest
 from fastapi.testclient import TestClient
 
 from api.main import app
 
 client = TestClient(app)
+
+needs_openai_key = pytest.mark.skipif(
+    not os.environ.get("OPENAI_API_KEY"), reason="requires a real OPENAI_API_KEY"
+)
 
 
 def _unique_email() -> str:
@@ -136,6 +142,72 @@ def test_non_admin_cannot_delete(monkeypatch, tmp_path):
 
     user_headers = {"Authorization": f"Bearer {_user_token(monkeypatch, tmp_path)}"}
     assert client.delete(f"/documents/{doc_id}", headers=user_headers).status_code == 403
+
+
+def test_chunks_requires_auth(monkeypatch, tmp_path):
+    monkeypatch.setenv("INGEST_DATA_DIR", str(tmp_path))
+    assert client.get(f"/documents/{uuid.uuid4()}/chunks").status_code == 401
+
+
+def test_chunks_unknown_document_404s(monkeypatch, tmp_path):
+    token = _user_token(monkeypatch, tmp_path)
+    headers = {"Authorization": f"Bearer {token}"}
+    assert client.get(f"/documents/{uuid.uuid4()}/chunks", headers=headers).status_code == 404
+
+
+def test_a_non_admin_can_read_chunks(monkeypatch, tmp_path):
+    """Unlike every other /documents route, GET .../chunks isn't
+    admin-gated -- it backs the chat citation viewer, which any logged-in
+    user reaches (see api/routes/documents.py's module docstring)."""
+    admin_headers = {"Authorization": f"Bearer {_admin_token(monkeypatch, tmp_path)}"}
+    upload = client.post(
+        "/documents/upload",
+        headers=admin_headers,
+        files={"file": ("a.txt", b"hello world", "text/plain")},
+    )
+    doc_id = upload.json()["id"]
+    client.post(f"/documents/{doc_id}/index", headers=admin_headers)
+    for _ in range(20):
+        if client.get(f"/documents/{doc_id}", headers=admin_headers).json()["status"] == "done":
+            break
+        time.sleep(0.05)
+
+    user_headers = {"Authorization": f"Bearer {_user_token(monkeypatch, tmp_path)}"}
+    res = client.get(f"/documents/{doc_id}/chunks", headers=user_headers)
+    assert res.status_code == 200
+    # Without OPENAI_API_KEY, ingest_document_vectors no-ops (see
+    # ingestion/pipeline.py) -- this only exercises the route/auth, not real
+    # chunk content, which test_chat_routes.py's citation tests cover
+    # end-to-end under needs_openai_key.
+    assert isinstance(res.json(), list)
+
+
+@needs_openai_key
+def test_chunks_content_matches_the_indexed_document(monkeypatch, tmp_path):
+    admin_headers = {"Authorization": f"Bearer {_admin_token(monkeypatch, tmp_path)}"}
+    content = (
+        b"REFLEX HYBRID Torque Spec\n\n"
+        b"The REFLEX HYBRID driver requires 1.2 Nm of torque when seating the "
+        b"4.0mm locking screw. Do not exceed 1.5 Nm or the screw head may strip."
+    )
+    upload = client.post(
+        "/documents/upload",
+        headers=admin_headers,
+        files={"file": ("torque-spec.txt", content, "text/plain")},
+    )
+    doc_id = upload.json()["id"]
+    client.post(f"/documents/{doc_id}/index", headers=admin_headers)
+    for _ in range(40):
+        if client.get(f"/documents/{doc_id}", headers=admin_headers).json()["status"] == "done":
+            break
+        time.sleep(0.25)
+
+    user_headers = {"Authorization": f"Bearer {_user_token(monkeypatch, tmp_path)}"}
+    chunks = client.get(f"/documents/{doc_id}/chunks", headers=user_headers).json()
+
+    assert chunks
+    assert [c["chunk_index"] for c in chunks] == sorted(c["chunk_index"] for c in chunks)
+    assert any("1.2" in c["content"] for c in chunks)
 
 
 def test_upload_requires_a_filename(monkeypatch, tmp_path):
