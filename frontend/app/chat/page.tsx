@@ -24,6 +24,7 @@ import { useAuth } from "../../lib/auth-context";
 import type { ChatCitation, ChatMessage, ChatStreamEvent, ChatThread } from "../../lib/chat/types";
 import { getDocumentChunks } from "../../lib/documents/api";
 import type { DocumentChunk } from "../../lib/documents/types";
+import { MessageFeedback } from "./message-feedback";
 
 const STATUS_LABELS: Record<string, string> = {
   detect_intent: "Understanding your question…",
@@ -119,6 +120,8 @@ export default function ChatPage() {
           role: m.role,
           content: m.content,
           citations: m.citations,
+          messageId: m.message_id,
+          feedback: m.feedback,
         }))
       );
     } catch (err) {
@@ -192,6 +195,7 @@ export default function ChatPage() {
           citations: evt.data.citations,
           status: undefined,
           pending: false,
+          messageId: evt.data.message_id,
         });
       } else if (evt.event === "error") {
         updateMessage(assistantId, { pending: false, status: undefined });
@@ -362,6 +366,15 @@ export default function ChatPage() {
                         </button>
                       ))}
                     </div>
+                  )}
+                  {m.role === "assistant" && m.messageId && activeThreadId && (
+                    <MessageFeedback
+                      key={m.messageId}
+                      threadId={activeThreadId}
+                      messageId={m.messageId}
+                      initialFeedback={m.feedback}
+                      onSubmitted={(feedback) => updateMessage(m.id, { feedback })}
+                    />
                   )}
                 </div>
               ))}

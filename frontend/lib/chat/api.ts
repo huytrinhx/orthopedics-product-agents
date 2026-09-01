@@ -1,5 +1,5 @@
 import { API_BASE, authHeaders, request } from "../api/client";
-import type { ChatStreamEvent, ChatThread, ChatTranscript } from "./types";
+import type { ChatFeedback, ChatStreamEvent, ChatThread, ChatTranscript, SubmitFeedbackRequest } from "./types";
 
 // SSE (event: <name>\ndata: <json>\n\n) but over a POST, so the native
 // EventSource API (GET-only) can't consume it -- reads the fetch response
@@ -72,4 +72,12 @@ export async function listChatThreads(): Promise<ChatThread[]> {
 
 export async function getChatThread(threadId: string): Promise<ChatTranscript> {
   return request(`/chat/threads/${threadId}`);
+}
+
+// Ticket 11: submits (or, resubmitting on the same message_id, overwrites --
+// backend/feedback/repository.py's upsert) one message's 4-axis
+// score/flag/comment. Also used comment-only by ticket 12's free-text
+// "Give feedback" entry point.
+export async function submitFeedback(payload: SubmitFeedbackRequest): Promise<ChatFeedback> {
+  return request("/feedback/", { method: "POST", body: JSON.stringify(payload) });
 }

@@ -4,9 +4,9 @@
 
 **Blocked by:** 01 (Add Postgres migration tooling and a users table), 08 (Chat baseline workflow, end-to-end)
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] A migration adds a table for submitted feedback (thread_id, message_id, flagged, the 4 scores, optional comment, submitted_by, created_at)
-- [ ] Each assistant message has a compact 4-axis scoring control (matching `EvalScores`' shape) plus an optional comment and a "flagged" toggle
-- [ ] Submitting writes a real row via `submit_feedback`, keyed to that specific `message_id`
-- [ ] A user can see that their feedback on a given message was recorded (e.g. the control reflects the submitted state)
+- [x] A migration adds a table for submitted feedback (thread_id, message_id, flagged, the 4 scores, optional comment, submitted_by, created_at)
+- [x] Each assistant message has a compact 4-axis scoring control (matching `EvalScores`' shape) plus an optional comment and a "flagged" toggle
+- [x] Submitting writes a real row via `submit_feedback`, keyed to that specific `message_id`
+- [x] A user can see that their feedback on a given message was recorded (e.g. the control reflects the submitted state)

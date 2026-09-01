@@ -14,6 +14,15 @@ from datetime import datetime
 from config.db import get_connection
 
 
+def owns_thread(user_id: str, thread_id: str) -> bool:
+    """thread_id is always minted as "{user_id}:{uuid4().hex}"
+    (backend/api/routes/chat.py's _new_thread_id) -- checking the prefix is
+    enough to prove ownership without a separate lookup table. Shared by
+    every route that accepts a client-supplied thread_id (chat.py's stream/
+    resume/get_chat_thread, feedback.py's submit_feedback)."""
+    return thread_id.startswith(f"{user_id}:")
+
+
 @dataclass
 class ChatThreadRecord:
     thread_id: str

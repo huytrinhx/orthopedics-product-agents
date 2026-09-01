@@ -38,8 +38,15 @@ from agents.registry import get_workflow, list_workflows
 from auth.dependencies import get_current_user
 from auth.repository import UserRecord
 from chat_threads.models import ChatCitationOut, ChatMessageOut, ChatThreadOut, ChatTranscriptOut
-from chat_threads.repository import create_thread, get_thread, list_threads, touch_thread
+from chat_threads.repository import (
+    create_thread,
+    get_thread,
+    list_threads,
+    owns_thread,
+    touch_thread,
+)
 from documents.repository import get_document
+from feedback.repository import get_feedback_for_thread, to_feedback_out
 from observability.langfuse_setup import get_trace_url, new_callback_handler, score_trace
 from settings.repository import get_settings
 
@@ -75,7 +82,7 @@ class ChatStreamRequest(BaseModel):
     message: str
     # Omitted (or the empty string) starts a new conversation; an existing
     # thread_id resumes that thread's history via the checkpointer. Never
-    # trust a client-supplied thread_id as-is -- see _owns_thread below.
+    # trust a client-supplied thread_id as-is -- see chat_threads.repository.owns_thread.
     thread_id: str | None = None
 
 
@@ -99,10 +106,6 @@ def _new_thread_id(user_id: str) -> str:
     # ticket 10 (chat history sidebar) can list a user's threads by the same
     # prefix once it needs to.
     return f"{user_id}:{uuid.uuid4().hex}"
-
-
-def _owns_thread(user_id: str, thread_id: str) -> bool:
-    return thread_id.startswith(f"{user_id}:")
 
 
 async def _resolve_citations(raw_citations: list[str]) -> list[ChatCitationOut]:
@@ -174,7 +177,7 @@ async def _stream_chat(
 
     is_new_thread = body.thread_id is None
     thread_id = body.thread_id or _new_thread_id(str(user.id))
-    if body.thread_id and not _owns_thread(str(user.id), body.thread_id):
+    if body.thread_id and not owns_thread(str(user.id), body.thread_id):
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Not your thread")
 
     # Sidebar bookkeeping (ticket 10) -- a separate table from the
@@ -269,10 +272,19 @@ async def _stream_graph(
                     loop_count=loop_count,
                 )
                 citations = await _resolve_citations(output.get("citations") or [])
+                # finalize (agents/workflows/deterministic.py) is the only
+                # place messages gets an AI turn appended, so the last
+                # message in the merged state is always the answer just
+                # generated -- add_messages already assigned it a stable
+                # uuid .id, which is what ticket 11's feedback controls key
+                # off of.
+                final_messages = output.get("messages") or []
+                message_id = final_messages[-1].id if final_messages else None
                 yield _sse(
                     "done",
                     {
                         "thread_id": thread_id,
+                        "message_id": message_id,
                         "answer": output.get("answer"),
                         "citations": [c.model_dump(mode="json") for c in citations],
                         "eval_scores": output.get("eval_scores"),
@@ -313,7 +325,7 @@ async def _resume_chat(
 ) -> StreamingResponse:
     if workflow_name not in list_workflows():
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"Unknown workflow: {workflow_name}")
-    if not _owns_thread(str(user.id), body.thread_id):
+    if not owns_thread(str(user.id), body.thread_id):
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Not your thread")
 
     graph = get_workflow(workflow_name, request.app.state.checkpointer)
@@ -354,7 +366,7 @@ async def get_chat_thread(
     request: Request,
     user: UserRecord = Depends(get_current_user),
 ) -> ChatTranscriptOut:
-    if not _owns_thread(str(user.id), thread_id):
+    if not owns_thread(str(user.id), thread_id):
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Not your thread")
 
     # Transcript comes straight from the checkpointer (the actual source of
@@ -368,6 +380,7 @@ async def get_chat_thread(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Thread not found")
 
     messages = checkpoint_tuple.checkpoint["channel_values"].get("messages", [])
+    feedback_by_message = await get_feedback_for_thread(thread_id)
     out_messages = []
     for m in messages:
         # Citations only ever live on the AI's turn (see deterministic.py's
@@ -375,11 +388,14 @@ async def get_chat_thread(
         # type, so .get is safe on a HumanMessage too, it's just always
         # empty there.
         citations = await _resolve_citations(m.additional_kwargs.get("citations") or [])
+        record = feedback_by_message.get(m.id)
         out_messages.append(
             ChatMessageOut(
+                message_id=m.id,
                 role="user" if m.type == "human" else "assistant",
                 content=m.content,
                 citations=citations,
+                feedback=to_feedback_out(record) if record else None,
             )
         )
     return ChatTranscriptOut(thread_id=thread_id, title=thread.title, messages=out_messages)

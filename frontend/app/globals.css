@@ -689,6 +689,95 @@ tr:last-child td {
   color: #fff;
 }
 
+/* Ticket 11: compact per-message 4-axis feedback, always rendered under an
+   assistant bubble once it's finalized (chat/message-feedback.tsx). */
+.feedback {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--steel-line);
+}
+
+.feedback-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.feedback-axis {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.feedback-axis-label {
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  color: var(--steel);
+}
+
+.feedback-stars {
+  display: flex;
+}
+
+.feedback-star {
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0 1px;
+  font-size: 0.9rem;
+  line-height: 1;
+  color: var(--highlighter);
+}
+
+.feedback-flag {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  padding: 3px 9px;
+  border-radius: 2px;
+  border: 1px solid var(--steel-line);
+  background: transparent;
+  color: var(--steel);
+  cursor: pointer;
+}
+
+.feedback-flag:hover {
+  border-color: var(--steel);
+  color: var(--ink);
+}
+
+.feedback-flag-active {
+  background: var(--danger-wash);
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.feedback-comment {
+  flex: 1;
+  min-width: 160px;
+  padding: 5px 9px;
+  font-size: 0.8rem;
+  border: 1px solid var(--steel-line);
+  border-radius: 3px;
+  color: var(--ink);
+  background: var(--surface);
+}
+
+.feedback-submit {
+  padding: 5px 12px;
+  font-size: 0.78rem;
+  flex-shrink: 0;
+}
+
+.feedback-error {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--danger);
+}
+
 .chat-doc-pane {
   flex: 1 1 0;
   min-width: 0;

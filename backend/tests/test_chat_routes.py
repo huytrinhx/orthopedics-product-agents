@@ -313,6 +313,54 @@ def test_thread_appears_in_sidebar_and_transcript_round_trips_both_turns():
 
 
 @needs_openai_key
+def test_done_event_message_id_round_trips_through_feedback_and_transcript():
+    """Ticket 11: the "done" event's message_id is LangGraph's own
+    auto-assigned uuid (add_messages) for the answer just finalized -- this
+    proves it's real and stable enough to key feedback on, by submitting
+    feedback against it and confirming GET /chat/threads/{id} (a completely
+    separate read path, straight from the checkpointer) embeds that same
+    feedback back onto the matching message.
+    """
+    with TestClient(app) as client:
+        token = _user_token(client)
+        headers = {"Authorization": f"Bearer {token}"}
+
+        res = client.post(
+            "/chat/deterministic/stream",
+            headers=headers,
+            json={"message": "What torque should I use on a REFLEX HYBRID locking screw?"},
+        )
+        events = dict(_sse_events(res.text))
+        thread_id = events["thread"]["thread_id"]
+        message_id = events["done"]["message_id"]
+        assert message_id
+
+        feedback_res = client.post(
+            "/feedback/",
+            headers=headers,
+            json={
+                "thread_id": thread_id,
+                "message_id": message_id,
+                "flagged": True,
+                "scores": {"faithfulness": 0.9, "relevance": 0.8, "style": 0.7, "citation": 1.0},
+                "comment": "close but missing the inch-pounds conversion",
+            },
+        )
+        assert feedback_res.status_code == 200
+
+        transcript = client.get(f"/chat/threads/{thread_id}", headers=headers).json()
+
+    assistant_message = next(m for m in transcript["messages"] if m["message_id"] == message_id)
+    assert assistant_message["role"] == "assistant"
+    assert assistant_message["feedback"]["flagged"] is True
+    assert assistant_message["feedback"]["scores"]["faithfulness"] == 0.9
+    assert assistant_message["feedback"]["comment"] == "close but missing the inch-pounds conversion"
+    # The user's own turn never got feedback -- its embedded field stays null.
+    user_message = next(m for m in transcript["messages"] if m["role"] == "user")
+    assert user_message["feedback"] is None
+
+
+@needs_openai_key
 def test_ambiguous_query_pauses_for_clarification_and_resume_completes_the_turn(
     monkeypatch, tmp_path
 ):

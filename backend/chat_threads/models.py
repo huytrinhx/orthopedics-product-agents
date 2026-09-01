@@ -5,6 +5,8 @@ from typing import Literal
 
 from pydantic import BaseModel
 
+from feedback.models import FeedbackOut
+
 
 class ChatThreadOut(BaseModel):
     thread_id: str
@@ -30,9 +32,19 @@ class ChatCitationOut(BaseModel):
 
 
 class ChatMessageOut(BaseModel):
+    # LangGraph's own auto-assigned per-message uuid (add_messages) -- what
+    # ticket 11's feedback controls key off of (backend/feedback/). Every
+    # message has one once it's landed in the checkpointer, user and
+    # assistant turns alike, but feedback is only ever collected on the
+    # assistant's.
+    message_id: str
     role: Literal["user", "assistant"]
     content: str
     citations: list[ChatCitationOut] = []
+    # This message's own previously-submitted feedback, if any -- lets the
+    # chat UI's scoring control reflect the submitted state on reload
+    # instead of always starting blank.
+    feedback: FeedbackOut | None = None
 
 
 class ChatTranscriptOut(BaseModel):

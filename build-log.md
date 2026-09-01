@@ -331,3 +331,63 @@ feedback-promotion workflow), worked one at a time in dependency order.
     whenever `chunking.py` hadn't already been imported first. Centralized
     into `backend/config/tiktoken_cache.py`, imported for its side effect
     wherever tiktoken gets used, directly or indirectly.
+
+- **Ticket 11 — Chat inline per-message 4-axis feedback.** Wires up
+  `backend/api/routes/feedback.py`'s `submit_feedback` (previously
+  `NotImplementedError`) to real persistence: a new `feedback` table
+  (migration `5d95b6897886`) plus `backend/feedback/` (models.py/
+  repository.py, mirroring the domain package pattern). Scoped via a
+  grilling session before implementing (`.scratch/chat-documents-evals/
+  issues/11-inline-four-axis-feedback.md`); the key open question was where
+  a stable `message_id` even comes from, since nothing exposed one before
+  this ticket:
+  - **`message_id` is LangGraph's own auto-assigned per-message uuid**
+    (`langgraph.graph.message.add_messages` silently assigns one to every
+    message once it lands in the checkpointer) -- not invented here, just
+    surfaced for the first time through `ChatMessageOut`/the `"done"` SSE
+    event. `feedback.message_id` is the table's primary key itself (no
+    surrogate id), mirroring `chat_threads` using `thread_id` the same way;
+    resubmitting on the same message overwrites via
+    `ON CONFLICT (message_id) DO UPDATE` rather than a separate edit flow.
+  - Every score is optional (`EvalScores` stays `total=False` all the way
+    through) -- ticket 12 (free-text-only "Give feedback", not yet built)
+    will reuse this same endpoint comment-only.
+  - `submit_feedback` trusts `chat_threads.repository.owns_thread` (the
+    thread-id-prefix check, extracted out of `chat.py` where it was
+    previously private/duplicated) as the only real boundary; it does not
+    verify `message_id` actually belongs to `thread_id` against the
+    checkpointer -- the frontend only ever sends an id it already got from
+    the backend, so a malformed one would just be a harmless orphan row.
+  - `GET /chat/threads/{id}` now embeds each message's own `feedback` (if
+    any) so reopening an old thread shows previously-submitted ratings
+    rather than a blank control, not just the live turn that just streamed.
+  - Frontend: `frontend/app/chat/message-feedback.tsx`, a compact
+    always-visible control under every assistant bubble -- four 1-5 star
+    rows (mapped to 0/.25/.5/.75/1), a flag toggle, an optional comment, one
+    explicit "Save feedback" button (no per-click auto-save). Deliberately
+    never pre-fills from the judge's own `eval_scores` (which also isn't
+    persisted per-message anywhere) -- anchoring the human rater on the AI's
+    own self-score would undermine the point of collecting an independent
+    signal.
+  - Verified for real against local Postgres (not just curl): 5 new
+    `backend/tests/test_feedback_routes.py` cases (auth, cross-user
+    ownership rejection, upsert-not-duplicate, partial/comment-only
+    submission) plus a new `needs_openai_key` test in
+    `test_chat_routes.py` proving a real turn's `done.message_id` round-trips
+    through a feedback submission and back out of `GET /chat/threads/{id}`.
+    Frontend changes pass `tsc --noEmit`, `next lint`, and `next build`
+    clean; a live-browser (Playwright) check of the actual control was
+    deliberately skipped this round to avoid writing more test data into
+    the shared local dev Postgres mid-cleanup (see below) -- still open if
+    wanted later.
+  - **Local dev DB now has a disposable test-DB path (2026-09-01, by a peer
+    session working this same repo concurrently):** `docker compose
+    --profile test up -d` brings up `orthopedics-postgres-test` (`:5433`)
+    and `orthopedics-neo4j-test` (`:7688` bolt);
+    `backend/tests/conftest.py` points `DATABASE_URL`/`NEO4J_URI` at those
+    instead of the dev instances whenever `CI` isn't set, running
+    `alembic upgrade head` + Neo4j `ensure_constraints()` against the test
+    DB at session start. `pytest` no longer touches local Postgres/Neo4j at
+    `:5432`/`:7687` at all. Does **not** cover a running dev server
+    (`uvicorn` on `:8000`, e.g. for a Playwright check) -- that still reads
+    `.env` directly and hits dev Postgres/Neo4j for real.
