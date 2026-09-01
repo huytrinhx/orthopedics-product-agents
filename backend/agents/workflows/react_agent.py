@@ -15,4 +15,4 @@ def build_graph(checkpointer):
     raise NotImplementedError("Wire up ReAct agentic graph nodes")
 
 
-register("react_agent", build_graph)
+register("react_agent", build_graph, functional=False)

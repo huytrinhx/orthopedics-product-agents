@@ -1,15 +1,16 @@
 import { API_BASE, authHeaders, request } from "../api/client";
 import type { ChatStreamEvent, ChatThread, ChatTranscript } from "./types";
 
-// POST /chat/{workflow}/stream is SSE (event: <name>\ndata: <json>\n\n) but
-// over a POST, so the native EventSource API (GET-only) can't consume it --
-// this reads the fetch response body's stream and parses frames by hand.
+// POST /chat/stream is SSE (event: <name>\ndata: <json>\n\n) but over a
+// POST, so the native EventSource API (GET-only) can't consume it -- this
+// reads the fetch response body's stream and parses frames by hand. No
+// workflow name here -- the backend runs whichever workflow the admin has
+// configured as default (ticket 14); the chat UI never picks one itself.
 export async function* streamChat(
-  workflowName: string,
   message: string,
   threadId?: string
 ): AsyncGenerator<ChatStreamEvent> {
-  const res = await fetch(`${API_BASE}/chat/${workflowName}/stream`, {
+  const res = await fetch(`${API_BASE}/chat/stream`, {
     method: "POST",
     headers: { "Content-Type": "application/json", ...authHeaders() },
     body: JSON.stringify({ message, thread_id: threadId }),

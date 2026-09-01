@@ -11,7 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from agents import workflows  # noqa: F401  (registers all workflows)
-from api.routes import auth, chat, documents, feedback, tags
+from api.routes import admin, auth, chat, documents, feedback, tags
 from memory.checkpointer import get_checkpointer
 from observability.langfuse_setup import configure_langfuse
 
@@ -45,6 +45,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(admin.router, prefix="/admin", tags=["admin"])
 app.include_router(auth.router, prefix="/auth", tags=["auth"])
 app.include_router(chat.router, prefix="/chat", tags=["chat"])
 app.include_router(documents.router, prefix="/documents", tags=["documents"])

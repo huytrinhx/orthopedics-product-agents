@@ -21,8 +21,6 @@ import type { ChatCitation, ChatMessage, ChatThread } from "../../lib/chat/types
 import { getDocumentChunks } from "../../lib/documents/api";
 import type { DocumentChunk } from "../../lib/documents/types";
 
-const WORKFLOW = "deterministic";
-
 const STATUS_LABELS: Record<string, string> = {
   resolve_synonyms: "Checking terminology…",
   hybrid_retrieve: "Searching documents…",
@@ -165,7 +163,7 @@ export default function ChatPage() {
     }
 
     try {
-      for await (const evt of streamChat(WORKFLOW, text, threadIdRef.current)) {
+      for await (const evt of streamChat(text, threadIdRef.current)) {
         if (evt.event === "thread") {
           threadIdRef.current = evt.data.thread_id;
           setActiveThreadId(evt.data.thread_id);

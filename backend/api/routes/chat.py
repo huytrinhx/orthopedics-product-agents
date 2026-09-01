@@ -3,6 +3,11 @@ exposes a /resume endpoint for the suspend/resume human-clarification
 pattern (interrupt() -> UI prompt -> resume with human input) -- that
 pattern itself is ticket 09's scope; /resume stays a stub until then.
 
+POST /stream (no workflow name) is what the chat UI actually calls -- it
+runs whatever workflow is configured as the admin default (ticket 14,
+settings/repository.py). POST /{workflow_name}/stream still exists
+alongside it for explicit selection (evals/testing).
+
 Also exposes the ticket 10 (chat history sidebar) read endpoints:
 GET /threads (a user's threads, most-recent-first) and
 GET /threads/{thread_id} (one thread's transcript, read straight from the
@@ -24,6 +29,7 @@ from chat_threads.models import ChatCitationOut, ChatMessageOut, ChatThreadOut, 
 from chat_threads.repository import create_thread, get_thread, list_threads, touch_thread
 from documents.repository import get_document
 from observability.langfuse_setup import get_trace_url, new_callback_handler, score_trace
+from settings.repository import get_settings
 
 router = APIRouter()
 
@@ -114,6 +120,32 @@ async def stream_chat(
     body: ChatStreamRequest,
     request: Request,
     user: UserRecord = Depends(get_current_user),
+) -> StreamingResponse:
+    """Explicit workflow selection -- used by evals/testing to run a named
+    workflow directly. The chat UI itself never calls this; it calls
+    POST /chat/stream below, which resolves the admin-configured default
+    (ticket 14) and delegates here. Kept as a separate route (rather than
+    making workflow_name optional on one route) so this 404-on-unknown-name
+    behavior and every existing explicit-workflow test stay unchanged.
+    """
+    return await _stream_chat(workflow_name, body, request, user)
+
+
+@router.post("/stream")
+async def stream_chat_default(
+    body: ChatStreamRequest,
+    request: Request,
+    user: UserRecord = Depends(get_current_user),
+) -> StreamingResponse:
+    settings = await get_settings()
+    return await _stream_chat(settings.default_workflow, body, request, user)
+
+
+async def _stream_chat(
+    workflow_name: str,
+    body: ChatStreamRequest,
+    request: Request,
+    user: UserRecord,
 ) -> StreamingResponse:
     if workflow_name not in list_workflows():
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"Unknown workflow: {workflow_name}")

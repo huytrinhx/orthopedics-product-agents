@@ -62,6 +62,37 @@ def test_stream_unknown_workflow_404s():
     assert res.status_code == 404
 
 
+def test_stream_default_requires_auth():
+    with TestClient(app) as client:
+        res = client.post("/chat/stream", json={"message": "hi"})
+    assert res.status_code == 401
+
+
+def test_stream_default_resolves_the_admin_configured_workflow(monkeypatch):
+    """POST /chat/stream (ticket 14) has no workflow_name of its own -- it
+    reads settings/repository.py's get_settings() and delegates to the same
+    validation _stream_chat does for the explicit route. Proven here without
+    a real LLM turn (or a second functional workflow to switch to) by
+    pointing the configured default at a bogus name and checking it 404s
+    exactly like /chat/not-a-real-workflow/stream does above -- that 404
+    could only come from the value this test set flowing all the way
+    through.
+    """
+    import api.routes.chat as chat_routes
+    from settings.repository import AppSettingsRecord
+
+    async def _fake_get_settings():
+        return AppSettingsRecord(default_workflow="not-a-real-workflow", updated_at=None, updated_by=None)
+
+    monkeypatch.setattr(chat_routes, "get_settings", _fake_get_settings)
+    with TestClient(app) as client:
+        token = _user_token(client)
+        res = client.post(
+            "/chat/stream", headers={"Authorization": f"Bearer {token}"}, json={"message": "hi"}
+        )
+    assert res.status_code == 404
+
+
 @needs_openai_key
 def test_someone_elses_thread_id_is_rejected():
     with TestClient(app) as client:

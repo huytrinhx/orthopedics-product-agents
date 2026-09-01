@@ -21,6 +21,7 @@ export function Nav() {
                 <>
                   <Link href="/documents">Documents</Link>
                   <Link href="/evals">Evals</Link>
+                  <Link href="/admin">Settings</Link>
                 </>
               )}
             </div>

@@ -15,4 +15,4 @@ def build_graph(checkpointer):
     raise NotImplementedError("Wire up supervisor multi-agent graph")
 
 
-register("supervisor", build_graph)
+register("supervisor", build_graph, functional=False)

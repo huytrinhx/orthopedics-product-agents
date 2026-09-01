@@ -429,6 +429,11 @@ tr:last-child td {
   padding: 3px 8px;
   border-radius: 2px;
   display: inline-block;
+  /* Base look for a bare .badge with no badge-<status> modifier (e.g. the
+     admin workflow picker's "Coming soon" pill) -- same muted treatment as
+     badge-pending below. */
+  background: var(--diffuser-dim);
+  color: var(--steel);
 }
 
 .badge-pending {
@@ -454,6 +459,46 @@ tr:last-child td {
 .badge-failed {
   background: var(--danger-wash);
   color: var(--danger);
+}
+
+/* ---------------- admin workflow picker ---------------- */
+
+.workflow-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-width: 420px;
+}
+
+.workflow-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 16px;
+  border: 1px solid var(--steel-line);
+  background: var(--surface);
+  cursor: pointer;
+}
+
+.workflow-option:has(input:checked) {
+  border-color: var(--verify);
+}
+
+.workflow-option-disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.workflow-option-name {
+  font-family: var(--font-mono);
+  font-size: 0.94rem;
+  flex: 1;
+}
+
+.workflow-option-saving {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  color: var(--ink-soft);
 }
 
 /* ---------------- upload form ---------------- */
