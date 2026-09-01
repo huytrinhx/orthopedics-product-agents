@@ -10,3 +10,5 @@
 - [ ] `run_eval(workflow_name, dataset_path)` loads a JSONL golden dataset, runs each example through the named registered workflow, scores it with `judge_answer`, and returns per-example + aggregate results
 - [ ] Running this via CLI against `backend/evals/golden_datasets/mis.jsonl` (or `reflex.jsonl`) with `deterministic` produces real, sensible scores
 - [ ] The existing CI job (`.github/workflows/ci.yml`'s `evals` job, `--all-workflows`) still runs and doesn't fail purely because two of the three workflows remain unimplemented — skip or clearly report those rather than erroring the whole run
+
+**Deferred to a future ticket:** the `evals` CI job runs against a fresh, empty Postgres/Neo4j (no ingested documents), so `deterministic` will honestly answer "context doesn't answer this" for every example — a smoke test, not a meaningful score. Once real documents are populated, a follow-up ticket should seed/ingest them into that CI environment so the job's scores are actually meaningful, not just non-crashing.
