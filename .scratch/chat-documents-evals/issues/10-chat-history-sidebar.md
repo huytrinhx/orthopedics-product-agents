@@ -4,9 +4,9 @@
 
 **Blocked by:** 08 (Chat baseline workflow, end-to-end)
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] Past threads for the logged-in user are listed in a sidebar (most recent first), scoped to their `user_id`
-- [ ] Selecting a past thread loads its transcript (from the Postgres checkpointer state) and lets the user continue it
-- [ ] Starting a new conversation is a clearly separate action from resuming an old one
-- [ ] One user never sees another user's threads
+- [x] Past threads for the logged-in user are listed in a sidebar (most recent first), scoped to their `user_id`
+- [x] Selecting a past thread loads its transcript (from the Postgres checkpointer state) and lets the user continue it
+- [x] Starting a new conversation is a clearly separate action from resuming an old one
+- [x] One user never sees another user's threads

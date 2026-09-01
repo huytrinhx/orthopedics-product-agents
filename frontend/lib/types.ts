@@ -60,3 +60,17 @@ export interface ChatMessage {
   status?: string;
   pending?: boolean;
 }
+
+// Mirrors backend/chat_threads/models.py -- the sidebar (ticket 10).
+export interface ChatThread {
+  thread_id: string;
+  title: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ChatTranscript {
+  thread_id: string;
+  title: string;
+  messages: { role: "user" | "assistant"; content: string }[];
+}

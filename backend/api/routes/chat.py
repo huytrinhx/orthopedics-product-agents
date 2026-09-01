@@ -2,6 +2,12 @@
 exposes a /resume endpoint for the suspend/resume human-clarification
 pattern (interrupt() -> UI prompt -> resume with human input) -- that
 pattern itself is ticket 09's scope; /resume stays a stub until then.
+
+Also exposes the ticket 10 (chat history sidebar) read endpoints:
+GET /threads (a user's threads, most-recent-first) and
+GET /threads/{thread_id} (one thread's transcript, read straight from the
+checkpointer rather than duplicated in chat_threads -- see
+chat_threads/repository.py's docstring).
 """
 import json
 import uuid
@@ -14,6 +20,9 @@ from pydantic import BaseModel
 from agents.registry import get_workflow, list_workflows
 from auth.dependencies import get_current_user
 from auth.repository import UserRecord
+from chat_threads.models import ChatMessageOut, ChatThreadOut, ChatTranscriptOut
+from chat_threads.repository import create_thread, get_thread, list_threads, touch_thread
+from observability.langfuse_setup import get_trace_url, new_callback_handler, score_trace
 
 router = APIRouter()
 
@@ -21,6 +30,26 @@ router = APIRouter()
 # rerank/self_eval/reformulate also call the chat model, but for structured
 # (JSON) output the user isn't meant to watch arrive token by token.
 _STREAMED_NODES = {"generate"}
+
+# Sidebar thread titles are derived from the first message rather than set
+# by the user -- long enough to stay recognizable, short enough to fit one
+# sidebar row without wrapping.
+_TITLE_MAX_LEN = 60
+
+
+def _title_from_message(message: str) -> str:
+    collapsed = " ".join(message.split())
+    if len(collapsed) <= _TITLE_MAX_LEN:
+        return collapsed
+    return collapsed[:_TITLE_MAX_LEN].rstrip() + "…"
+
+
+# Each registered workflow tracks retry/tool-call iterations under its own
+# state field name and meaning (see agents/workflows/*.py) -- this maps
+# workflow_name -> that field, for the one place (score_trace) that needs a
+# single "loop_count" number rather than each workflow's own semantics.
+# Workflows not listed here just report no loop_count.
+_LOOP_COUNT_FIELD = {"deterministic": "retrieval_loop_count"}
 
 
 class ChatStreamRequest(BaseModel):
@@ -57,16 +86,28 @@ async def stream_chat(
     if workflow_name not in list_workflows():
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"Unknown workflow: {workflow_name}")
 
+    is_new_thread = body.thread_id is None
     thread_id = body.thread_id or _new_thread_id(str(user.id))
     if body.thread_id and not _owns_thread(str(user.id), body.thread_id):
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Not your thread")
+
+    # Sidebar bookkeeping (ticket 10) -- a separate table from the
+    # checkpointer's own (see chat_threads/repository.py), so this can't
+    # fail/skip the actual chat turn; it only ever adds a row or bumps one.
+    if is_new_thread:
+        await create_thread(thread_id, user.id, _title_from_message(body.message))
+    else:
+        await touch_thread(thread_id)
 
     graph = get_workflow(workflow_name, request.app.state.checkpointer)
 
     async def event_generator():
         yield _sse("thread", {"thread_id": thread_id})
 
-        config = {"configurable": {"thread_id": thread_id}}
+        handler, langfuse_config = new_callback_handler(
+            user_id=str(user.id), session_id=thread_id, tags=[workflow_name]
+        )
+        config = {"configurable": {"thread_id": thread_id}, **langfuse_config}
         inputs = {
             "messages": [HumanMessage(content=body.message)],
             "query": body.message,
@@ -91,6 +132,13 @@ async def stream_chat(
                         yield _sse("token", {"content": chunk_content})
                 elif event["event"] == "on_chain_end" and event.get("name") == "LangGraph":
                     output = event["data"].get("output") or {}
+                    loop_count_field = _LOOP_COUNT_FIELD.get(workflow_name)
+                    loop_count = output.get(loop_count_field) if loop_count_field else None
+                    score_trace(
+                        handler.last_trace_id,
+                        eval_scores=output.get("eval_scores"),
+                        loop_count=loop_count,
+                    )
                     yield _sse(
                         "done",
                         {
@@ -98,6 +146,7 @@ async def stream_chat(
                             "answer": output.get("answer"),
                             "citations": output.get("citations") or [],
                             "eval_scores": output.get("eval_scores"),
+                            "trace_url": get_trace_url(handler.last_trace_id),
                         },
                     )
         except Exception as exc:  # noqa: BLE001 - report over the stream rather than a bare 500 mid-stream
@@ -109,3 +158,43 @@ async def stream_chat(
 @router.post("/{workflow_name}/resume")
 async def resume_chat(workflow_name: str, thread_id: str, human_input: str):
     raise NotImplementedError
+
+
+@router.get("/threads", response_model=list[ChatThreadOut])
+async def list_chat_threads(user: UserRecord = Depends(get_current_user)) -> list[ChatThreadOut]:
+    return [
+        ChatThreadOut(
+            thread_id=t.thread_id, title=t.title, created_at=t.created_at, updated_at=t.updated_at
+        )
+        for t in await list_threads(user.id)
+    ]
+
+
+@router.get("/threads/{thread_id}", response_model=ChatTranscriptOut)
+async def get_chat_thread(
+    thread_id: str,
+    request: Request,
+    user: UserRecord = Depends(get_current_user),
+) -> ChatTranscriptOut:
+    if not _owns_thread(str(user.id), thread_id):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Not your thread")
+
+    # Transcript comes straight from the checkpointer (the actual source of
+    # conversation state, see memory/checkpointer.py) rather than from
+    # chat_threads -- that table only ever tracks sidebar metadata (title,
+    # recency), never message content.
+    checkpointer = request.app.state.checkpointer
+    checkpoint_tuple = await checkpointer.aget_tuple({"configurable": {"thread_id": thread_id}})
+    thread = await get_thread(thread_id)
+    if checkpoint_tuple is None or thread is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Thread not found")
+
+    messages = checkpoint_tuple.checkpoint["channel_values"].get("messages", [])
+    return ChatTranscriptOut(
+        thread_id=thread_id,
+        title=thread.title,
+        messages=[
+            ChatMessageOut(role="user" if m.type == "human" else "assistant", content=m.content)
+            for m in messages
+        ],
+    )

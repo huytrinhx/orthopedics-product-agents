@@ -1,5 +1,13 @@
 import { getToken } from "./auth";
-import type { AuthUser, ChatStreamEvent, DocumentRecord, Tag, TokenResponse } from "./types";
+import type {
+  AuthUser,
+  ChatStreamEvent,
+  ChatThread,
+  ChatTranscript,
+  DocumentRecord,
+  Tag,
+  TokenResponse,
+} from "./types";
 
 // Empty string = same-origin, correct in production (the backend serves
 // this static export, see root Dockerfile / ADR 0004). Local dev runs the
@@ -146,4 +154,12 @@ export async function* streamChat(
       }
     }
   }
+}
+
+export async function listChatThreads(): Promise<ChatThread[]> {
+  return request("/chat/threads");
+}
+
+export async function getChatThread(threadId: string): Promise<ChatTranscript> {
+  return request(`/chat/threads/${threadId}`);
 }

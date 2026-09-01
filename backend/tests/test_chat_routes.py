@@ -1,8 +1,9 @@
-"""Exercises backend/api/routes/chat.py's streaming endpoint against the
-real app -- no mocking, same approach as test_documents.py/test_tags.py.
-Route-level concerns (auth, unknown workflow, thread ownership) don't need
-a real LLM; the full pipeline does, so that one test is gated behind
-OPENAI_API_KEY like test_entity_extraction.py.
+"""Exercises backend/api/routes/chat.py's streaming and threads endpoints
+against the real app -- no mocking, same approach as
+test_documents.py/test_tags.py. Route-level concerns (auth, unknown
+workflow, thread ownership) don't need a real LLM; anything that has to
+complete an actual chat turn does, so those are gated behind OPENAI_API_KEY
+like test_entity_extraction.py.
 """
 import json
 import os
@@ -23,10 +24,14 @@ def _unique_email() -> str:
     return f"test-{uuid.uuid4().hex[:12]}@example.com"
 
 
-def _user_token(client: TestClient) -> str:
+def _signup(client: TestClient) -> dict:
     email = _unique_email()
     res = client.post("/auth/signup", json={"email": email, "password": "correct horse battery"})
-    return res.json()["access_token"]
+    return res.json()
+
+
+def _user_token(client: TestClient) -> str:
+    return _signup(client)["access_token"]
 
 
 def _sse_events(text: str) -> list[tuple[str, dict]]:
@@ -120,3 +125,103 @@ def test_full_pipeline_answers_with_citations_from_a_real_indexed_document(monke
     assert done["citations"]
     assert all(citation.startswith(doc_id) for citation in done["citations"])
     assert done["eval_scores"]["faithfulness"] > 0.5
+    # Only asserted when Langfuse is actually configured (see
+    # observability/langfuse_setup.py) -- the SDK no-ops safely without
+    # LANGFUSE_PUBLIC_KEY/LANGFUSE_SECRET_KEY, so trace_url is None there.
+    if os.environ.get("LANGFUSE_PUBLIC_KEY"):
+        assert done["trace_url"]
+
+
+def test_list_threads_requires_auth():
+    with TestClient(app) as client:
+        res = client.get("/chat/threads")
+    assert res.status_code == 401
+
+
+def test_list_threads_empty_for_a_new_user():
+    with TestClient(app) as client:
+        token = _user_token(client)
+        res = client.get("/chat/threads", headers={"Authorization": f"Bearer {token}"})
+    assert res.status_code == 200
+    assert res.json() == []
+
+
+def test_get_thread_requires_auth():
+    with TestClient(app) as client:
+        res = client.get(f"/chat/threads/anyone:{uuid.uuid4().hex}")
+    assert res.status_code == 401
+
+
+def test_get_someone_elses_thread_id_is_rejected():
+    with TestClient(app) as client:
+        user_a = _signup(client)
+        token_b = _user_token(client)
+        # Correctly shaped (owner-prefixed) but belongs to user_a -- the
+        # ownership check must reject this before ever touching the
+        # checkpointer, so no real thread (or OPENAI_API_KEY) is needed.
+        thread_id = f"{user_a['user']['id']}:{uuid.uuid4().hex}"
+        res = client.get(
+            f"/chat/threads/{thread_id}", headers={"Authorization": f"Bearer {token_b}"}
+        )
+    assert res.status_code == 403
+
+
+def test_get_nonexistent_own_thread_404s():
+    with TestClient(app) as client:
+        user = _signup(client)
+        thread_id = f"{user['user']['id']}:{uuid.uuid4().hex}"
+        res = client.get(
+            f"/chat/threads/{thread_id}",
+            headers={"Authorization": f"Bearer {user['access_token']}"},
+        )
+    assert res.status_code == 404
+
+
+@needs_openai_key
+def test_thread_appears_in_sidebar_and_transcript_round_trips_both_turns():
+    with TestClient(app) as client:
+        token = _user_token(client)
+        headers = {"Authorization": f"Bearer {token}"}
+
+        first = client.post(
+            "/chat/deterministic/stream",
+            headers=headers,
+            json={"message": "What torque should I use on a locking screw?"},
+        )
+        thread_id = _sse_events(first.text)[0][1]["thread_id"]
+
+        listing = client.get("/chat/threads", headers=headers).json()
+        assert len(listing) == 1
+        assert listing[0]["thread_id"] == thread_id
+        assert listing[0]["title"] == "What torque should I use on a locking screw?"
+
+        second = client.post(
+            "/chat/deterministic/stream",
+            headers=headers,
+            json={"message": "And in inch-pounds?", "thread_id": thread_id},
+        )
+        assert dict(_sse_events(second.text))["thread"]["thread_id"] == thread_id
+
+        transcript = client.get(f"/chat/threads/{thread_id}", headers=headers).json()
+
+    assert transcript["thread_id"] == thread_id
+    roles = [m["role"] for m in transcript["messages"]]
+    assert roles == ["user", "assistant", "user", "assistant"]
+    assert transcript["messages"][0]["content"] == "What torque should I use on a locking screw?"
+    assert transcript["messages"][2]["content"] == "And in inch-pounds?"
+
+
+@needs_openai_key
+def test_a_long_first_message_is_truncated_into_the_thread_title():
+    with TestClient(app) as client:
+        token = _user_token(client)
+        headers = {"Authorization": f"Bearer {token}"}
+        long_message = "How much torque should I use " + "really " * 20 + "on the locking screw?"
+
+        client.post(
+            "/chat/deterministic/stream", headers=headers, json={"message": long_message}
+        )
+        listing = client.get("/chat/threads", headers=headers).json()
+
+    assert len(listing[0]["title"]) <= 61  # 60 chars + the "…" truncation marker
+    assert listing[0]["title"].endswith("…")
