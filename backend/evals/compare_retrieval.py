@@ -22,33 +22,10 @@ import os
 
 from agents.tools.graph_query import graph_query
 from agents.tools.synonym_resolve import synonym_resolve
+from agents.tools.term_extraction import extract_candidate_terms
 from agents.tools.vector_search import vector_search
 
 _RULE = "=" * 70
-# graph_query's entity matching includes a CONTAINS check on Part
-# descriptions -- common short words spuriously substring-match real
-# descriptions (e.g. "for" hit "SLEEVE, PARALLEL WIRES FOR PEG PLATE").
-# Excluded here so the no-entity fallback isn't drowned in that noise; this
-# is a diagnostic-aid list, not a claim these words are never meaningful.
-_STOPWORDS = {
-    "what", "whats", "which", "who", "how", "why", "when", "where",
-    "the", "a", "an", "is", "are", "was", "were", "be", "been", "being",
-    "do", "does", "did", "for", "of", "in", "on", "at", "to", "and", "or",
-    "with", "this", "that", "these", "those", "it", "its", "i", "you",
-    "set", "use", "used", "using",
-}
-
-
-def _candidate_terms(query: str) -> list[str]:
-    words = [w.strip(".,?!:;\"'()").lower() for w in query.split()]
-    # dedupe, keep order, drop short/stopword noise
-    seen: set[str] = set()
-    terms = []
-    for word in words:
-        if len(word) > 2 and word not in _STOPWORDS and word not in seen:
-            seen.add(word)
-            terms.append(word)
-    return terms
 
 
 async def _print_vector_leg(query: str, top_k: int) -> None:
@@ -113,7 +90,7 @@ async def compare(
     query: str, graph_entities: list[str], relationship: str | None, top_k: int
 ) -> None:
     print(f"Query: {query!r}\n")
-    candidate_terms = _candidate_terms(query)
+    candidate_terms = extract_candidate_terms(query)
 
     await _print_vector_leg(query, top_k)
     await _print_synonym_leg(candidate_terms)

@@ -24,6 +24,11 @@ class RetrievedPassage(TypedDict):
     document_id: str
     text: str
     score: float
+    # The chunk's document_type name (e.g. "Surgical Technique",
+    # "Inventory Control"), or None for an untagged document -- ticket 24:
+    # rerank weighs a candidate partly by which doctype it came from
+    # (doctype-hierarchy.csv's priority order), which needs this.
+    document_type: str | None
 
 
 class BaseAgentState(TypedDict):

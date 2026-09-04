@@ -24,9 +24,15 @@ Score each axis from 0 (worst) to 1 (best):
 - style: the answer is clear, concise, and well-formatted (e.g. bulleted
   specs rather than a wall of prose) for a sales rep who needs the answer
   fast.
-- citation: every factual claim is attributed to a bracketed source id (e.g.
-  [doc-id#3]) that actually appears in the given context, and no claim is
-  left uncited.
+- citation: every factual claim is attributed to a source that actually
+  appears in the given context, and no claim is left uncited. A claim drawn
+  from a document passage needs a bracketed source id (e.g. [doc-id#3]); a
+  claim drawn from a catalog/database fact (a SKU, spec, or part property --
+  usually given in the context under a "catalog-facts"/"tool-result" id, or
+  named as one of the SKUs listed there) doesn't need brackets, naming the
+  SKU inline is the correct citation for that kind of fact. Don't score
+  citation low just because an answer has no bracketed ids if every claim
+  in it is actually a catalog/database fact named this way.
 
 If the context is empty or the answer says it can't find an answer, that is
 faithful and should not be penalized just for being unhelpful -- score

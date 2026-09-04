@@ -75,7 +75,7 @@ def _title_from_message(message: str) -> str:
 # workflow_name -> that field, for the one place (score_trace) that needs a
 # single "loop_count" number rather than each workflow's own semantics.
 # Workflows not listed here just report no loop_count.
-_LOOP_COUNT_FIELD = {"deterministic": "retrieval_loop_count"}
+_LOOP_COUNT_FIELD = {"deterministic": "retrieval_loop_count", "react_agent": "tool_calls_made"}
 
 
 class ChatStreamRequest(BaseModel):
@@ -117,11 +117,24 @@ async def _resolve_citations(raw_citations: list[str]) -> list[ChatCitationOut]:
     strings. One documents lookup per unique document_id, not per citation
     -- a single answer can (and often does) cite several chunks from the
     same document.
+
+    A malformed raw citation (document_id isn't a real UUID) is skipped
+    rather than raised -- deterministic.py's _CITATION_PATTERN already
+    filters these at the source, but this stays defensive since any
+    registered workflow can hand this function raw citation strings, and a
+    ValueError here previously crashed the entire SSE stream for an
+    otherwise-successful answer ("badly formed hexadecimal UUID string").
     """
     filenames: dict[str, str] = {}
     resolved: list[ChatCitationOut] = []
     for raw in raw_citations:
         document_id, _, chunk_index = raw.rpartition("#")
+        if not chunk_index.isdigit():
+            continue
+        try:
+            uuid.UUID(document_id)
+        except ValueError:
+            continue
         if document_id not in filenames:
             doc = await get_document(uuid.UUID(document_id))
             # A citation can outlive the document it points to (deleted

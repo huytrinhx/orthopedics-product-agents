@@ -47,7 +47,8 @@ def test_get_settings_lists_all_registered_workflows_with_functional_flags(monke
     body = res.json()
     assert body["default_workflow"] == "deterministic"
     by_name = {wf["name"]: wf["functional"] for wf in body["workflows"]}
-    assert by_name == {"deterministic": True, "react_agent": False, "supervisor": False}
+    # Ticket 23 (2026-09-03): react_agent is real now, not a stub.
+    assert by_name == {"deterministic": True, "react_agent": True, "supervisor": False}
 
 
 def test_put_settings_requires_admin():
@@ -71,16 +72,17 @@ def test_put_settings_rejects_unknown_workflow(monkeypatch):
 
 
 def test_put_settings_rejects_a_non_functional_workflow(monkeypatch):
-    """react_agent/supervisor are registered (so the picker can show them,
-    disabled) but their build_graph is still a stub -- picking either as the
-    live default would break every new conversation, so the route rejects
-    it before it's ever persisted.
+    """supervisor is registered (so the picker can show it, disabled) but
+    its build_graph is still a stub -- picking it as the live default would
+    break every new conversation, so the route rejects it before it's ever
+    persisted. react_agent was this test's example until ticket 23
+    (2026-09-03) made it real -- supervisor is the one stub left.
     """
     token = _admin_token(monkeypatch)
     res = client.put(
         "/admin/settings",
         headers={"Authorization": f"Bearer {token}"},
-        json={"default_workflow": "react_agent"},
+        json={"default_workflow": "supervisor"},
     )
     assert res.status_code == 400
 

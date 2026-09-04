@@ -87,10 +87,10 @@ class VectorStoreClient:
         conditions: list[str] = []
         condition_params: list[uuid.UUID] = []
         if filters and filters.system_id:
-            conditions.append("system_id = %s")
+            conditions.append("c.system_id = %s")
             condition_params.append(filters.system_id)
         if filters and filters.document_type_id:
-            conditions.append("document_type_id = %s")
+            conditions.append("c.document_type_id = %s")
             condition_params.append(filters.document_type_id)
         filter_sql = f"AND {' AND '.join(conditions)}" if conditions else ""
 
@@ -102,12 +102,20 @@ class VectorStoreClient:
             # `vector <=> double precision[]` overload -- it needs the
             # parameter cast explicitly to match `<=>`'s declared operand
             # types.
+            #
+            # document_type name (not just id) is joined in here -- ticket
+            # 24: reranking weighs a candidate partly by which doctype it
+            # came from (doctype-hierarchy.csv's priority order), which
+            # needs the name, not just the FK, and doing that join per-row
+            # later would mean N extra queries instead of one JOIN here.
             await cur.execute(
                 f"""
-                SELECT id, document_id, chunk_index, content, section_title
-                FROM chunks
+                SELECT c.id, c.document_id, c.chunk_index, c.content, c.section_title,
+                       dt.name AS document_type
+                FROM chunks c
+                LEFT JOIN document_types dt ON dt.id = c.document_type_id
                 WHERE true {filter_sql}
-                ORDER BY embedding <=> %s::vector
+                ORDER BY c.embedding <=> %s::vector
                 LIMIT %s
                 """,
                 (*condition_params, vector, pool_size),
@@ -116,10 +124,12 @@ class VectorStoreClient:
 
             await cur.execute(
                 f"""
-                SELECT id, document_id, chunk_index, content, section_title
-                FROM chunks
-                WHERE tsv @@ plainto_tsquery('english', %s) {filter_sql}
-                ORDER BY ts_rank(tsv, plainto_tsquery('english', %s)) DESC
+                SELECT c.id, c.document_id, c.chunk_index, c.content, c.section_title,
+                       dt.name AS document_type
+                FROM chunks c
+                LEFT JOIN document_types dt ON dt.id = c.document_type_id
+                WHERE c.tsv @@ plainto_tsquery('english', %s) {filter_sql}
+                ORDER BY ts_rank(c.tsv, plainto_tsquery('english', %s)) DESC
                 LIMIT %s
                 """,
                 (query, *condition_params, query, pool_size),
@@ -146,6 +156,7 @@ def _reciprocal_rank_fusion(
             "chunk_index": rows_by_id[chunk_id]["chunk_index"],
             "content": rows_by_id[chunk_id]["content"],
             "section_title": rows_by_id[chunk_id]["section_title"],
+            "document_type": rows_by_id[chunk_id]["document_type"],
             "score": scores[chunk_id],
             "citation": f"{rows_by_id[chunk_id]['document_id']}#{rows_by_id[chunk_id]['chunk_index']}",
         }

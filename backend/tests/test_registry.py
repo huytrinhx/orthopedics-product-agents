@@ -7,7 +7,9 @@ def test_workflows_registered():
     assert set(list_workflows()) == {"deterministic", "react_agent", "supervisor"}
 
 
-def test_only_deterministic_is_functional_today():
+def test_functional_workflows_today():
+    # Ticket 23 (2026-09-03): react_agent is a real, working agentic
+    # workflow now, not a stub -- only supervisor remains unimplemented.
     assert is_functional("deterministic") is True
-    assert is_functional("react_agent") is False
+    assert is_functional("react_agent") is True
     assert is_functional("supervisor") is False

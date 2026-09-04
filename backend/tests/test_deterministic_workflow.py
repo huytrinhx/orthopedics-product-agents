@@ -39,8 +39,11 @@ def test_build_graph_compiles_with_the_expected_nodes():
     assert nodes == {
         "detect_intent",
         "resolve_synonyms",
+        "resolve_query_entities",
         "hybrid_retrieve",
         "rerank",
+        "resolve_skus",
+        "aggregate_facts",
         "generate",
         "self_eval",
         "reformulate",
@@ -67,6 +70,12 @@ async def test_retry_loop_reformulates_and_only_commits_the_accepted_answer(monk
     async def fake_rerank(state):
         return {"reranked": state["retrieved"]}
 
+    async def fake_resolve_skus(state):
+        return {"resolved_parts": []}
+
+    async def fake_aggregate_facts(state):
+        return {"aggregated_facts": ""}
+
     async def fake_generate(state):
         return {"answer": f"draft for '{state['search_query']}'", "citations": ["doc-1#0"]}
 
@@ -87,6 +96,8 @@ async def test_retry_loop_reformulates_and_only_commits_the_accepted_answer(monk
     monkeypatch.setattr(det, "resolve_synonyms", fake_resolve_synonyms)
     monkeypatch.setattr(det, "hybrid_retrieve", fake_hybrid_retrieve)
     monkeypatch.setattr(det, "rerank", fake_rerank)
+    monkeypatch.setattr(det, "resolve_skus", fake_resolve_skus)
+    monkeypatch.setattr(det, "aggregate_facts", fake_aggregate_facts)
     monkeypatch.setattr(det, "generate", fake_generate)
     monkeypatch.setattr(det, "self_eval", fake_self_eval)
     monkeypatch.setattr(det, "reformulate", fake_reformulate)
@@ -119,6 +130,12 @@ async def test_retry_loop_is_bounded_by_max_retrieval_loops(monkeypatch):
     async def fake_rerank(state):
         return {"reranked": []}
 
+    async def fake_resolve_skus(state):
+        return {"resolved_parts": []}
+
+    async def fake_aggregate_facts(state):
+        return {"aggregated_facts": ""}
+
     async def fake_generate(state):
         return {"answer": "always inadequate", "citations": []}
 
@@ -138,6 +155,8 @@ async def test_retry_loop_is_bounded_by_max_retrieval_loops(monkeypatch):
     monkeypatch.setattr(det, "resolve_synonyms", fake_resolve_synonyms)
     monkeypatch.setattr(det, "hybrid_retrieve", fake_hybrid_retrieve)
     monkeypatch.setattr(det, "rerank", fake_rerank)
+    monkeypatch.setattr(det, "resolve_skus", fake_resolve_skus)
+    monkeypatch.setattr(det, "aggregate_facts", fake_aggregate_facts)
     monkeypatch.setattr(det, "generate", fake_generate)
     monkeypatch.setattr(det, "self_eval", fake_self_eval)
     monkeypatch.setattr(det, "reformulate", fake_reformulate)
@@ -172,6 +191,12 @@ async def test_retrieval_loop_count_does_not_leak_into_a_fresh_turn(monkeypatch)
     async def fake_rerank(state):
         return {"reranked": []}
 
+    async def fake_resolve_skus(state):
+        return {"resolved_parts": []}
+
+    async def fake_aggregate_facts(state):
+        return {"aggregated_facts": ""}
+
     async def fake_generate(state):
         return {"answer": "always inadequate", "citations": []}
 
@@ -190,6 +215,8 @@ async def test_retrieval_loop_count_does_not_leak_into_a_fresh_turn(monkeypatch)
     monkeypatch.setattr(det, "resolve_synonyms", fake_resolve_synonyms)
     monkeypatch.setattr(det, "hybrid_retrieve", fake_hybrid_retrieve)
     monkeypatch.setattr(det, "rerank", fake_rerank)
+    monkeypatch.setattr(det, "resolve_skus", fake_resolve_skus)
+    monkeypatch.setattr(det, "aggregate_facts", fake_aggregate_facts)
     monkeypatch.setattr(det, "generate", fake_generate)
     monkeypatch.setattr(det, "self_eval", fake_self_eval)
     monkeypatch.setattr(det, "reformulate", fake_reformulate)

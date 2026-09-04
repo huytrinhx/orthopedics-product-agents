@@ -19,6 +19,7 @@
 // of starting a new streamChat turn. See answerClarification.
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import Link from "next/link";
+import ReactMarkdown from "react-markdown";
 import { getChatThread, listChatThreads, resumeChat, streamChat } from "../../lib/chat/api";
 import { useAuth } from "../../lib/auth-context";
 import type { ChatCitation, ChatMessage, ChatStreamEvent, ChatThread } from "../../lib/chat/types";
@@ -166,13 +167,40 @@ export default function ChatPage() {
   // the one event type only a fresh turn's detect_intent can produce (a
   // resume answer either resolves it or the graph runs straight to "done").
   async function consumeStream(gen: AsyncGenerator<ChatStreamEvent>, assistantId: string) {
+    // deterministic's retry loop (generate -> self_eval -> reformulate ->
+    // ... -> generate again) means "generate" can run more than once in a
+    // turn, each one streaming full draft text -- react_agent's tool-
+    // calling loop also revisits "generate" repeatedly, but its
+    // intermediate rounds are pure tool calls with no text content, so
+    // they never had this problem. The distinguishing signal isn't "which
+    // generate call is this" (both workflows differ there), it's whether
+    // self_eval has already run THIS turn: only deterministic's retry
+    // path ever sends generate back through self_eval and then a second
+    // "generate" status. Once that's happened, a discarded draft's tokens
+    // are no longer worth showing live -- streaming them (even with the
+    // per-status content reset already in place) meant the user watched a
+    // full wrong answer type out, vanish, and get replaced, which read as
+    // "it answered three times." Suppressing live tokens for a retried
+    // draft and revealing the accepted one only once "done" arrives fixes
+    // that without losing live streaming for the common (no-retry) case.
+    let sawSelfEval = false;
+    let suppressTokens = false;
     for await (const evt of gen) {
       if (evt.event === "thread") {
         threadIdRef.current = evt.data.thread_id;
         setActiveThreadId(evt.data.thread_id);
       } else if (evt.event === "status") {
-        updateMessage(assistantId, { status: STATUS_LABELS[evt.data.node] ?? evt.data.node });
+        if (evt.data.node === "self_eval") {
+          sawSelfEval = true;
+        }
+        const isRetriedDraft = evt.data.node === "generate" && sawSelfEval;
+        suppressTokens = isRetriedDraft;
+        updateMessage(assistantId, {
+          status: isRetriedDraft ? "Refining the answer…" : STATUS_LABELS[evt.data.node] ?? evt.data.node,
+          ...(evt.data.node === "generate" ? { content: "" } : {}),
+        });
       } else if (evt.event === "token") {
+        if (suppressTokens) continue;
         setMessages((prev) =>
           prev.map((m) =>
             m.id === assistantId
@@ -326,7 +354,11 @@ export default function ChatPage() {
             {!threadLoading &&
               messages.map((m) => (
                 <div key={m.id} className={`chat-bubble chat-bubble-${m.role}`}>
-                  {m.content && <div className="chat-bubble-text">{m.content}</div>}
+                  {m.content && (
+                    <div className="chat-bubble-text">
+                      <ReactMarkdown>{m.content}</ReactMarkdown>
+                    </div>
+                  )}
                   {m.status && <div className="chat-status">{m.status}</div>}
                   {m.clarification && (
                     <div className="chat-clarification">

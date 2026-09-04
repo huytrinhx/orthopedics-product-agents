@@ -294,6 +294,90 @@ class GraphClient:
             )
             return [dict(record) async for record in result]
 
+    async def find_parts(
+        self, term: str, product_family: str | None = None, limit: int = 20
+    ) -> list[dict]:
+        """Resolve a free-text term (a SKU, or a substring of a
+        description) directly to candidate `Part` nodes and return each
+        one's own properties -- unlike query_related_entities, which
+        returns entities a match is *related to*, not the match's own
+        properties.
+
+        `product_family` scopes the match to one ProductFamily (e.g.
+        "MIS") when given, since a generic term like "wire" would
+        otherwise match parts across every ingested system. Accepts either
+        a real ProductFamily name or a Postgres systems-tag name one level
+        more specific (e.g. "MIS - Foot Recon") -- these are two separate
+        taxonomies (four Postgres system tags vs. two Neo4j ProductFamily
+        nodes) that share a naming convention where the family name is the
+        tag's prefix before " - "; normalized here (not left to the
+        caller) after react_agent.py's ticket 23 smoke test showed the
+        model passing the more specific tag name straight through
+        (reasonably, since it's what detect_intent's resolved_system
+        actually looks like) and silently matching zero real families as a
+        result. Ticket 20:
+        this is the mechanism spec/SKU/pairing questions should ground
+        answers in instead of vector-retrieved prose alone -- see
+        backend/agents/workflows/deterministic.py's resolve_skus node.
+        Exact SKU matches sort first, so an exact hit isn't crowded out
+        of `limit` by broader description matches. `limit` is a real
+        tradeoff, not just a safety cap: a broad term (e.g. "screw") can
+        match far more real parts than any reasonable limit -- a narrow
+        SKU/pairing lookup only ever has a handful of true matches
+        regardless of limit, but a "list everything" question gets an
+        arbitrary, non-representative slice instead of the full catalog.
+        For that shape of question the vector-retrieved context (an actual
+        inventory-table chunk) stays the more complete source; see
+        _GENERATE_SYSTEM_PROMPT's framing of catalog facts as a
+        cross-check, not a replacement listing.
+
+        Returns flat dicts -- each one *is* a Part's own properties
+        (sku, description, thread, guidewire_spec, ...) plus a
+        `product_family` key, not `{"part": {...}, "product_family": ...}`
+        -- so callers (resolve_skus, _format_part) can read `sku`/
+        `description` directly without unwrapping a nested key first.
+        """
+        family = product_family.split(" - ")[0].strip() if product_family else None
+        # Falls back to matching on any individual word in `term` (>2
+        # chars) when the full phrase doesn't match as one substring --
+        # react_agent.py's ticket 23 smoke test showed a caller without
+        # deterministic.py's own single-word extraction (extract_
+        # candidate_terms) naturally composes a phrase like "1.4 guidepin"
+        # rather than trying "1.4" and "guidepin" separately, and catalog
+        # descriptions are compound ("GUIDEPIN, MIS 3.5 PT, 1.4 X 150MM")
+        # so a multi-word phrase essentially never appears contiguously.
+        # Exact SKU, then full-phrase match, then a same-word fallback --
+        # in that priority order, so a precise hit is never crowded out by
+        # the broader fallback.
+        async with self._driver.session() as session:
+            result = await session.run(
+                """
+                MATCH (p:Part)-[:BELONGS_TO_TRAY]->(:Tray)-[:BELONGS_TO_FAMILY]->(f:ProductFamily)
+                WHERE ($family IS NULL OR f.name = $family)
+                  AND (
+                    toLower(p.sku) = toLower($term)
+                    OR toLower(p.description) CONTAINS toLower($term)
+                    OR ANY(word IN split(toLower($term), ' ')
+                           WHERE size(word) > 2 AND toLower(p.description) CONTAINS word)
+                  )
+                RETURN properties(p) AS part, f.name AS product_family
+                ORDER BY CASE
+                    WHEN toLower(p.sku) = toLower($term) THEN 0
+                    WHEN toLower(p.description) CONTAINS toLower($term) THEN 1
+                    ELSE 2
+                END,
+                CASE WHEN p.item_type = 'Implant' THEN 0 ELSE 1 END
+                LIMIT $limit
+                """,
+                term=term,
+                family=family,
+                limit=limit,
+            )
+            return [
+                {**record["part"], "product_family": record["product_family"]}
+                async for record in result
+            ]
+
     async def get_synonym_groups(self) -> list[list[str]]:
         """Canonical synonym clusters, source of truth for query-time expansion
         via backend/agents/tools/synonym_resolve.py. Each group includes the

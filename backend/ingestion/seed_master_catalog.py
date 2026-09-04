@@ -73,6 +73,7 @@ class CatalogRow:
     guidewire_spec: str
     pre_drill_spec: str
     driver_spec: str
+    indication: str | None
     compat_columns: dict[str, str]
 
 
@@ -95,6 +96,33 @@ def _infer_product_family(tray: str) -> str | None:
     return None
 
 
+# 2026-09-04: two independently-run evals of the MIS question set (both
+# deterministic and react_agent) found the same defect -- an answer citing
+# the wrong thread-type screw for a bunion vs. Akin/fusion procedure. The
+# fact needed to get this right (thread <-> indication) already exists in
+# this file, just encoded in the description text rather than as its own
+# property: MIS Foot Recon's screw descriptions are 100% consistent on this
+# (verified directly against the live graph before writing this) --
+# "MIS HV CHAMFER" (HV = Hallux Valgus, i.e. bunion) is always Full Thread,
+# "MIS COMPRESSION" (compression fixation, the standard for Akin/fusion) is
+# always Partial Thread. Scoped to exactly this one tray, not a blanket
+# HV/COMPRESSION rule -- both words appear in several *other* trays' rows
+# too (plating systems that have nothing to do with MIS), where they almost
+# certainly don't carry the same meaning and haven't been verified to.
+_MIS_FOOT_RECON_TRAY = "UNITE® Foot & Ankle | MIS Foot Recon System"
+
+
+def _infer_indication(tray: str, description: str) -> str | None:
+    if tray != _MIS_FOOT_RECON_TRAY:
+        return None
+    upper = description.upper()
+    if "HV" in upper:
+        return "Bunion (Hallux Valgus) correction"
+    if "COMPRESSION" in upper:
+        return "Fusion / Akin osteotomy (compression fixation)"
+    return None
+
+
 def parse_master_catalog(path: Path) -> list[CatalogRow]:
     with path.open(newline="", encoding="latin-1") as f:
         reader = csv.DictReader(f, delimiter="\t")
@@ -108,12 +136,14 @@ def parse_master_catalog(path: Path) -> list[CatalogRow]:
                 for header, value in raw.items()
                 if header not in _FIXED_COLUMNS and value and value.strip()
             }
+            tray = _clean(raw.get("System"))
+            description = _clean(raw.get("Description"))
             rows.append(
                 CatalogRow(
-                    tray=_clean(raw.get("System")),
+                    tray=tray,
                     item_type=_clean(raw.get("Item Type")),
                     sku=sku,
-                    description=_clean(raw.get("Description")),
+                    description=description,
                     qty_per_set=_clean(raw.get("Qty per Set")),
                     head_style=_clean(raw.get("Head Style")),
                     construct=_clean(raw.get("Construct")),
@@ -122,6 +152,7 @@ def parse_master_catalog(path: Path) -> list[CatalogRow]:
                     guidewire_spec=_clean(raw.get("Guidewire")),
                     pre_drill_spec=_clean(raw.get("Pre-Drill Diameter")),
                     driver_spec=_clean(raw.get("Driver")),
+                    indication=_infer_indication(tray, description),
                     compat_columns=compat_columns,
                 )
             )
@@ -204,6 +235,7 @@ async def seed_master_catalog(client: GraphClient, path: Path = DEFAULT_PATH) ->
             pre_drill_spec=row.pre_drill_spec or None,
             driver_spec=row.driver_spec or None,
             qty_per_set=row.qty_per_set or None,
+            indication=row.indication,
         )
 
     all_skus = [row.sku for row in rows]
