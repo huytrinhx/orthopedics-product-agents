@@ -50,9 +50,10 @@ export default function EvalsPage() {
       <span className="eyebrow">Feedback review</span>
       <h1>Eval tab</h1>
       <p className="lede">
-        Every flagged answer, newest first. Rerun a flagged question against the current code to check
-        whether a fix actually worked -- each rerun replays the real conversation and keeps a history of
-        attempts.
+        Every flagged answer, newest-outstanding first (resolved items sink to the bottom). Rerun a
+        flagged question against the current code to check whether a fix actually worked -- each rerun
+        replays the real conversation and keeps a history of attempts. Delete an item outright if it was
+        a duplicate, a misclick, or no longer worth tracking.
       </p>
 
       {error && <p className="alert" role="alert">{error}</p>}
@@ -64,7 +65,14 @@ export default function EvalsPage() {
       {flagged !== null && flagged.length > 0 && (
         <div className="flagged-list">
           {flagged.map((item) => (
-            <FlaggedItem key={item.message_id} item={item} workflows={workflows} />
+            <FlaggedItem
+              key={item.message_id}
+              item={item}
+              workflows={workflows}
+              onDeleted={() =>
+                setFlagged((prev) => (prev ? prev.filter((f) => f.message_id !== item.message_id) : prev))
+              }
+            />
           ))}
         </div>
       )}

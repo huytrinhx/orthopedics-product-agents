@@ -129,23 +129,44 @@ async def get_feedback_for_thread(thread_id: str) -> dict[str, FeedbackRecord]:
 
 
 async def list_flagged_feedback() -> list[FeedbackRecord]:
-    """Every flagged feedback item, newest first -- the Eval tab's (ticket
-    15) main list. Unfiltered by `resolved` on purpose: the admin toggles
-    that in the UI, not by hiding rows here, so a resolved item stays
-    visible (and its rerun history intact) rather than disappearing.
-    Uses the partial `feedback_flagged_idx` index (migration
-    5d95b6897886), created ahead of this exact need.
+    """Every flagged feedback item -- the Eval tab's (ticket 15) main list.
+    Unfiltered by `resolved` on purpose: the admin toggles that in the UI,
+    not by hiding rows here, so a resolved item stays visible (and its
+    rerun history intact) rather than disappearing -- it just sorts to the
+    bottom (`resolved ASC` puts false before true), newest-first within
+    each group, so what's still outstanding stays at the top. Uses the
+    partial `feedback_flagged_idx` index (migration 5d95b6897886), created
+    ahead of this exact need.
     """
     conn = await get_connection()
     try:
         async with conn.cursor() as cur:
             await cur.execute(
-                f"SELECT {_COLUMNS} FROM feedback WHERE flagged ORDER BY created_at DESC"
+                f"SELECT {_COLUMNS} FROM feedback WHERE flagged ORDER BY resolved ASC, created_at DESC"
             )
             rows = await cur.fetchall()
             return [FeedbackRecord(*row) for row in rows]
     finally:
         await conn.close()
+
+
+async def delete_feedback(message_id: str) -> bool:
+    """Ticket 15 follow-up: an admin can remove a flagged item outright
+    (e.g. a duplicate, a misclick, or one confirmed fixed and no longer
+    worth keeping around) rather than only ever resolving it. Cascades to
+    that item's rerun chat_threads rows (migration e2f039991c90) -- see
+    that migration's own comment for why. Returns whether a row actually
+    existed to delete, so the route can 404 rather than silently no-op.
+    """
+    conn = await get_connection()
+    try:
+        async with conn.cursor() as cur:
+            await cur.execute("DELETE FROM feedback WHERE message_id = %s", (message_id,))
+            deleted = cur.rowcount > 0
+        await conn.commit()
+    finally:
+        await conn.close()
+    return deleted
 
 
 async def set_resolved(message_id: str, resolved: bool) -> FeedbackRecord | None:

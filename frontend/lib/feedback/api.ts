@@ -24,6 +24,20 @@ export async function listReruns(messageId: string): Promise<Rerun[]> {
   return request(`/feedback/${messageId}/reruns`);
 }
 
+// 204 No Content on success -- mirrors lib/documents/api.ts's deleteDocument
+// (raw fetch, not request()/unwrap(), since unwrap always calls res.json()
+// and a 204 response has no body to parse).
+export async function deleteFlaggedFeedback(messageId: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/feedback/${messageId}`, {
+    method: "DELETE",
+    headers: authHeaders(),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.detail ?? `request failed: ${res.status}`);
+  }
+}
+
 // Re-asks a flagged question, in its real conversational context, against
 // an admin-chosen workflow -- backend/api/routes/chat.py's rerun_chat does
 // the actual history replay (graph.aupdate_state) and streams the new turn

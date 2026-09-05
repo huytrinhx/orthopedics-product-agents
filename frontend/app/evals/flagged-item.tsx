@@ -6,7 +6,7 @@
 // rerun expandable inline via RerunConversation, reusing the real chat UI.
 import { useState } from "react";
 import type { WorkflowInfo } from "../../lib/admin/types";
-import { listReruns, setFeedbackResolved } from "../../lib/feedback/api";
+import { deleteFlaggedFeedback, listReruns, setFeedbackResolved } from "../../lib/feedback/api";
 import type { FlaggedFeedback, Rerun } from "../../lib/feedback/types";
 import { RerunConversation } from "./rerun-conversation";
 
@@ -17,12 +17,17 @@ function formatScore(value: number | undefined): string {
 export function FlaggedItem({
   item,
   workflows,
+  onDeleted,
 }: {
   item: FlaggedFeedback;
   workflows: WorkflowInfo[];
+  onDeleted: () => void;
 }) {
   const [resolved, setResolved] = useState(item.resolved);
   const [resolving, setResolving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [reruns, setReruns] = useState<Rerun[] | null>(null);
   const [rerunsError, setRerunsError] = useState<string | null>(null);
   const [expandedThreadId, setExpandedThreadId] = useState<string | null>(null);
@@ -59,6 +64,18 @@ export function FlaggedItem({
 
   const historyRows = (reruns ?? []).filter((r) => r.thread_id !== liveRerun?.threadId);
 
+  async function handleDelete() {
+    setDeleting(true);
+    setDeleteError(null);
+    try {
+      await deleteFlaggedFeedback(item.message_id);
+      onDeleted();
+    } catch (err) {
+      setDeleteError(err instanceof Error ? err.message : "Couldn't delete this item");
+      setDeleting(false);
+    }
+  }
+
   return (
     <div className={`flagged-item${resolved ? " flagged-item-resolved" : ""}`}>
       <div className="flagged-item-head">
@@ -66,11 +83,29 @@ export function FlaggedItem({
           <p className="flagged-item-question">{item.question}</p>
           <p className="flagged-item-answer">{item.answer}</p>
         </div>
-        <label className="flagged-resolved-toggle">
-          <input type="checkbox" checked={resolved} disabled={resolving} onChange={toggleResolved} />
-          Resolved
-        </label>
+        <div className="flagged-item-head-actions">
+          <label className="flagged-resolved-toggle">
+            <input type="checkbox" checked={resolved} disabled={resolving} onChange={toggleResolved} />
+            Resolved
+          </label>
+          {confirmingDelete ? (
+            <span className="flagged-delete-confirm">
+              Delete this item?
+              <button type="button" className="btn-text" onClick={handleDelete} disabled={deleting}>
+                {deleting ? "Deleting…" : "Yes, delete"}
+              </button>
+              <button type="button" className="btn-text" onClick={() => setConfirmingDelete(false)} disabled={deleting}>
+                Cancel
+              </button>
+            </span>
+          ) : (
+            <button type="button" className="btn-text flagged-delete" onClick={() => setConfirmingDelete(true)}>
+              Delete
+            </button>
+          )}
+        </div>
       </div>
+      {deleteError && <p className="alert" role="alert">{deleteError}</p>}
 
       <div className="flagged-item-meta">
         <span>Faithfulness {formatScore(item.scores.faithfulness)}</span>

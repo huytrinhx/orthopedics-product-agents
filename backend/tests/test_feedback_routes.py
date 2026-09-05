@@ -19,6 +19,12 @@ from fastapi.testclient import TestClient
 
 from api.main import app
 from chat_threads.repository import create_thread
+from feedback.repository import (
+    get_feedback_for_thread,
+    list_flagged_feedback,
+    set_resolved,
+    upsert_feedback,
+)
 
 needs_openai_key = pytest.mark.skipif(
     not os.environ.get("OPENAI_API_KEY"), reason="requires a real OPENAI_API_KEY"
@@ -275,3 +281,102 @@ def test_flagged_feedback_lists_the_actual_question_and_answer_text(monkeypatch)
     assert row["answer"] == answer
     assert row["flagged"] is True
     assert row["resolved"] is False
+
+
+def test_delete_flagged_requires_admin():
+    with TestClient(app) as client:
+        token = _signup(client)["access_token"]
+        res = client.delete(
+            f"/feedback/{uuid.uuid4()}", headers={"Authorization": f"Bearer {token}"}
+        )
+    assert res.status_code == 403
+
+
+def test_delete_missing_message_404s(monkeypatch):
+    with TestClient(app) as client:
+        admin_email = _unique_email()
+        monkeypatch.setenv("ADMIN_EMAILS", admin_email)
+        admin_token = client.post(
+            "/auth/signup", json={"email": admin_email, "password": "correct horse battery"}
+        ).json()["access_token"]
+        res = client.delete(
+            f"/feedback/{uuid.uuid4()}", headers={"Authorization": f"Bearer {admin_token}"}
+        )
+    assert res.status_code == 404
+
+
+async def test_delete_removes_the_feedback_row(monkeypatch):
+    """No real chat turn needed -- deletion is verified directly against
+    the repository (get_feedback_for_thread), the same way
+    test_submitting_again_on_the_same_message_overwrites_not_duplicates
+    above avoids a real LLM call for a DB-only concern."""
+    with TestClient(app) as client:
+        user = _signup(client)
+        user_id = uuid.UUID(user["user"]["id"])
+        user_headers = {"Authorization": f"Bearer {user['access_token']}"}
+        thread_id = f"{user_id}:{uuid.uuid4().hex}"
+        message_id = str(uuid.uuid4())
+        await create_thread(thread_id, user_id, "test thread")
+
+        admin_email = _unique_email()
+        monkeypatch.setenv("ADMIN_EMAILS", admin_email)
+        admin_token = client.post(
+            "/auth/signup", json={"email": admin_email, "password": "correct horse battery"}
+        ).json()["access_token"]
+        admin_headers = {"Authorization": f"Bearer {admin_token}"}
+
+        client.post(
+            "/feedback/",
+            headers=user_headers,
+            json={"thread_id": thread_id, "message_id": message_id, "flagged": True, "scores": {}},
+        )
+
+        delete_res = client.delete(f"/feedback/{message_id}", headers=admin_headers)
+        assert delete_res.status_code == 204
+
+        remaining = await get_feedback_for_thread(thread_id)
+    assert message_id not in remaining
+
+
+async def test_flagged_list_sorts_resolved_items_last():
+    """Repository-level, not through the route (which needs a real
+    checkpointer-backed thread to resolve question/answer text) --
+    list_flagged_feedback's ORDER BY is what implements "resolved sinks to
+    the bottom," so that's what this actually needs to exercise."""
+    with TestClient(app) as client:
+        user = _signup(client)
+    user_id = uuid.UUID(user["user"]["id"])
+    thread_id = f"{user_id}:{uuid.uuid4().hex}"
+    await create_thread(thread_id, user_id, "test thread")
+
+    older_resolved = str(uuid.uuid4())
+    newer_unresolved = str(uuid.uuid4())
+    await upsert_feedback(
+        message_id=older_resolved,
+        thread_id=thread_id,
+        flagged=True,
+        faithfulness=None,
+        relevance=None,
+        style=None,
+        citation=None,
+        comment=None,
+        submitted_by=user_id,
+    )
+    await set_resolved(older_resolved, True)
+    await upsert_feedback(
+        message_id=newer_unresolved,
+        thread_id=thread_id,
+        flagged=True,
+        faithfulness=None,
+        relevance=None,
+        style=None,
+        citation=None,
+        comment=None,
+        submitted_by=user_id,
+    )
+
+    records = await list_flagged_feedback()
+    ids = [r.message_id for r in records]
+    # Resolved sorts after unresolved regardless of recency, even though
+    # older_resolved was created first.
+    assert ids.index(newer_unresolved) < ids.index(older_resolved)

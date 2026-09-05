@@ -22,10 +22,14 @@ feedback-rerun tool after a 2026-09-05 grilling session -- see
 .scratch/chat-documents-evals/issues/15-*.md) adds the admin-only routes
 below: GET /flagged lists every flagged item with its actual question/answer
 text (read from the checkpointer, the same source of truth GET
-/chat/threads/{id} uses -- not duplicated into the feedback table), PATCH
-/{message_id}/resolved toggles the admin's "confirmed fixed" marker, and GET
+/chat/threads/{id} uses -- not duplicated into the feedback table), sorted
+resolved-last so what's still outstanding stays on top; PATCH
+/{message_id}/resolved toggles the admin's "confirmed fixed" marker; GET
 /{message_id}/reruns lists that item's rerun history (POST /chat/rerun,
-api/routes/chat.py, is what creates one).
+api/routes/chat.py, is what creates one); DELETE /{message_id} removes a
+flagged item outright (a duplicate, a misclick, or one no longer worth
+keeping) -- cascades to its rerun chat_threads rows, see migration
+e2f039991c90.
 """
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
@@ -35,6 +39,7 @@ from chat_threads.models import RerunOut
 from chat_threads.repository import list_reruns, owns_thread
 from feedback.models import FeedbackOut, FeedbackRequest, FlaggedFeedbackOut, ResolvedRequest
 from feedback.repository import (
+    delete_feedback,
     list_flagged_feedback,
     set_resolved,
     to_feedback_out,
@@ -126,3 +131,9 @@ async def list_message_reruns(
         RerunOut(thread_id=t.thread_id, workflow_name=t.workflow_name, created_at=t.created_at)
         for t in await list_reruns(message_id)
     ]
+
+
+@router.delete("/{message_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_flagged(message_id: str, admin: UserRecord = Depends(require_admin)) -> None:
+    if not await delete_feedback(message_id):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "No feedback for that message")

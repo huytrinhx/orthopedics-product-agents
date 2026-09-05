@@ -985,6 +985,13 @@ tr:last-child td {
   white-space: pre-wrap;
 }
 
+.flagged-item-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex: 0 0 auto;
+}
+
 .flagged-resolved-toggle {
   display: flex;
   align-items: center;
@@ -992,7 +999,20 @@ tr:last-child td {
   font-size: 0.85rem;
   color: var(--ink-soft);
   white-space: nowrap;
-  flex: 0 0 auto;
+}
+
+.flagged-delete {
+  color: var(--danger);
+  white-space: nowrap;
+}
+
+.flagged-delete-confirm {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.82rem;
+  color: var(--ink-soft);
+  white-space: nowrap;
 }
 
 .flagged-item-meta {
