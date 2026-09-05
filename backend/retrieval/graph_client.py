@@ -24,6 +24,7 @@ Part/Tray/ProductFamily catalog) and backend/ingestion/entity_extraction.py
 """
 import asyncio
 import os
+import re
 
 from neo4j import AsyncGraphDatabase
 
@@ -338,8 +339,10 @@ class GraphClient:
         `description` directly without unwrapping a nested key first.
         """
         family = product_family.split(" - ")[0].strip() if product_family else None
-        # Falls back to matching on any individual word in `term` (>2
-        # chars) when the full phrase doesn't match as one substring --
+        # Falls back to matching on any individual word in `term` (2+
+        # chars -- includes clinical abbreviations like "PT"/"FT", which
+        # matter more here than most 3+ char words) when the full phrase
+        # doesn't match as one substring --
         # react_agent.py's ticket 23 smoke test showed a caller without
         # deterministic.py's own single-word extraction (extract_
         # candidate_terms) naturally composes a phrase like "1.4 guidepin"
@@ -349,27 +352,63 @@ class GraphClient:
         # Exact SKU, then full-phrase match, then a same-word fallback --
         # in that priority order, so a precise hit is never crowded out by
         # the broader fallback.
+        #
+        # `family_words` excludes the family name's own words (e.g. "mis")
+        # from that per-word fallback -- found live (2026-09-04) tracing a
+        # react_agent answer that flip-flopped Full/Partial Thread for the
+        # same SKU across identical runs: every description in this family
+        # is prefixed with its family name ("MIS HV CHAMFER FT...", "MIS
+        # COMPRESSION PT...", "MIS HV REVISION..."), so a caller-composed
+        # term like "MIS HV Chamfer 4.0mm screw" matched "mis" against
+        # nearly the entire family at tier 2, tying on ORDER BY with the
+        # one specific, actually-relevant match and leaving which of them
+        # survived `limit` up to Neo4j's unspecified tie-break order. The
+        # family is already the WHERE clause's scope, so re-matching its
+        # own name as a word adds no signal, only noise.
+        #
+        # Excluding "mis" alone wasn't enough, though: "screw" is just as
+        # generic within a screw-heavy catalog (matches every "SCREW,..."
+        # description), so tier 2 was still flooded and now flooded
+        # *deterministically* wrong (a stable p.sku tiebreak just picks the
+        # same wrong loser every time instead of a random one). Fixed by
+        # ranking tier-2 candidates by how many distinct query words they
+        # actually match, not treating any single word-hit as good as
+        # another -- "chamfer" is the one word that actually singles out
+        # the right part here, "screw"-only matches sort behind it. A
+        # trailing unit suffix ("4.0mm") is stripped to its bare number
+        # ("4.0") before matching, since the catalog's own descriptions
+        # never spell the unit ("4.0 X 58"), so this word would otherwise
+        # never contribute to any match count at all.
+        stripped_term = re.sub(r"(\d+(?:\.\d+)?)mm\b", r"\1", term, flags=re.IGNORECASE)
         async with self._driver.session() as session:
             result = await session.run(
                 """
+                WITH split(toLower(coalesce($family, '')), ' ') AS family_words,
+                     [w IN split(toLower($stripped_term), ' ')
+                      WHERE size(w) > 1 AND NOT w IN split(toLower(coalesce($family, '')), ' ')]
+                     AS match_words
                 MATCH (p:Part)-[:BELONGS_TO_TRAY]->(:Tray)-[:BELONGS_TO_FAMILY]->(f:ProductFamily)
                 WHERE ($family IS NULL OR f.name = $family)
                   AND (
                     toLower(p.sku) = toLower($term)
                     OR toLower(p.description) CONTAINS toLower($term)
-                    OR ANY(word IN split(toLower($term), ' ')
-                           WHERE size(word) > 2 AND toLower(p.description) CONTAINS word)
+                    OR ANY(word IN match_words WHERE toLower(p.description) CONTAINS word)
                   )
-                RETURN properties(p) AS part, f.name AS product_family
+                RETURN properties(p) AS part, f.name AS product_family,
+                       size([word IN match_words WHERE toLower(p.description) CONTAINS word])
+                           AS word_match_count
                 ORDER BY CASE
                     WHEN toLower(p.sku) = toLower($term) THEN 0
                     WHEN toLower(p.description) CONTAINS toLower($term) THEN 1
                     ELSE 2
                 END,
-                CASE WHEN p.item_type = 'Implant' THEN 0 ELSE 1 END
+                word_match_count DESC,
+                CASE WHEN p.item_type = 'Implant' THEN 0 ELSE 1 END,
+                p.sku
                 LIMIT $limit
                 """,
                 term=term,
+                stripped_term=stripped_term,
                 family=family,
                 limit=limit,
             )

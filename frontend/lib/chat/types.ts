@@ -34,6 +34,7 @@ export interface ChatCitation {
   document_id: string;
   filename: string;
   chunk_index: number;
+  section_title: string | null;
 }
 
 // Mirrors backend/api/routes/chat.py's SSE event payloads.

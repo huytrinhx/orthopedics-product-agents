@@ -13,6 +13,7 @@ import uuid
 import pytest
 from fastapi.testclient import TestClient
 
+import agents.workflows.deterministic as det
 from api.main import app
 
 needs_openai_key = pytest.mark.skipif(
@@ -272,7 +273,17 @@ def test_get_nonexistent_own_thread_404s():
 
 
 @needs_openai_key
-def test_thread_appears_in_sidebar_and_transcript_round_trips_both_turns():
+def test_thread_appears_in_sidebar_and_transcript_round_trips_both_turns(monkeypatch):
+    # This test is about the sidebar/transcript round-trip, not self_eval's
+    # judgment call -- a real judge's faithfulness/relevance score on these
+    # two short, context-thin turns is exactly the kind of borderline case
+    # request_clarification (2026-09-04) is *meant* to pause on, which would
+    # otherwise make this test's pass rate depend on real LLM score
+    # variance rather than the sidebar/transcript behavior it actually
+    # exercises. Threshold set unreachably low so _should_clarify always
+    # finalizes; test_ambiguous_query_pauses_for_clarification_and_
+    # resume_completes_the_turn below covers the clarification pause itself.
+    monkeypatch.setattr(det, "CLARIFICATION_SCORE_THRESHOLD", -1.0)
     with TestClient(app) as client:
         token = _user_token(client)
         headers = {"Authorization": f"Bearer {token}"}
@@ -313,14 +324,20 @@ def test_thread_appears_in_sidebar_and_transcript_round_trips_both_turns():
 
 
 @needs_openai_key
-def test_done_event_message_id_round_trips_through_feedback_and_transcript():
+def test_done_event_message_id_round_trips_through_feedback_and_transcript(monkeypatch):
     """Ticket 11: the "done" event's message_id is LangGraph's own
     auto-assigned uuid (add_messages) for the answer just finalized -- this
     proves it's real and stable enough to key feedback on, by submitting
     feedback against it and confirming GET /chat/threads/{id} (a completely
     separate read path, straight from the checkpointer) embeds that same
     feedback back onto the matching message.
+
+    CLARIFICATION_SCORE_THRESHOLD forced unreachable: this turn has no real
+    indexed document behind it, so a real self_eval score is unpredictable
+    and this test isn't about that judgment call -- see the sidebar test's
+    comment above for the same reasoning.
     """
+    monkeypatch.setattr(det, "CLARIFICATION_SCORE_THRESHOLD", -1.0)
     with TestClient(app) as client:
         token = _user_token(client)
         headers = {"Authorization": f"Bearer {token}"}
@@ -375,7 +392,15 @@ def test_ambiguous_query_pauses_for_clarification_and_resume_completes_the_turn(
     Creates and tags its own document (rather than relying on whatever
     systems already exist in this shared dev Postgres) so the clarification
     options this test asserts against are deterministic.
+
+    CLARIFICATION_SCORE_THRESHOLD forced unreachable (2026-09-04): this
+    test's uploaded document is placeholder text, so the resumed turn's
+    real self_eval score would legitimately be terrible -- that's a second,
+    different interrupt() (request_clarification's) this test isn't about,
+    and would otherwise pause the resumed turn again instead of reaching
+    "done".
     """
+    monkeypatch.setattr(det, "CLARIFICATION_SCORE_THRESHOLD", -1.0)
     monkeypatch.setenv("INGEST_DATA_DIR", str(tmp_path))
     with TestClient(app) as client:
         admin_email = _unique_email()
@@ -428,7 +453,13 @@ def test_resume_without_a_pending_clarification_is_rejected(monkeypatch, tmp_pat
     """resume_chat's aget_state guard: resuming a thread that isn't actually
     paused on an interrupt (a fresh thread, or one that already finished)
     should 409 rather than silently no-op or error obscurely.
+
+    CLARIFICATION_SCORE_THRESHOLD forced unreachable: a real self_eval
+    score pausing the first turn on its own clarification interrupt would
+    make this thread genuinely (if coincidentally) resumable, defeating the
+    point of this test.
     """
+    monkeypatch.setattr(det, "CLARIFICATION_SCORE_THRESHOLD", -1.0)
     monkeypatch.setenv("INGEST_DATA_DIR", str(tmp_path))
     with TestClient(app) as client:
         user_headers = {"Authorization": f"Bearer {_user_token(client)}"}

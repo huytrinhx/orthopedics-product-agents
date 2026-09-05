@@ -29,6 +29,11 @@ class ChatCitationOut(BaseModel):
     document_id: uuid.UUID
     filename: str
     chunk_index: int
+    # None when the chunk carries no heading (or was removed/re-chunked
+    # since the answer was generated) -- the UI falls back to the chunk
+    # index so two citations into the same document are never shown
+    # identically (see _resolve_citations' docstring).
+    section_title: str | None = None
 
 
 class ChatMessageOut(BaseModel):

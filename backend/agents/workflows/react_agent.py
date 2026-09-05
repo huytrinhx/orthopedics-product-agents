@@ -57,7 +57,7 @@ from agents.workflows.deterministic import detect_intent
 from config.llm_clients import get_chat_model
 
 # "Raw power" per the 2026-09-03 grilling session: generous, not tuned down
-# to deterministic's MAX_RETRIEVAL_LOOPS=2 -- the point of this workflow is
+# to match deterministic's own turn budget -- the point of this workflow is
 # to find the capability ceiling, not ship a cost-optimized default. Counts
 # individual tool calls, not reasoning rounds (a round can request several).
 MAX_TOOL_CALLS = 8

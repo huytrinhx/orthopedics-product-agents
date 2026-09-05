@@ -46,6 +46,7 @@ from chat_threads.repository import (
     touch_thread,
 )
 from documents.repository import get_document
+from documents.repository import list_chunks as list_document_chunks
 from feedback.repository import get_feedback_for_thread, to_feedback_out
 from observability.langfuse_setup import get_trace_url, new_callback_handler, score_trace
 from settings.repository import get_settings
@@ -53,8 +54,9 @@ from settings.repository import get_settings
 router = APIRouter()
 
 # Node whose token-by-token output should stream to the UI as it's written.
-# rerank/self_eval/reformulate also call the chat model, but for structured
-# (JSON) output the user isn't meant to watch arrive token by token.
+# rerank/self_eval/request_clarification also call the chat model, but for
+# structured (JSON) output the user isn't meant to watch arrive token by
+# token.
 _STREAMED_NODES = {"generate"}
 
 # Sidebar thread titles are derived from the first message rather than set
@@ -75,7 +77,24 @@ def _title_from_message(message: str) -> str:
 # workflow_name -> that field, for the one place (score_trace) that needs a
 # single "loop_count" number rather than each workflow's own semantics.
 # Workflows not listed here just report no loop_count.
-_LOOP_COUNT_FIELD = {"deterministic": "retrieval_loop_count", "react_agent": "tool_calls_made"}
+_LOOP_COUNT_FIELD = {"deterministic": "clarification_rounds", "react_agent": "tool_calls_made"}
+
+# LangGraph's own default (25) is an arbitrary library constant, not a
+# deliberate turn budget. Originally raised here 2026-09-04 after a full
+# deterministic run spending both of a since-removed reformulate-and-retry
+# loop's retries needed 28 node executions to reach finalize, past the
+# default -- confirmed live that the default is only enforced through
+# astream_events' LangChain-Core config path (bare graph.astream()/
+# .ainvoke() with the same dict does not enforce it in the installed
+# langgraph version), which is exactly the call chat.py makes below.
+# deterministic.py's retry loop was since replaced with a bounded
+# (one-round-per-turn) interrupt()/resume clarification instead of a silent
+# retry, so the worst case is far smaller now (roughly 17 nodes), but 50
+# stays as generous headroom for future node growth -- react_agent's
+# MAX_TOOL_CALLS=8 also fits comfortably under it -- without masking a
+# genuine infinite loop, since every workflow's own loop guard still bounds
+# it well under that.
+_RECURSION_LIMIT = 50
 
 
 class ChatStreamRequest(BaseModel):
@@ -124,8 +143,15 @@ async def _resolve_citations(raw_citations: list[str]) -> list[ChatCitationOut]:
     registered workflow can hand this function raw citation strings, and a
     ValueError here previously crashed the entire SSE stream for an
     otherwise-successful answer ("badly formed hexadecimal UUID string").
+
+    Also resolves each chunk's `section_title` (via one `list_chunks` per
+    unique document_id, same caching shape as `filenames` below) -- found
+    live (2026-09-04) that two citations into the same long document
+    rendered as two identical-looking chips (same filename, nothing else
+    shown), which a rep can't tell apart without clicking through both.
     """
     filenames: dict[str, str] = {}
+    section_titles: dict[str, dict[int, str | None]] = {}
     resolved: list[ChatCitationOut] = []
     for raw in raw_citations:
         document_id, _, chunk_index = raw.rpartition("#")
@@ -142,11 +168,14 @@ async def _resolve_citations(raw_citations: list[str]) -> list[ChatCitationOut]:
             # chip rather than dropping the citation silently, just without
             # a real filename to click through to.
             filenames[document_id] = doc.filename if doc else "(document removed)"
+            chunks = await list_document_chunks(uuid.UUID(document_id))
+            section_titles[document_id] = {c.chunk_index: c.section_title for c in chunks}
         resolved.append(
             ChatCitationOut(
                 document_id=uuid.UUID(document_id),
                 filename=filenames[document_id],
                 chunk_index=int(chunk_index),
+                section_title=section_titles[document_id].get(int(chunk_index)),
             )
         )
     return resolved
@@ -205,18 +234,24 @@ async def _stream_chat(
     handler, langfuse_config = new_callback_handler(
         user_id=str(user.id), session_id=thread_id, tags=[workflow_name]
     )
-    config = {"configurable": {"thread_id": thread_id}, **langfuse_config}
+    config = {
+        "configurable": {"thread_id": thread_id},
+        "recursion_limit": _RECURSION_LIMIT,
+        **langfuse_config,
+    }
     inputs = {
         "messages": [HumanMessage(content=body.message)],
         "query": body.message,
         "user_id": str(user.id),
         "thread_id": thread_id,
-        # search_query/retrieval_loop_count have no reducer, so an earlier
-        # turn's checkpointed value would otherwise silently carry over
-        # (e.g. a prior turn's retry already having spent the loop budget)
-        # -- explicitly reset both for every new turn.
+        # search_query/clarification_rounds/clarification_reply have no
+        # reducer, so an earlier turn's checkpointed value would otherwise
+        # silently carry over (e.g. a prior turn's already-spent
+        # clarification round, or its reply) -- explicitly reset all three
+        # for every new turn.
         "search_query": body.message,
-        "retrieval_loop_count": 0,
+        "clarification_rounds": 0,
+        "clarification_reply": None,
     }
 
     return StreamingResponse(
@@ -354,7 +389,7 @@ async def _resume_chat(
     handler, langfuse_config = new_callback_handler(
         user_id=str(user.id), session_id=body.thread_id, tags=[workflow_name]
     )
-    config = {**config, **langfuse_config}
+    config = {**config, "recursion_limit": _RECURSION_LIMIT, **langfuse_config}
     return StreamingResponse(
         _stream_graph(
             graph, workflow_name, body.thread_id, Command(resume=body.human_input), config, handler

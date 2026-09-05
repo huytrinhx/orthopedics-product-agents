@@ -104,7 +104,7 @@ _AMBIGUOUS_FIXTURES: list[dict] = [
 # NOT YET IMPLEMENTED, flagging for whoever picks this up: a query
 # classified as "Pull resource" should skip the full
 # detect_intent -> resolve_synonyms -> hybrid_retrieve -> rerank -> generate
-# -> self_eval (-> reformulate retry loop) pipeline in
+# -> self_eval (-> request_clarification loop) pipeline in
 # agents/workflows/deterministic.py entirely. It's a direct "fetch this
 # document" lookup, not a question needing synonym expansion, LLM reranking,
 # generation, or faithfulness/relevance self-eval -- running the full

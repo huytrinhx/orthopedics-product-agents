@@ -732,6 +732,9 @@ tr:last-child td {
   border-radius: 2px;
   border: 1px solid transparent;
   cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .chat-citation:hover {

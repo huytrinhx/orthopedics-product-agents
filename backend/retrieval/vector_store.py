@@ -40,6 +40,17 @@ _CANDIDATE_MULTIPLIER = 2
 class RetrievalFilters:
     system_id: uuid.UUID | None = None
     document_type_id: uuid.UUID | None = None
+    # An inclusion list, not an exclusion filter -- a chunk with NO
+    # document_type (tagging is optional, ticket 05) always passes this
+    # filter regardless of what's listed here, so an untagged document
+    # never becomes silently unreachable for a question type that has a
+    # doctype preference. deterministic.py's hybrid_retrieve (2026-09-04)
+    # is the one caller: it resolves a question type's allowed doctypes
+    # (_DOCTYPE_PRIORITY) to ids and passes them here so the *retrieval*
+    # pool itself is narrowed to relevant document types, not just
+    # re-ranked afterward -- rerank's existing doctype-priority bonus still
+    # ranks an allowed-type chunk above an untagged one within that pool.
+    document_type_ids: list[uuid.UUID] | None = None
 
 
 class VectorStoreClient:
@@ -92,6 +103,9 @@ class VectorStoreClient:
         if filters and filters.document_type_id:
             conditions.append("c.document_type_id = %s")
             condition_params.append(filters.document_type_id)
+        if filters and filters.document_type_ids:
+            conditions.append("(c.document_type_id IS NULL OR c.document_type_id = ANY(%s))")
+            condition_params.append(list(filters.document_type_ids))
         filter_sql = f"AND {' AND '.join(conditions)}" if conditions else ""
 
         async with self._connection.cursor(row_factory=dict_row) as cur:

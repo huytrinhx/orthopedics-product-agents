@@ -34,12 +34,35 @@ const STATUS_LABELS: Record<string, string> = {
   rerank: "Ranking results…",
   generate: "Writing answer…",
   self_eval: "Checking answer quality…",
-  reformulate: "Refining search…",
+  request_clarification: "Preparing a follow-up question…",
   finalize: "Finishing up…",
 };
 
 function uid(): string {
   return Math.random().toString(36).slice(2);
+}
+
+// Mirrors backend/agents/citations.py's _CITATION_PATTERN exactly -- the
+// model writes these `[document-id#chunk-index]` markers inline as its
+// citation convention (see agents/workflows/deterministic.py's/
+// react_agent.py's system prompts), but a raw Postgres UUID means nothing
+// to a rep reading the answer. The chat-citations chips below the bubble
+// (keyed off the same `m.citations` extract_citations already parsed out)
+// are the actual clickable source list, so the inline marker is just
+// stripped from what's rendered, not shown as literal bracketed text.
+const _CITATION_DISPLAY_PATTERN =
+  /\s?\[[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}#\d+\]/g;
+
+function stripCitationMarkers(content: string): string {
+  return content.replace(_CITATION_DISPLAY_PATTERN, "");
+}
+
+// Two citations into the same document previously rendered as identical
+// chips (filename only) -- a rep can't tell "the dosing table" apart from
+// "the contraindications section" of the same PDF without clicking both.
+// Falls back to the chunk's position when it has no heading of its own.
+function citationLabel(c: ChatCitation): string {
+  return c.section_title ? `${c.filename} — ${c.section_title}` : `${c.filename} (#${c.chunk_index + 1})`;
 }
 
 function formatThreadDate(iso: string): string {
@@ -356,7 +379,7 @@ export default function ChatPage() {
                 <div key={m.id} className={`chat-bubble chat-bubble-${m.role}`}>
                   {m.content && (
                     <div className="chat-bubble-text">
-                      <ReactMarkdown>{m.content}</ReactMarkdown>
+                      <ReactMarkdown>{stripCitationMarkers(m.content)}</ReactMarkdown>
                     </div>
                   )}
                   {m.status && <div className="chat-status">{m.status}</div>}
@@ -393,8 +416,9 @@ export default function ChatPage() {
                               : ""
                           }`}
                           onClick={() => openCitationPane(c)}
+                          title={citationLabel(c)}
                         >
-                          {c.filename}
+                          {citationLabel(c)}
                         </button>
                       ))}
                     </div>

@@ -45,6 +45,16 @@ Surgical Technique's ~0.05/0.05) and the answer correctly stating 150mm/
 200mm with correct PT/FT labels, matching the graph's `Part` record, on
 both runs.
 
+**Superseded, same day:** `resolve_query_entities` (item 1 below) was
+removed later on 2026-09-04 -- comparing a Technique/procedural answer
+against its golden expected answer found its search-text enrichment
+actively hurt that question shape (pushed retrieval toward catalog/plate
+wording, crowding out real step-by-step narrative chunks). `resolve_skus`
+now does its own query-alone graph lookup again instead of reusing this
+node's result. Item 2 (doctype-priority reranking) is unaffected and still
+in `deterministic.py`, now paired with a hard document-type filter in
+`hybrid_retrieve` itself (see that node's docstring).
+
 - [x] `resolve_query_entities` resolves the raw query to candidate Part
       nodes before `hybrid_retrieve` runs
 - [x] `hybrid_retrieve`'s search text is enriched with resolved parts'
