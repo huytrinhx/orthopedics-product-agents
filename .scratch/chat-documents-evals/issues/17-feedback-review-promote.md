@@ -6,6 +6,8 @@
 
 **Status:** ready-for-agent
 
+**Note (2026-09-05):** ticket 15 (rescoped the same day into a feedback-rerun tool) already built the "admin-only UI lists flagged chat feedback" half of the second checkbox below -- `GET /feedback/flagged` and the `/evals` Eval tab (`frontend/app/evals/`). Whoever picks this up should add a "Promote" action to that existing list/page rather than building a second flagged-feedback UI from scratch.
+
 - [ ] A migration adds a `feedback_notes` table shaped like `feedback-notes.csv` (prompt/provided answer/preferred answer/content+formatting feedback/system), sourced from promoted chat feedback
 - [ ] An admin-only review UI lists flagged and/or low-scored chat feedback (from ticket 11/12) and lets the admin "promote" an entry into `feedback_notes`
 - [ ] `backend/evals/golden_datasets/build_dataset.py` is updated to read from the `feedback_notes` table instead of the CSV, and still requires an explicit manual run to regenerate the per-system JSONL (no auto-regeneration on promote)

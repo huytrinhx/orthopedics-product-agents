@@ -7,7 +7,10 @@ import type { ChatFeedback, ChatStreamEvent, ChatThread, ChatTranscript, SubmitF
 // resumeChat below, since both hit a POST .../stream-shaped endpoint that
 // emits the same frame format (backend/api/routes/chat.py's _stream_graph
 // drives both).
-async function* parseSseStream(res: Response): AsyncGenerator<ChatStreamEvent> {
+// Exported for lib/feedback/api.ts's rerun functions (ticket 15) -- same
+// frame format, since backend/api/routes/chat.py's _stream_graph drives
+// POST /chat/rerun and its resume too.
+export async function* parseSseStream(res: Response): AsyncGenerator<ChatStreamEvent> {
   if (!res.ok || !res.body) {
     const body = await res.json().catch(() => ({}));
     throw new Error(body.detail ?? `request failed: ${res.status}`);

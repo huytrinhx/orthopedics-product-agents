@@ -35,7 +35,7 @@ from langgraph.types import Command
 from pydantic import BaseModel
 
 from agents.registry import get_workflow, list_workflows
-from auth.dependencies import get_current_user
+from auth.dependencies import get_current_user, require_admin
 from auth.repository import UserRecord
 from chat_threads.models import ChatCitationOut, ChatMessageOut, ChatThreadOut, ChatTranscriptOut
 from chat_threads.repository import (
@@ -113,6 +113,15 @@ class ChatResumeRequest(BaseModel):
     # unresolved (not the raw text) if nothing matches, rather than
     # recording an answer that isn't actually one of the real systems.
     human_input: str
+
+
+class ChatRerunRequest(BaseModel):
+    # The flagged AIMessage's own id (ticket 11's feedback is always keyed
+    # to an assistant turn) -- see _rerun_chat for how the actual question
+    # to re-ask is found from it.
+    original_thread_id: str
+    original_message_id: str
+    workflow_name: str
 
 
 def _sse(event: str, data: dict) -> str:
@@ -394,6 +403,80 @@ async def _resume_chat(
         _stream_graph(
             graph, workflow_name, body.thread_id, Command(resume=body.human_input), config, handler
         ),
+        media_type="text/event-stream",
+    )
+
+
+@router.post("/rerun")
+async def rerun_chat(
+    body: ChatRerunRequest,
+    request: Request,
+    admin: UserRecord = Depends(require_admin),
+) -> StreamingResponse:
+    """Ticket 15 (Eval tab): re-asks a flagged question against the current
+    code, in its real conversational context, from an admin's chosen
+    workflow -- not a fresh, isolated turn. Deliberately admin-gated rather
+    than owns_thread-checked: the flagged thread almost never belongs to the
+    admin doing the rerun, and reviewing any flagged item is exactly what
+    "admin" means here.
+
+    A rerun is a genuine new chat_threads row (rerun_of_message_id set) run
+    through the exact same graph/checkpointer/streaming machinery as any
+    other turn -- see chat_threads/repository.py's migration for why that
+    was chosen over a separate table. graph.aupdate_state seeds the new
+    thread's history with the *actual* prior messages (verified live: it
+    preserves their original ids rather than reassigning new ones, and a
+    normal invoke afterward still mints fresh ids for the new turn) --
+    cheap and exact, versus re-running every prior turn through a live LLM
+    call just to reconstruct context that's already sitting in the
+    checkpointer.
+    """
+    if body.workflow_name not in list_workflows():
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"Unknown workflow: {body.workflow_name}")
+
+    checkpointer = request.app.state.checkpointer
+    checkpoint_tuple = await checkpointer.aget_tuple(
+        {"configurable": {"thread_id": body.original_thread_id}}
+    )
+    if checkpoint_tuple is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Original thread not found")
+
+    messages = checkpoint_tuple.checkpoint["channel_values"].get("messages", [])
+    flagged_index = next((i for i, m in enumerate(messages) if m.id == body.original_message_id), None)
+    if flagged_index is None or flagged_index == 0 or messages[flagged_index - 1].type != "human":
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Flagged question not found in that thread")
+    question = messages[flagged_index - 1]
+    history = messages[: flagged_index - 1]
+
+    new_thread_id = _new_thread_id(str(admin.id))
+    await create_thread(
+        new_thread_id,
+        admin.id,
+        f"Rerun: {_title_from_message(question.content)}",
+        rerun_of_message_id=body.original_message_id,
+        workflow_name=body.workflow_name,
+    )
+
+    graph = get_workflow(body.workflow_name, checkpointer)
+    seed_config = {"configurable": {"thread_id": new_thread_id}}
+    if history:
+        await graph.aupdate_state(seed_config, {"messages": history})
+
+    handler, langfuse_config = new_callback_handler(
+        user_id=str(admin.id), session_id=new_thread_id, tags=[body.workflow_name, "rerun"]
+    )
+    config = {**seed_config, "recursion_limit": _RECURSION_LIMIT, **langfuse_config}
+    inputs = {
+        "messages": [HumanMessage(content=question.content)],
+        "query": question.content,
+        "user_id": str(admin.id),
+        "thread_id": new_thread_id,
+        "search_query": question.content,
+        "clarification_rounds": 0,
+        "clarification_reply": None,
+    }
+    return StreamingResponse(
+        _stream_graph(graph, body.workflow_name, new_thread_id, inputs, config, handler),
         media_type="text/event-stream",
     )
 

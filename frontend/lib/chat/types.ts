@@ -11,6 +11,7 @@ export interface ChatFeedback {
   message_id: string;
   thread_id: string;
   flagged: boolean;
+  resolved: boolean;
   scores: EvalScores;
   comment: string | null;
   submitted_by: string;

@@ -4,11 +4,16 @@
 
 **Blocked by:** 01 (Add Postgres migration tooling and a users table), 08 (Chat baseline workflow, end-to-end)
 
-**Status:** ready-for-agent
+**Status:** shelved (2026-09-05, grilling session), not deleted — see below.
 
-- [ ] `judge_answer(query, retrieved, answer)` calls an LLM to score faithfulness/relevance/style/citation and returns real `EvalScores`, not `NotImplementedError`
-- [ ] `run_eval(workflow_name, dataset_path)` loads a JSONL golden dataset, runs each example through the named registered workflow, scores it with `judge_answer`, and returns per-example + aggregate results
-- [ ] Running this via CLI against `backend/evals/golden_datasets/mis.jsonl` (or `reflex.jsonl`) with `deterministic` produces real, sensible scores
-- [ ] The existing CI job (`.github/workflows/ci.yml`'s `evals` job, `--all-workflows`) still runs and doesn't fail purely because two of the three workflows remain unimplemented — skip or clearly report those rather than erroring the whole run
+- [x] `judge_answer(query, retrieved, answer)` calls an LLM to score faithfulness/relevance/style/citation and returns real `EvalScores`, not `NotImplementedError` — done organically over the session as a shared module (backend/agents/judge.py), used by every workflow's own self_eval node and the human feedback comparison, long before this ticket was ever picked up directly. This ticket's premise ("judge_answer doesn't work yet") was stale by the time it came up for grilling.
+- [ ] `run_eval(workflow_name, dataset_path)` -- still `NotImplementedError` (`backend/evals/harness.py`).
+- [ ] Everything else below -- not started.
 
-**Deferred to a future ticket:** the `evals` CI job runs against a fresh, empty Postgres/Neo4j (no ingested documents), so `deterministic` will honestly answer "context doesn't answer this" for every example — a smoke test, not a meaningful score. Once real documents are populated, a follow-up ticket should seed/ingest them into that CI environment so the job's scores are actually meaningful, not just non-crashing.
+**Why shelved:** grilled 2026-09-05 to scope the actual harness work, and the premise broke immediately: every workflow now has a real clarification-pause path (detect_intent's system disambiguation, resolve_synonyms' term-ambiguity check, self_eval's low-confidence gate) that can suspend a turn via `interrupt()` instead of ever producing an `answer`. A live rerun of `mis.jsonl` that same day (the "MIS Eval Reflection" artifact) hit this directly: 6 of 11 golden questions paused rather than answered. A batch harness scoring a static golden dataset needs a real, deliberate policy for "what does it mean to score a pause" (skip it? score the pause itself as right/wrong? fabricate a resume reply?) that didn't exist yet and isn't cheap to get right blind.
+
+Rather than build that policy speculatively, the session pivoted to a smaller, more immediately useful capability instead: ticket 15, rescoped the same day from "eval-dataset dashboard" into a feedback-rerun tool -- re-run one specific real (already-completed) flagged conversation against the current code, in its real context, sharing an admin's own live clarification answer if one comes up again. That sidesteps the "what does a golden-set pause even mean" problem entirely, since a rerun's clarification pauses are answered by a real person in the moment, not scored blind.
+
+**Revisit condition:** once there's a clear answer for how a batch/CI harness should treat a clarification pause (and, separately, once `evals/golden_datasets/build_dataset.py`'s `expected_question_type` is reconciled with `agents/question_types.py`'s canonical slugs -- a related, also-still-open mismatch, see that file's own docstring), this is worth picking back up. Until then, ticket 15's rerun tool covers the actual day-to-day need ("did this fix work") this ticket was meant to serve.
+
+**Deferred to a future ticket (unchanged from before):** the `evals` CI job runs against a fresh, empty Postgres/Neo4j (no ingested documents) with no `OPENAI_API_KEY` or DB services configured for that job at all (confirmed by reading `.github/workflows/ci.yml` directly during the grilling session) -- so `deterministic` couldn't even connect to a database today, let alone produce a meaningful score. Whoever eventually resumes this ticket needs to fix that job's config too, not just `run_eval` itself.

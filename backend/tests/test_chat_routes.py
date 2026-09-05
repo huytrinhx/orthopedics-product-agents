@@ -492,3 +492,162 @@ def test_a_long_first_message_is_truncated_into_the_thread_title():
 
     assert len(listing[0]["title"]) <= 61  # 60 chars + the "…" truncation marker
     assert listing[0]["title"].endswith("…")
+
+
+def test_rerun_requires_admin():
+    with TestClient(app) as client:
+        token = _user_token(client)
+        res = client.post(
+            "/chat/rerun",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "original_thread_id": f"anyone:{uuid.uuid4().hex}",
+                "original_message_id": str(uuid.uuid4()),
+                "workflow_name": "deterministic",
+            },
+        )
+    assert res.status_code == 403
+
+
+def test_rerun_unknown_workflow_404s(monkeypatch):
+    with TestClient(app) as client:
+        admin_email = _unique_email()
+        monkeypatch.setenv("ADMIN_EMAILS", admin_email)
+        admin_token = client.post(
+            "/auth/signup", json={"email": admin_email, "password": "correct horse battery"}
+        ).json()["access_token"]
+        res = client.post(
+            "/chat/rerun",
+            headers={"Authorization": f"Bearer {admin_token}"},
+            json={
+                "original_thread_id": f"anyone:{uuid.uuid4().hex}",
+                "original_message_id": str(uuid.uuid4()),
+                "workflow_name": "not-a-real-workflow",
+            },
+        )
+    assert res.status_code == 404
+
+
+@needs_openai_key
+def test_rerun_missing_flagged_message_404s(monkeypatch):
+    """The original thread is real, but the message_id doesn't exist in
+    it -- a stale/mistyped id shouldn't 500."""
+    with TestClient(app) as client:
+        admin_email = _unique_email()
+        monkeypatch.setenv("ADMIN_EMAILS", admin_email)
+        admin_token = client.post(
+            "/auth/signup", json={"email": admin_email, "password": "correct horse battery"}
+        ).json()["access_token"]
+        admin_headers = {"Authorization": f"Bearer {admin_token}"}
+
+        original = client.post(
+            "/chat/deterministic/stream",
+            headers=admin_headers,
+            json={"message": "What torque should I use on a REFLEX HYBRID locking screw?"},
+        )
+        original_thread_id = dict(_sse_events(original.text))["thread"]["thread_id"]
+
+        res = client.post(
+            "/chat/rerun",
+            headers=admin_headers,
+            json={
+                "original_thread_id": original_thread_id,
+                "original_message_id": str(uuid.uuid4()),
+                "workflow_name": "deterministic",
+            },
+        )
+    assert res.status_code == 404
+
+
+@needs_openai_key
+def test_rerun_replays_history_and_stays_out_of_the_admins_own_sidebar(monkeypatch):
+    """Ticket 15's core loop, end to end: a real 2-turn conversation, the
+    second answer flagged, then an admin reruns it. Asserts the rerun (a)
+    actually happened (a "done" event came back), (b) replayed the first
+    turn's real content into the new thread rather than starting blank, (c)
+    never touches the original rep's thread, (d) doesn't show up in the
+    admin's own GET /chat/threads sidebar despite being a real chat_threads
+    row, and (e) is listed by GET /feedback/{message_id}/reruns.
+
+    CLARIFICATION_SCORE_THRESHOLD forced unreachable for the same reason as
+    the sidebar/feedback tests above -- this test is about the rerun
+    mechanism, not self_eval's judgment call on these specific questions.
+    """
+    monkeypatch.setattr(det, "CLARIFICATION_SCORE_THRESHOLD", -1.0)
+    with TestClient(app) as client:
+        admin_email = _unique_email()
+        monkeypatch.setenv("ADMIN_EMAILS", admin_email)
+        admin_token = client.post(
+            "/auth/signup", json={"email": admin_email, "password": "correct horse battery"}
+        ).json()["access_token"]
+        admin_headers = {"Authorization": f"Bearer {admin_token}"}
+
+        rep_token = _user_token(client)
+        rep_headers = {"Authorization": f"Bearer {rep_token}"}
+
+        first_message = "What torque should I use on a REFLEX HYBRID locking screw?"
+        first = client.post(
+            "/chat/deterministic/stream", headers=rep_headers, json={"message": first_message}
+        )
+        original_thread_id = dict(_sse_events(first.text))["thread"]["thread_id"]
+
+        second = client.post(
+            "/chat/deterministic/stream",
+            headers=rep_headers,
+            json={"message": "And in inch-pounds?", "thread_id": original_thread_id},
+        )
+        flagged_message_id = dict(_sse_events(second.text))["done"]["message_id"]
+
+        flag = client.post(
+            "/feedback/",
+            headers=rep_headers,
+            json={
+                "thread_id": original_thread_id,
+                "message_id": flagged_message_id,
+                "flagged": True,
+                "scores": {},
+            },
+        )
+        assert flag.status_code == 200
+
+        rerun = client.post(
+            "/chat/rerun",
+            headers=admin_headers,
+            json={
+                "original_thread_id": original_thread_id,
+                "original_message_id": flagged_message_id,
+                "workflow_name": "deterministic",
+            },
+        )
+        rerun_events = dict(_sse_events(rerun.text))
+        assert "done" in rerun_events
+        rerun_thread_id = rerun_events["thread"]["thread_id"]
+        assert rerun_thread_id != original_thread_id
+
+        rerun_transcript = client.get(
+            f"/chat/threads/{rerun_thread_id}", headers=admin_headers
+        ).json()
+        admin_sidebar = client.get("/chat/threads", headers=admin_headers).json()
+        reruns_for_message = client.get(
+            f"/feedback/{flagged_message_id}/reruns", headers=admin_headers
+        ).json()
+
+        # The original rep's own thread must be completely untouched.
+        original_transcript = client.get(
+            f"/chat/threads/{original_thread_id}", headers=rep_headers
+        ).json()
+
+    assert original_transcript["messages"][0]["content"] == first_message
+    assert len(original_transcript["messages"]) == 4  # unchanged by the rerun
+
+    roles = [m["role"] for m in rerun_transcript["messages"]]
+    contents = [m["content"] for m in rerun_transcript["messages"]]
+    # Replayed history (first turn) followed by a freshly generated answer
+    # to the *second* turn's question -- not a blank-context rerun.
+    assert roles[0] == "user" and contents[0] == first_message
+    assert roles[-2] == "user" and contents[-2] == "And in inch-pounds?"
+    assert roles[-1] == "assistant"
+
+    assert rerun_thread_id not in [t["thread_id"] for t in admin_sidebar]
+    assert [r["thread_id"] for r in reruns_for_message] == [rerun_thread_id]
+    assert reruns_for_message[0]["workflow_name"] == "deterministic"

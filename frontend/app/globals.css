@@ -941,3 +941,118 @@ tr:last-child td {
   outline: none;
   border-color: var(--verify);
 }
+
+/* ---------------- Eval tab (ticket 15) ---------------- */
+
+.flagged-list {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.flagged-item {
+  border: 1px solid var(--steel-line);
+  border-radius: 4px;
+  padding: 20px;
+  background: var(--surface);
+}
+
+.flagged-item-resolved {
+  opacity: 0.65;
+}
+
+.flagged-item-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+}
+
+.flagged-item-qa {
+  flex: 1;
+  min-width: 0;
+}
+
+.flagged-item-question {
+  font-weight: 600;
+  margin: 0 0 6px;
+}
+
+.flagged-item-answer {
+  color: var(--ink-soft);
+  margin: 0;
+  font-size: 0.92rem;
+  white-space: pre-wrap;
+}
+
+.flagged-resolved-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.85rem;
+  color: var(--ink-soft);
+  white-space: nowrap;
+  flex: 0 0 auto;
+}
+
+.flagged-item-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  margin-top: 14px;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  color: var(--steel);
+}
+
+.flagged-item-comment {
+  font-family: var(--font-body);
+  font-style: italic;
+}
+
+.flagged-item-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.flagged-workflow-select {
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  padding: 6px 10px;
+  border: 1px solid var(--steel-line);
+  border-radius: 3px;
+  background: var(--surface);
+}
+
+.rerun-attempt {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px dashed var(--steel-line);
+}
+
+.rerun-attempt-label {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  color: var(--steel);
+  margin-bottom: 10px;
+}
+
+.rerun-history {
+  display: flex;
+  flex-direction: column;
+}
+
+.rerun-conversation {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.rerun-reply-row.chat-input-row {
+  position: static;
+  bottom: auto;
+  margin-top: 8px;
+}

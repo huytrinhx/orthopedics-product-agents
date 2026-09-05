@@ -18,6 +18,7 @@ class FeedbackRecord:
     message_id: str
     thread_id: str
     flagged: bool
+    resolved: bool
     faithfulness: float | None
     relevance: float | None
     style: float | None
@@ -29,7 +30,7 @@ class FeedbackRecord:
 
 
 _COLUMNS = (
-    "message_id, thread_id, flagged, faithfulness, relevance, style, citation, "
+    "message_id, thread_id, flagged, resolved, faithfulness, relevance, style, citation, "
     "comment, submitted_by, created_at, updated_at"
 )
 
@@ -39,6 +40,7 @@ def to_feedback_out(record: FeedbackRecord) -> FeedbackOut:
         message_id=record.message_id,
         thread_id=record.thread_id,
         flagged=record.flagged,
+        resolved=record.resolved,
         scores={
             k: v
             for k, v in {
@@ -124,3 +126,39 @@ async def get_feedback_for_thread(thread_id: str) -> dict[str, FeedbackRecord]:
             return {row[0]: FeedbackRecord(*row) for row in rows}
     finally:
         await conn.close()
+
+
+async def list_flagged_feedback() -> list[FeedbackRecord]:
+    """Every flagged feedback item, newest first -- the Eval tab's (ticket
+    15) main list. Unfiltered by `resolved` on purpose: the admin toggles
+    that in the UI, not by hiding rows here, so a resolved item stays
+    visible (and its rerun history intact) rather than disappearing.
+    Uses the partial `feedback_flagged_idx` index (migration
+    5d95b6897886), created ahead of this exact need.
+    """
+    conn = await get_connection()
+    try:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                f"SELECT {_COLUMNS} FROM feedback WHERE flagged ORDER BY created_at DESC"
+            )
+            rows = await cur.fetchall()
+            return [FeedbackRecord(*row) for row in rows]
+    finally:
+        await conn.close()
+
+
+async def set_resolved(message_id: str, resolved: bool) -> FeedbackRecord | None:
+    conn = await get_connection()
+    try:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                f"UPDATE feedback SET resolved = %s, updated_at = now() "
+                f"WHERE message_id = %s RETURNING {_COLUMNS}",
+                (resolved, message_id),
+            )
+            row = await cur.fetchone()
+        await conn.commit()
+    finally:
+        await conn.close()
+    return FeedbackRecord(*row) if row else None

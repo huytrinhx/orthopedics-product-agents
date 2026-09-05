@@ -15,6 +15,19 @@ class ChatThreadOut(BaseModel):
     updated_at: datetime
 
 
+class RerunOut(BaseModel):
+    """One rerun attempt of a flagged feedback message (ticket 15) -- the
+    Eval tab lists these, newest first, nested under the flagged item.
+    thread_id is what the frontend passes to the existing GET
+    /chat/threads/{id} and POST /{workflow_name}/resume endpoints to view/
+    continue it -- a rerun is a real thread, not a separate read path.
+    """
+
+    thread_id: str
+    workflow_name: str | None
+    created_at: datetime
+
+
 class ChatCitationOut(BaseModel):
     """A resolved citation -- backend/api/routes/chat.py's _resolve_citations
     turns a raw "{document_id}#{chunk_index}" string (the graph state's

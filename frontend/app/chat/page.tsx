@@ -22,47 +22,14 @@ import Link from "next/link";
 import ReactMarkdown from "react-markdown";
 import { getChatThread, listChatThreads, resumeChat, streamChat } from "../../lib/chat/api";
 import { useAuth } from "../../lib/auth-context";
+import { STATUS_LABELS, citationLabel, stripCitationMarkers } from "../../lib/chat/format";
 import type { ChatCitation, ChatMessage, ChatStreamEvent, ChatThread } from "../../lib/chat/types";
 import { getDocumentChunks } from "../../lib/documents/api";
 import type { DocumentChunk } from "../../lib/documents/types";
 import { MessageFeedback } from "./message-feedback";
 
-const STATUS_LABELS: Record<string, string> = {
-  detect_intent: "Understanding your question…",
-  resolve_synonyms: "Checking terminology…",
-  hybrid_retrieve: "Searching documents…",
-  rerank: "Ranking results…",
-  generate: "Writing answer…",
-  self_eval: "Checking answer quality…",
-  request_clarification: "Preparing a follow-up question…",
-  finalize: "Finishing up…",
-};
-
 function uid(): string {
   return Math.random().toString(36).slice(2);
-}
-
-// Mirrors backend/agents/citations.py's _CITATION_PATTERN exactly -- the
-// model writes these `[document-id#chunk-index]` markers inline as its
-// citation convention (see agents/workflows/deterministic.py's/
-// react_agent.py's system prompts), but a raw Postgres UUID means nothing
-// to a rep reading the answer. The chat-citations chips below the bubble
-// (keyed off the same `m.citations` extract_citations already parsed out)
-// are the actual clickable source list, so the inline marker is just
-// stripped from what's rendered, not shown as literal bracketed text.
-const _CITATION_DISPLAY_PATTERN =
-  /\s?\[[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}#\d+\]/g;
-
-function stripCitationMarkers(content: string): string {
-  return content.replace(_CITATION_DISPLAY_PATTERN, "");
-}
-
-// Two citations into the same document previously rendered as identical
-// chips (filename only) -- a rep can't tell "the dosing table" apart from
-// "the contraindications section" of the same PDF without clicking both.
-// Falls back to the chunk's position when it has no heading of its own.
-function citationLabel(c: ChatCitation): string {
-  return c.section_title ? `${c.filename} — ${c.section_title}` : `${c.filename} (#${c.chunk_index + 1})`;
 }
 
 function formatThreadDate(iso: string): string {
@@ -195,17 +162,13 @@ export default function ChatPage() {
     // turn, each one streaming full draft text -- react_agent's tool-
     // calling loop also revisits "generate" repeatedly, but its
     // intermediate rounds are pure tool calls with no text content, so
-    // they never had this problem. The distinguishing signal isn't "which
-    // generate call is this" (both workflows differ there), it's whether
-    // self_eval has already run THIS turn: only deterministic's retry
-    // path ever sends generate back through self_eval and then a second
-    // "generate" status. Once that's happened, a discarded draft's tokens
-    // are no longer worth showing live -- streaming them (even with the
-    // per-status content reset already in place) meant the user watched a
-    // full wrong answer type out, vanish, and get replaced, which read as
-    // "it answered three times." Suppressing live tokens for a retried
-    // draft and revealing the accepted one only once "done" arrives fixes
-    // that without losing live streaming for the common (no-retry) case.
+    // they never had this problem. No draft is worth showing live until
+    // self_eval has accepted it -- streaming it (even with the per-status
+    // content reset already in place) meant the user watched a full
+    // possibly-wrong answer type out, then either vanish and get replaced
+    // (a retry) or just sit there having never been vetted. So every
+    // "generate" pass suppresses live tokens; the accepted answer is
+    // revealed only once "done" (or "clarification") arrives.
     let sawSelfEval = false;
     let suppressTokens = false;
     for await (const evt of gen) {
@@ -217,7 +180,7 @@ export default function ChatPage() {
           sawSelfEval = true;
         }
         const isRetriedDraft = evt.data.node === "generate" && sawSelfEval;
-        suppressTokens = isRetriedDraft;
+        suppressTokens = evt.data.node === "generate";
         updateMessage(assistantId, {
           status: isRetriedDraft ? "Refining the answer…" : STATUS_LABELS[evt.data.node] ?? evt.data.node,
           ...(evt.data.node === "generate" ? { content: "" } : {}),
