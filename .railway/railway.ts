@@ -20,10 +20,7 @@
 // (node_modules/railway/dist/index-C3uk0ruc.d.ts's DeployConfig/BuildConfig/
 // IntentServiceConfig), not just doc prose.
 //
-// STATUS (2026-09-06): deploys are currently failing on this project and
-// the root cause is NOT yet found -- do not assume this file is done.
-//
-// Two real bugs were found and fixed while migrating off railway.toml
+// Three real bugs were found and fixed while migrating off railway.toml
 // (against the live ortho-mate project, via `railway config plan`/`apply`,
 // each verified rather than guessed):
 //   1. An early draft carried `start: ""` over verbatim from `railway
@@ -40,21 +37,49 @@
 //      project and was correctly declined by this session's own safety
 //      classifier both times it was attempted). railway.toml was deleted
 //      instead, since every field it set is already mirrored here.
-//
-// BUT: after both fixes, with railway.toml gone, start unset, and every
-// field here applied live, a fresh `railway redeploy --from-source` still
-// failed the same way -- build succeeds every time (confirmed via
-// `railway logs --build`), then deploy produces zero output in
-// `--deployment`, `--build`, or `--http` logs and is marked FAILED within
-// seconds. This has now happened four times across different field
-// combinations (with/without preDeployCommand, with/without
-// railway.toml), so the cause is something this session couldn't isolate
-// via CLI logs alone. Next step: check the Railway dashboard's
-// Deployments tab directly for deployment b52dc8b3 (or whichever is
-// latest) -- it may show a config-validation error the CLI's log commands
-// don't surface. The service is NOT down: the last deployment from before
-// this migration (commit bd6e1ef, pre-IaC) is still active and serving
-// https://orthopedics-product-agents-production.up.railway.app.
+// PRE-DEPLOY FAILURE INVESTIGATION (2026-09-06) -- unresolved, root cause
+// narrowed but not fixed. Railway support's own diagnosis: "the pre-deploy
+// command... fails within seconds and produces no captured log output."
+// What was actually checked, in order:
+//   - Theory: `cd` is a shell builtin, not a real executable, and
+//     deploy.preDeployCommand's single array element gets exec'd directly
+//     with no shell -- `docker run --entrypoint "cd backend && alembic
+//     upgrade head" <image>` reproduces an instant, log-free failure
+//     locally that superficially matches. Attempted fix: an explicit
+//     3-element argv array, `["sh", "-c", "<command>"]`. This never
+//     actually applied -- `railway config apply --json` revealed
+//     deploy.preDeployCommand's schema caps the array at <=1 item
+//     ("Too big: expected array to have <=1 items"), so every "successful"
+//     apply of that shape was silently rejected server-side and the field
+//     stayed at its old value the whole time. Reverted to the single-string
+//     form below, which is schema-valid -- meaning the shell-exec theory,
+//     while plausible, is NOT confirmed, since a single string is what
+//     Railway's own schema expects (implying it likely does get some form
+//     of shell handling internally; the local Docker repro used a
+//     different exec path than Railway's own and may not be a faithful
+//     simulation of it after all).
+//   - Directly tested whether the command and credentials work at all:
+//     `railway run .venv/bin/alembic upgrade head` (from backend/, which
+//     injects this project's real production env vars into a LOCAL
+//     process -- safe, since running this migration is the intended,
+//     expected behavior, not a novel action) ran cleanly against the real
+//     production Supabase host (aws-0-us-east-2.pooler.supabase.com) and
+//     applied all 11 migrations from scratch. This was a significant,
+//     unexpected finding: the production database had NO schema at all
+//     before this -- meaning no prior deploy's pre-deploy step, under
+//     either the old releaseCommand or the new preDeployCommand, had ever
+//     successfully migrated it. `/health` (this file's own healthcheck
+//     path) is a static `{"status": "ok"}` with no DB check, so its 200
+//     response never actually proved otherwise.
+//   - This rules out the command, credentials, and network path *from
+//     outside Railway's infrastructure* as the cause. What remains
+//     unconfirmed is whether Railway's own pre-deploy execution
+//     environment can reach Supabase at all, or fails for some other
+//     platform-side reason specific to their (still-new) IaC deploy path.
+//     That's not diagnosable from here -- next step is genuinely what
+//     Railway's own error message suggests: their support, or the
+//     dashboard's deployment detail view, which may show more than the
+//     CLI's `railway logs` does.
 //
 // restartPolicyType below is also a known, separate gap as of CLI
 // v5.43.1: `railway config apply` accepts it without error but the value
@@ -75,6 +100,15 @@ export default defineRailway(() => {
     replicas: { "us-east4-eqdc4a": 1 },
     healthcheck: "/health",
     healthcheckTimeout: 100,
+    // A 3-element argv array (["sh","-c","<cmd>"]) was tried here as a fix
+    // for a shell-exec theory that turned out to be wrong -- `railway
+    // config apply --json` revealed the REAL reason it never took effect:
+    // deploy.preDeployCommand's schema caps the array at <=1 item
+    // ("Too big: expected array to have <=1 items"), so that attempt was
+    // silently rejected by validation the whole time, never actually
+    // applied. Reverted to the single-string form, which is schema-valid
+    // and was already what's been failing. See the file-level comment for
+    // where the investigation landed instead.
     preDeploy: "cd backend && alembic upgrade head",
     deploy: {
       restartPolicyType: "ON_FAILURE",
