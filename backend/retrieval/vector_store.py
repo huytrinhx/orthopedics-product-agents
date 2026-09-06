@@ -72,14 +72,15 @@ class VectorStoreClient:
                     """
                     INSERT INTO chunks
                         (document_id, chunk_index, content, section_title,
-                         embedding, system_id, document_type_id)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                         page_number, embedding, system_id, document_type_id)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                     """,
                     (
                         document_id,
                         chunk["chunk_index"],
                         chunk["content"],
                         chunk.get("section_title"),
+                        chunk.get("page_number"),
                         chunk["embedding"],
                         chunk.get("system_id"),
                         chunk.get("document_type_id"),

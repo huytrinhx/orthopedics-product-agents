@@ -921,6 +921,21 @@ tr:last-child td {
   color: var(--ink);
 }
 
+.chat-pdf-viewer {
+  display: flex;
+  justify-content: center;
+}
+
+/* Same highlight treatment as .chat-doc-chunk-active, applied to the
+   matched span(s) in pdf.js's text layer -- that layer's text is already
+   transparent (it sits over the real rendered glyphs purely for
+   selection), so a background color here reads as a highlight over the
+   canvas underneath it. */
+.chat-pdf-highlight {
+  background: var(--verify-wash);
+  border-radius: 2px;
+}
+
 .chat-input-row {
   display: flex;
   gap: 12px;

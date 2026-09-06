@@ -39,6 +39,19 @@ export async function getDocumentChunks(documentId: string): Promise<DocumentChu
   return request(`/documents/${documentId}/chunks`);
 }
 
+// GET /documents/{id}/file needs an Authorization header, which a bare
+// <iframe src>/react-pdf `file={url}` can't attach -- fetched as a Blob and
+// handed to react-pdf's `file` prop instead (ticket 26).
+export async function getDocumentFile(documentId: string): Promise<Blob> {
+  const res = await fetch(`${API_BASE}/documents/${documentId}/file`, {
+    headers: authHeaders(),
+  });
+  if (!res.ok) {
+    throw new Error(`request failed: ${res.status}`);
+  }
+  return res.blob();
+}
+
 export async function deleteDocument(documentId: string): Promise<void> {
   const res = await fetch(`${API_BASE}/documents/${documentId}`, {
     method: "DELETE",

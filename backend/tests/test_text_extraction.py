@@ -7,7 +7,7 @@ against a real parsed document.
 import pytest
 from fpdf import FPDF
 
-from ingestion.text_extraction import UnsupportedDocumentFormat, extract_text
+from ingestion.text_extraction import PAGE_MARKER_TEMPLATE, UnsupportedDocumentFormat, extract_text
 
 
 def test_extract_plain_text(tmp_path):
@@ -57,3 +57,38 @@ def test_extract_pdf_marks_larger_font_lines_as_headings(tmp_path):
     assert "# Sterilization" in lines
     assert "Use the 4.0mm screw for standard bone density." in lines
     assert "# Use the 4.0mm screw for standard bone density." not in text
+
+
+def test_extract_pdf_inserts_a_page_marker_before_each_page(tmp_path):
+    path = tmp_path / "brochure.pdf"
+    _build_pdf(path)
+
+    text = extract_text(path, "brochure.pdf")
+
+    assert PAGE_MARKER_TEMPLATE.format(page_number=1) in text
+    marker_index = text.index(PAGE_MARKER_TEMPLATE.format(page_number=1))
+    heading_index = text.index("# Sizing Guide")
+    assert marker_index < heading_index
+
+
+def test_extract_pdf_marks_a_second_page_with_a_higher_page_number(tmp_path):
+    path = tmp_path / "two-page.pdf"
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_font("Helvetica", size=11)
+    pdf.multi_cell(0, 8, "Page one body text.")
+    pdf.add_page()
+    pdf.set_font("Helvetica", size=11)
+    pdf.multi_cell(0, 8, "Page two body text.")
+    pdf.output(str(path))
+
+    text = extract_text(path, "two-page.pdf")
+
+    assert PAGE_MARKER_TEMPLATE.format(page_number=1) in text
+    assert PAGE_MARKER_TEMPLATE.format(page_number=2) in text
+    assert text.index(PAGE_MARKER_TEMPLATE.format(page_number=1)) < text.index(
+        "Page one body text."
+    )
+    assert text.index(PAGE_MARKER_TEMPLATE.format(page_number=2)) < text.index(
+        "Page two body text."
+    )

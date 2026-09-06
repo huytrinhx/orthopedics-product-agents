@@ -9,11 +9,27 @@ signal at all (chunking falls back to paragraph boundaries there).
 Shared by both ingestion legs (backend/documents/service.py calls this once
 per document): the graph leg's entity extraction and this ticket's chunking
 + embedding both start from the same extracted text.
+
+Ticket 26: a PDF's page boundaries are threaded through as inline marker
+paragraphs (ingestion/chunking.py's PAGE_MARKER_PATTERN) rather than
+changing this function's return type to something richer -- extract_text's
+plain-`str` signature is depended on by both ingestion legs
+(documents/service.py calls it once and hands the same string to each), and
+only the vector leg (chunking) actually needs page attribution; the graph
+leg (entity extraction) strips the markers back out before using the text
+(ingestion/pipeline.py's ingest_document) rather than ever seeing them.
 """
 import statistics
 from pathlib import Path
 
 import pdfplumber
+
+# A blank-line-delimited paragraph of exactly this shape, inserted before
+# each PDF page's own text -- ingestion/chunking.py parses these out to
+# attribute a page number to every chunk. Plain ASCII (safe in a Postgres
+# text column and any JSON payload, unlike a NUL or other control
+# character) and deliberately unlikely to collide with real document text.
+PAGE_MARKER_TEMPLATE = "@@ORTHOMATE_PAGE_MARKER_{page_number}@@"
 
 # A line's font size must exceed the page's median body-text size by more
 # than this multiplier to count as a heading. Font-size-based rather than
@@ -38,20 +54,23 @@ def extract_text(storage_path: str | Path, filename: str) -> str:
 
 
 def _extract_pdf(storage_path: str | Path) -> str:
-    pages: list[str] = []
+    parts: list[str] = []
     with pdfplumber.open(storage_path) as pdf:
-        for page in pdf.pages:
+        for page_number, page in enumerate(pdf.pages, start=1):
             lines = _lines_with_font_size(page)
             if not lines:
                 continue
             body_size = statistics.median(size for _, size in lines)
-            pages.append(
-                "\n".join(
-                    f"# {text}" if size > body_size * _HEADING_SIZE_RATIO else text
-                    for text, size in lines
-                )
+            page_text = "\n".join(
+                f"# {text}" if size > body_size * _HEADING_SIZE_RATIO else text
+                for text, size in lines
             )
-    return "\n\n".join(pages)
+            # Its own blank-line-delimited paragraph (not tacked onto
+            # page_text's first line) so chunking.py's paragraph splitter
+            # isolates it cleanly regardless of where headings fall.
+            parts.append(PAGE_MARKER_TEMPLATE.format(page_number=page_number))
+            parts.append(page_text)
+    return "\n\n".join(parts)
 
 
 def _lines_with_font_size(page) -> list[tuple[str, float]]:

@@ -12,92 +12,187 @@ Each section's paragraphs are then packed into ~800-token windows (tiktoken,
 matching text-embedding-3-small's token accounting) with a 100-token
 overlap; a single paragraph that alone exceeds the window budget is
 token-windowed on its own.
+
+Ticket 26: a PDF's text also carries text_extraction.py's page-marker
+paragraphs (PAGE_MARKER_PATTERN below) -- consumed here to tag every real
+paragraph with the page it came from, so each output chunk can carry the
+page its content *starts* on (never split at a page boundary -- a window
+that starts mid-page and bleeds onto the next keeps the starting page's
+number, which is what a "jump to this page" viewer actually needs). Plain
+`.txt`/`.md` text has no markers at all, so every paragraph there is
+untagged (`page_number: None`) exactly as before this ticket.
+
+Page tagging is done as a single top-to-bottom pass over the *whole*
+document (`_tag_lines_with_pages`), before section-splitting -- not
+per-section. A PDF page very often starts with a heading as its first real
+content line (e.g. "# Preparation & Insertion"), which would otherwise
+split a page's marker from that page's own content into two different
+`_split_sections()` sections (the marker landing in the section *before*
+the heading), silently losing the page tag for everything the marker was
+meant to describe. Tagging globally first means the marker/heading order
+in the raw text no longer matters.
 """
+import re
+
 import tiktoken
 
 from config import tiktoken_cache  # noqa: F401  (sets TIKTOKEN_CACHE_DIR)
+from ingestion.text_extraction import PAGE_MARKER_TEMPLATE
 
 DEFAULT_CHUNK_SIZE = 800
 DEFAULT_OVERLAP = 100
 
 _ENCODING = tiktoken.get_encoding("cl100k_base")
 
+# Built from the same template text_extraction.py formats with, so the two
+# modules can never drift apart on what a page marker looks like.
+PAGE_MARKER_PATTERN = re.compile(
+    "^" + re.escape(PAGE_MARKER_TEMPLATE).replace(r"\{page_number\}", r"(\d+)") + "$"
+)
+
+_Line = tuple[str, int | None]
+_Paragraph = tuple[str, int | None]
+
 
 def chunk_document(
     text: str, chunk_size: int = DEFAULT_CHUNK_SIZE, overlap: int = DEFAULT_OVERLAP
 ) -> list[dict]:
+    tagged_lines = _tag_lines_with_pages(text)
     chunks: list[dict] = []
     index = 0
-    for title, body in _split_sections(text):
-        paragraphs = [p.strip() for p in body.split("\n\n") if p.strip()]
+    for title, body_lines in _split_sections(tagged_lines):
+        paragraphs = _group_into_paragraphs(body_lines)
         if not paragraphs:
             continue
-        for window in _pack_paragraphs(paragraphs, chunk_size, overlap):
-            chunks.append({"chunk_index": index, "content": window, "section_title": title})
+        for window, page_number in _pack_paragraphs(paragraphs, chunk_size, overlap):
+            chunks.append(
+                {
+                    "chunk_index": index,
+                    "content": window,
+                    "section_title": title,
+                    "page_number": page_number,
+                }
+            )
             index += 1
     return chunks
 
 
-def _split_sections(text: str) -> list[tuple[str | None, str]]:
-    lines = text.splitlines()
-    if not any(line.startswith("# ") for line in lines):
-        return [(None, text)]
+def strip_page_markers(text: str) -> str:
+    """Removes text_extraction.py's page-marker paragraphs -- for a
+    consumer (ingestion/pipeline.py's entity-extraction leg) that wants the
+    document's real content without this module's internal page-tracking
+    annotation leaking into an LLM prompt.
+    """
+    kept = [p for p in text.split("\n\n") if not PAGE_MARKER_PATTERN.match(p.strip())]
+    return "\n\n".join(kept)
 
-    sections: list[tuple[str | None, str]] = []
+
+def _tag_lines_with_pages(text: str) -> list[_Line]:
+    """One global top-to-bottom pass over every line, carrying the most
+    recently seen page marker forward -- independent of where
+    `_split_sections` will later cut the text into sections. Marker lines
+    themselves are dropped here (not just filtered downstream).
+    """
+    current_page: int | None = None
+    tagged: list[_Line] = []
+    for line in text.splitlines():
+        match = PAGE_MARKER_PATTERN.match(line.strip())
+        if match:
+            current_page = int(match.group(1))
+            continue
+        tagged.append((line, current_page))
+    return tagged
+
+
+def _split_sections(tagged_lines: list[_Line]) -> list[tuple[str | None, list[_Line]]]:
+    if not any(line.startswith("# ") for line, _ in tagged_lines):
+        return [(None, tagged_lines)]
+
+    sections: list[tuple[str | None, list[_Line]]] = []
     title: str | None = None
-    body_lines: list[str] = []
-    for line in lines:
+    body: list[_Line] = []
+    for line, page in tagged_lines:
         if line.startswith("# "):
-            if body_lines:
-                sections.append((title, "\n".join(body_lines)))
+            if body:
+                sections.append((title, body))
             title = line[2:].strip()
-            body_lines = []
+            body = []
         else:
-            body_lines.append(line)
-    if body_lines:
-        sections.append((title, "\n".join(body_lines)))
+            body.append((line, page))
+    if body:
+        sections.append((title, body))
     return sections
 
 
-def _pack_paragraphs(paragraphs: list[str], chunk_size: int, overlap: int) -> list[str]:
-    windows: list[str] = []
-    current: list[str] = []
+def _group_into_paragraphs(tagged_lines: list[_Line]) -> list[_Paragraph]:
+    """Blank-line-delimited paragraph grouping (a run of one or more blank
+    lines separates paragraphs, matching the old `body.split("\\n\\n")`
+    behavior), tagging each paragraph with its *first* line's page.
+    """
+    paragraphs: list[_Paragraph] = []
+    current_lines: list[str] = []
+    current_page: int | None = None
+    for line, page in tagged_lines:
+        if line.strip() == "":
+            if current_lines:
+                paragraphs.append(("\n".join(current_lines), current_page))
+                current_lines = []
+            continue
+        if not current_lines:
+            current_page = page
+        current_lines.append(line)
+    if current_lines:
+        paragraphs.append(("\n".join(current_lines), current_page))
+    return paragraphs
+
+
+def _pack_paragraphs(
+    paragraphs: list[_Paragraph], chunk_size: int, overlap: int
+) -> list[_Paragraph]:
+    """Same windowing as before, now over (paragraph, page) pairs -- each
+    output window is tagged with its *first* paragraph's page number, since
+    that's the page the window's content starts on.
+    """
+    windows: list[_Paragraph] = []
+    current: list[_Paragraph] = []
     current_tokens = 0
 
-    for paragraph in paragraphs:
+    def flush() -> None:
+        if current:
+            windows.append(("\n\n".join(p for p, _ in current), current[0][1]))
+
+    for paragraph, page in paragraphs:
         tokens = _token_count(paragraph)
 
         if tokens > chunk_size:
-            if current:
-                windows.append("\n\n".join(current))
-                current, current_tokens = [], 0
-            windows.extend(_token_windows(paragraph, chunk_size, overlap))
+            flush()
+            current, current_tokens = [], 0
+            windows.extend((w, page) for w in _token_windows(paragraph, chunk_size, overlap))
             continue
 
         if current and current_tokens + tokens > chunk_size:
-            windows.append("\n\n".join(current))
+            flush()
             current = _overlap_tail(current, overlap)
-            current_tokens = sum(_token_count(p) for p in current)
+            current_tokens = sum(_token_count(p) for p, _ in current)
 
-        current.append(paragraph)
+        current.append((paragraph, page))
         current_tokens += tokens
 
-    if current:
-        windows.append("\n\n".join(current))
+    flush()
     return windows
 
 
-def _overlap_tail(paragraphs: list[str], overlap: int) -> list[str]:
+def _overlap_tail(paragraphs: list[_Paragraph], overlap: int) -> list[_Paragraph]:
     """The trailing paragraphs (in order) worth up to `overlap` tokens, to
     seed the next window with continuity from the one just closed.
     """
-    tail: list[str] = []
+    tail: list[_Paragraph] = []
     tokens = 0
-    for paragraph in reversed(paragraphs):
+    for item in reversed(paragraphs):
         if tail and tokens >= overlap:
             break
-        tail.insert(0, paragraph)
-        tokens += _token_count(paragraph)
+        tail.insert(0, item)
+        tokens += _token_count(item[0])
     return tail
 
 

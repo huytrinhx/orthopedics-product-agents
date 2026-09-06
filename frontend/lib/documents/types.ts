@@ -20,4 +20,7 @@ export interface DocumentChunk {
   chunk_index: number;
   content: string;
   section_title: string | null;
+  // The page this chunk's content starts on in the source PDF (ticket 26).
+  // null for non-PDF documents and for chunks indexed before this shipped.
+  page_number: number | null;
 }

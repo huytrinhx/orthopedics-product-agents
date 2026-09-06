@@ -31,3 +31,7 @@ class ChunkOut(BaseModel):
     chunk_index: int
     content: str
     section_title: str | None
+    # The page this chunk's content starts on, in the source PDF (ticket
+    # 26) -- None for non-PDF documents and for chunks written before this
+    # shipped (no backfill migration).
+    page_number: int | None

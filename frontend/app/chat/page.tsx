@@ -24,9 +24,14 @@ import { getChatThread, listChatThreads, resumeChat, streamChat } from "../../li
 import { useAuth } from "../../lib/auth-context";
 import { STATUS_LABELS, citationLabel, stripCitationMarkers } from "../../lib/chat/format";
 import type { ChatCitation, ChatMessage, ChatStreamEvent, ChatThread } from "../../lib/chat/types";
-import { getDocumentChunks } from "../../lib/documents/api";
+import { getDocumentChunks, getDocumentFile } from "../../lib/documents/api";
 import type { DocumentChunk } from "../../lib/documents/types";
 import { MessageFeedback } from "./message-feedback";
+import { PdfCitationViewer } from "./pdf-citation-viewer";
+
+function isPdfFilename(filename: string): boolean {
+  return filename.toLowerCase().endsWith(".pdf");
+}
 
 function uid(): string {
   return Math.random().toString(36).slice(2);
@@ -65,6 +70,13 @@ export default function ChatPage() {
   const [docPaneError, setDocPaneError] = useState<string | null>(null);
   const loadedDocumentIdRef = useRef<string | null>(null);
   const activeChunkRef = useRef<HTMLDivElement>(null);
+
+  // Ticket 26: the PDF file itself, fetched separately from its chunks
+  // (an authenticated Blob fetch, not a bare <iframe src> -- see
+  // lib/documents/api.ts's getDocumentFile) and only for .pdf citations.
+  const [docFileData, setDocFileData] = useState<{ data: Uint8Array } | null>(null);
+  const [docFileError, setDocFileError] = useState<string | null>(null);
+  const loadedFileDocumentIdRef = useRef<string | null>(null);
 
   const threadIdRef = useRef<string | undefined>(undefined);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -127,23 +139,52 @@ export default function ChatPage() {
     setDocChunks(null);
     setDocPaneError(null);
     loadedDocumentIdRef.current = null;
+    setDocFileData(null);
+    setDocFileError(null);
+    loadedFileDocumentIdRef.current = null;
   }
 
   async function openCitationPane(citation: ChatCitation) {
     setOpenCitation(citation);
-    if (loadedDocumentIdRef.current === citation.document_id) return; // already loaded, just re-scroll/highlight
-    setDocPaneLoading(true);
-    setDocPaneError(null);
-    try {
-      const chunks = await getDocumentChunks(citation.document_id);
-      loadedDocumentIdRef.current = citation.document_id;
-      setDocChunks(chunks);
-    } catch (err) {
-      setDocChunks(null);
-      setDocPaneError(err instanceof Error ? err.message : "Couldn't load that document");
-    } finally {
-      setDocPaneLoading(false);
+    const chunksAlreadyLoaded = loadedDocumentIdRef.current === citation.document_id;
+    const needsFile =
+      isPdfFilename(citation.filename) && loadedFileDocumentIdRef.current !== citation.document_id;
+
+    if (!chunksAlreadyLoaded) {
+      setDocPaneLoading(true);
+      setDocPaneError(null);
     }
+    if (needsFile) {
+      setDocFileData(null);
+      setDocFileError(null);
+    }
+
+    const chunksPromise = chunksAlreadyLoaded
+      ? Promise.resolve(null)
+      : getDocumentChunks(citation.document_id)
+          .then((chunks) => {
+            loadedDocumentIdRef.current = citation.document_id;
+            setDocChunks(chunks);
+          })
+          .catch((err) => {
+            setDocChunks(null);
+            setDocPaneError(err instanceof Error ? err.message : "Couldn't load that document");
+          })
+          .finally(() => setDocPaneLoading(false));
+
+    const filePromise = needsFile
+      ? getDocumentFile(citation.document_id)
+          .then((blob) => blob.arrayBuffer())
+          .then((buffer) => {
+            loadedFileDocumentIdRef.current = citation.document_id;
+            setDocFileData({ data: new Uint8Array(buffer) });
+          })
+          .catch((err) => {
+            setDocFileError(err instanceof Error ? err.message : "Couldn't load the PDF");
+          })
+      : Promise.resolve(null);
+
+    await Promise.all([chunksPromise, filePromise]);
   }
 
   function updateMessage(id: string, patch: Partial<ChatMessage>) {
@@ -431,7 +472,29 @@ export default function ChatPage() {
             </div>
             {docPaneLoading && <div className="empty-state">Loading document…</div>}
             {docPaneError && <p className="alert" role="alert">{docPaneError}</p>}
-            {docChunks && (
+            {docChunks && isPdfFilename(openCitation.filename) && (
+              <>
+                {docFileError && <p className="alert" role="alert">{docFileError}</p>}
+                {!docFileError && docFileData && (
+                  <PdfCitationViewer
+                    file={docFileData}
+                    pageNumber={
+                      docChunks.find((c) => c.chunk_index === openCitation.chunk_index)
+                        ?.page_number ?? 1
+                    }
+                    searchText={
+                      docChunks.find((c) => c.chunk_index === openCitation.chunk_index)
+                        ?.content ?? ""
+                    }
+                    onError={() => setDocFileError("This PDF couldn't be displayed.")}
+                  />
+                )}
+                {!docFileError && !docFileData && (
+                  <div className="empty-state">Loading PDF…</div>
+                )}
+              </>
+            )}
+            {docChunks && !isPdfFilename(openCitation.filename) && (
               <div className="chat-doc-pane-body">
                 {docChunks.map((chunk) => {
                   const isActive = chunk.chunk_index === openCitation.chunk_index;

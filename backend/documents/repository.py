@@ -117,6 +117,7 @@ class ChunkRecord:
     chunk_index: int
     content: str
     section_title: str | None
+    page_number: int | None
 
 
 async def list_chunks(document_id: uuid.UUID) -> list[ChunkRecord]:
@@ -131,7 +132,7 @@ async def list_chunks(document_id: uuid.UUID) -> list[ChunkRecord]:
     try:
         async with conn.cursor() as cur:
             await cur.execute(
-                "SELECT chunk_index, content, section_title FROM chunks "
+                "SELECT chunk_index, content, section_title, page_number FROM chunks "
                 "WHERE document_id = %s ORDER BY chunk_index",
                 (document_id,),
             )

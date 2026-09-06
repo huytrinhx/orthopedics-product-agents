@@ -18,7 +18,7 @@ rather than merged into one.
 import os
 import uuid
 
-from ingestion.chunking import chunk_document
+from ingestion.chunking import chunk_document, strip_page_markers
 from ingestion.embedding import embed_texts
 from ingestion.entity_extraction import extract_entities
 from retrieval.graph_client import get_graph_client
@@ -78,7 +78,7 @@ async def ingest_document(
         # attach prose facts to.
         return
 
-    for chunk in _split_for_extraction(text):
+    for chunk in _split_for_extraction(strip_page_markers(text)):
         for item in await extract_entities(chunk, known_parts=known_parts, known_trays=known_trays):
             if item["type"] == "differentiation":
                 await client.attach_differentiation(

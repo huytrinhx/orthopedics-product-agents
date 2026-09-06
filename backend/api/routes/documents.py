@@ -9,12 +9,14 @@ runs once an admin triggers it via POST /{document_id}/index (or re-tags
 the document), which kicks off backend/documents/service.py's background
 processing.
 """
+import mimetypes
 import os
 import uuid
 from pathlib import Path
 
 import psycopg
 from fastapi import APIRouter, BackgroundTasks, Depends, Form, HTTPException, UploadFile, status
+from fastapi.responses import FileResponse
 
 from auth.dependencies import get_current_user, require_admin
 from auth.repository import UserRecord
@@ -114,9 +116,34 @@ async def get_document_chunks(
     if await get_document(document_id) is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Document not found")
     return [
-        ChunkOut(chunk_index=c.chunk_index, content=c.content, section_title=c.section_title)
+        ChunkOut(
+            chunk_index=c.chunk_index,
+            content=c.content,
+            section_title=c.section_title,
+            page_number=c.page_number,
+        )
         for c in await list_chunks(document_id)
     ]
+
+
+@router.get("/{document_id}/file")
+async def get_document_file(
+    document_id: uuid.UUID, user: UserRecord = Depends(get_current_user)
+) -> FileResponse:
+    """Serves the original uploaded file's raw bytes -- backs the chat
+    citation viewer's PDF render (ticket 26), same any-authenticated-user
+    access level as /chunks above (see module docstring): a rep can already
+    read this document's extracted text via chat/citations, so reading the
+    original file it came from isn't a new exposure.
+    """
+    doc = await get_document(document_id)
+    if doc is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Document not found")
+    path = Path(doc.storage_path)
+    if not path.exists():
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Document file not found")
+    media_type = mimetypes.guess_type(doc.filename)[0] or "application/octet-stream"
+    return FileResponse(path, media_type=media_type, filename=doc.filename)
 
 
 @router.post("/{document_id}/index", response_model=DocumentOut)
