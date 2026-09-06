@@ -131,9 +131,11 @@ no CORS in production.
    `NEO4J_URI`/`NEO4J_USER`/`NEO4J_PASSWORD`, `JWT_SECRET` (a real random
    value — it falls back to an insecure dev default if unset), `ADMIN_EMAILS`
    (comma-separated; grants `is_admin`). Required only if Google sign-in is
-   used: `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET` plus a matching redirect
-   URI added in the Google Cloud Console (a dashboard step, not code — see
-   `auth/`). Optional: `OTEL_EXPORTER_OTLP_ENDPOINT`/`LANGFUSE_*`. Railway
+   used: `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET` and `GOOGLE_REDIRECT_URI`
+   (set to `https://<your-railway-domain>/auth/google/callback`) — that
+   exact URL must also be added as an authorized redirect URI on the OAuth
+   client in the Google Cloud Console (a dashboard step, not code — see
+   `auth/oauth.py`). Optional: `OTEL_EXPORTER_OTLP_ENDPOINT`/`LANGFUSE_*`. Railway
    injects `PORT` itself; don't set it. `NEXT_PUBLIC_API_BASE` and
    `FRONTEND_PUBLIC_URL` are local-dev-only (production is same-origin, see
    above) and should be left unset.

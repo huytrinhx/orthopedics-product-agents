@@ -15,8 +15,7 @@ USERINFO_URL = "https://openidconnect.googleapis.com/v1/userinfo"
 def _redirect_uri() -> str:
     # Must exactly match an authorized redirect URI on the Google Cloud
     # OAuth client (GOOGLE_CLIENT_ID) -- see README's Google OAuth setup note.
-    base = os.environ.get("OAUTH_REDIRECT_BASE_URL", "http://localhost:8000")
-    return f"{base}/auth/google/callback"
+    return os.environ.get("GOOGLE_REDIRECT_URI", "http://localhost:8000/auth/google/callback")
 
 
 def build_authorize_url(state: str) -> str:
