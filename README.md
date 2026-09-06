@@ -122,10 +122,13 @@ cut over (`railway.toml` is deleted). The root-level
 npm package (`railway-ts-sdk`) that `.railway/railway.ts` imports from —
 unrelated to `frontend/`'s own `package.json`.
 
-**Open issue — action required on every deploy that adds a migration:**
-the pre-deploy step (`alembic upgrade head`) currently fails silently on
-Railway (see `.railway/railway.ts`'s comments for the standing diagnosis).
-Until Railway resolves this, run the migration by hand after deploying:
+**Migrations run manually, not as a Railway pre-deploy step** —
+`.railway/railway.ts` intentionally sets no `preDeploy`. Railway's pre-deploy
+commands fail the whole deploy with no retry if they exit non-zero, and this
+one reliably did, for a cause not diagnosable from outside Railway's
+infrastructure (confirmed: same command/credentials succeed from a local
+`railway run`) — leaving it configured meant no deploy could ever succeed.
+**Action required after every deploy that adds a new migration:**
 
 ```bash
 cd backend

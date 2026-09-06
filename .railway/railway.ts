@@ -14,17 +14,11 @@
 // entirely. Hand-edit instead, and always run `railway config plan` before
 // `apply` to review the diff.
 //
-// OPEN ISSUES (as of 2026-09-06):
-//   - The pre-deploy step (preDeploy below) fails silently on every
-//     Railway deploy with no captured logs, cause not yet identified.
-//     ACTION: after any deploy that adds a migration, run
-//     `railway run .venv/bin/alembic upgrade head` from backend/ by hand
-//     (idempotent, safe to rerun) -- see README's "Deploying to Railway".
-//     If this recurs, escalate to Railway support with deployment IDs;
-//     it isn't reproducible locally (the command runs fine standalone).
-//   - restartPolicyType below doesn't reliably persist via `railway config
-//     apply`. ACTION: confirm "Restart Policy" reads On Failure in the
-//     Railway dashboard's service settings directly.
+// OPEN ISSUE (as of 2026-09-06): restartPolicyType below doesn't reliably
+// persist via `railway config apply`. ACTION: confirm "Restart Policy"
+// reads On Failure in the Railway dashboard's service settings directly.
+//
+// No preDeploy is set on purpose -- see the inline comment below.
 import { defineRailway, github, preserve, project, service } from "railway/iac";
 
 export default defineRailway(() => {
@@ -37,11 +31,12 @@ export default defineRailway(() => {
     replicas: { "us-east4-eqdc4a": 1 },
     healthcheck: "/health",
     healthcheckTimeout: 100,
-    // deploy.preDeployCommand only accepts a single-element array -- keep
-    // this as one plain string, not an argv array (["sh","-c",...] fails
-    // schema validation: "expected array to have <=1 items"). See the
-    // OPEN ISSUES note above -- this currently fails silently on deploy.
-    preDeploy: "cd backend && alembic upgrade head",
+    // No preDeploy: Railway's own docs confirm "If your command fails, it
+    // will not be retried and the deployment will not proceed" -- with the
+    // pre-deploy step broken (see README's "Deploying to Railway"), leaving
+    // it set means NO future deploy can ever succeed. Migrations are run by
+    // hand instead (`railway run .venv/bin/alembic upgrade head` from
+    // backend/) after any deploy that adds one.
     deploy: {
       restartPolicyType: "ON_FAILURE",
     },
