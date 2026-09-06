@@ -3,7 +3,11 @@
 # mounts frontend/out as static files). See README.md's "Deploying to
 # Railway" section.
 
-FROM node:20-slim AS frontend-build
+# node:22, not 20 -- react-pdf's pdfjs-dist (ticket 26) calls
+# Promise.withResolvers(), which doesn't exist before Node 21. Node 20
+# builds fine but crashes prerendering /chat with "TypeError:
+# Promise.withResolvers is not a function".
+FROM node:22-slim AS frontend-build
 WORKDIR /app/frontend
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci
