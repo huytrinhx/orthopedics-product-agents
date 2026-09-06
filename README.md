@@ -116,17 +116,20 @@ host and no CORS in production.
 
 `.railway/railway.ts` is Railway's Infrastructure as Code format — its
 older Config as Code format (`railway.toml`/`railway.json`) is deprecated
-and stops working entirely on **2026-12-01**. This service has already
-been fully cut over: `railway.toml` no longer exists in this repo, since
-Railway won't reliably deploy a service that has both a legacy CaC file
-and `.railway/railway.ts` present at once (confirmed live — every deploy
-failed silently, with zero build/deploy/http logs, until the CaC file was
-removed; see `.railway/railway.ts`'s own comments for the full story,
-including a second, unrelated failure it walks through). One field,
-`deploy.restartPolicyType`, doesn't reliably persist via `railway config
-apply` as of CLI v5.43.1 and has no CaC fallback anymore — verify "Restart
-Policy" reads "On Failure" in the Railway dashboard's service settings,
-and set it there once by hand if not. The root-level
+and stops working entirely on **2026-12-01**. `railway.toml` has been
+deleted from this repo (its fields are all mirrored in `.railway/railway.ts`
+and applied live), but **deploys are not currently working on this
+project** — the last known-good deployment (from before this migration)
+is still active and serving, so the app itself is not down, but a fresh
+deploy fails silently within seconds of a successful build, for a cause
+this session couldn't isolate via `railway logs`. See
+`.railway/railway.ts`'s own comments for the full timeline, what's been
+ruled out, and the recommended next step (check the Railway dashboard's
+Deployments tab directly for an error the CLI doesn't surface). Do not
+assume this migration is finished. Separately, `deploy.restartPolicyType`
+doesn't reliably persist via `railway config apply` as of CLI v5.43.1 and
+has no CaC fallback anymore — verify "Restart Policy" reads "On Failure"
+in the Railway dashboard once deploys work again. The root-level
 `package.json`/`package-lock.json` exist solely to provide the `railway`
 npm package (`railway-ts-sdk`) that `.railway/railway.ts` imports from —
 unrelated to `frontend/`'s own `package.json`.
