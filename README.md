@@ -77,8 +77,7 @@ backend/            FastAPI + LangGraph service (Python)
   tests/
 frontend/            Next.js app: /chat, /documents, /evals (static export)
 Dockerfile            builds the frontend, then serves it + the API from one process
-.railway/railway.ts    tells Railway to build with that Dockerfile (railway.toml, kept
-                        for now as a fallback, is deprecated -- see "Deploying to Railway")
+.railway/railway.ts    tells Railway to build with that Dockerfile (see "Deploying to Railway")
 .github/workflows/     ci.yml (lint/test/eval on PR) — no deploy workflow, Railway
                         deploys straight from git via .railway/railway.ts
 ```
@@ -117,17 +116,20 @@ host and no CORS in production.
 
 `.railway/railway.ts` is Railway's Infrastructure as Code format — its
 older Config as Code format (`railway.toml`/`railway.json`) is deprecated
-and stops working entirely on **2026-12-01**. `railway.toml` is kept in
-this repo for now purely as a fallback (its values are already fully
-mirrored in `.railway/railway.ts` and applied live — see that file's own
-comments); it can be deleted once Railway's IaC `apply` reliably persists
-every field (as of CLI v5.43.1, `deploy.restartPolicyType` is accepted by
-`railway config apply` without error but silently doesn't stick — verified
-by re-running `railway config plan` immediately after applying, which
-still shows it pending. `railway.toml` currently covers that one gap).
-The root-level `package.json`/`package-lock.json` exist solely to provide
-the `railway` npm package (`railway-ts-sdk`) that `.railway/railway.ts`
-imports from — unrelated to `frontend/`'s own `package.json`.
+and stops working entirely on **2026-12-01**. This service has already
+been fully cut over: `railway.toml` no longer exists in this repo, since
+Railway won't reliably deploy a service that has both a legacy CaC file
+and `.railway/railway.ts` present at once (confirmed live — every deploy
+failed silently, with zero build/deploy/http logs, until the CaC file was
+removed; see `.railway/railway.ts`'s own comments for the full story,
+including a second, unrelated failure it walks through). One field,
+`deploy.restartPolicyType`, doesn't reliably persist via `railway config
+apply` as of CLI v5.43.1 and has no CaC fallback anymore — verify "Restart
+Policy" reads "On Failure" in the Railway dashboard's service settings,
+and set it there once by hand if not. The root-level
+`package.json`/`package-lock.json` exist solely to provide the `railway`
+npm package (`railway-ts-sdk`) that `.railway/railway.ts` imports from —
+unrelated to `frontend/`'s own `package.json`.
 
 1. **Database.** Postgres needs the `pgvector` extension. Either use
    Supabase (has it built in) or a `pgvector`-flavored Postgres template on
