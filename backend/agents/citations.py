@@ -12,8 +12,18 @@ dropping the one malformed citation.
 """
 import re
 
-_CITATION_PATTERN = re.compile(
-    r"\[([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}#\d+)\]"
+_CITATION_REF = r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}#\d+"
+_SINGLE_CITATION_PATTERN = re.compile(_CITATION_REF)
+# A bracket containing one *or more* comma-separated refs -- found live
+# (2026-09-05) that the model sometimes cites two sources for one claim as
+# "[id-a#3, id-b#5]" rather than two separate brackets. The original
+# single-ref-per-bracket pattern left that whole bracket unmatched (no
+# comma allowed inside), so extract_citations silently missed both
+# references entirely -- not just a display glitch, the citation chip for
+# either source never appeared at all. frontend/lib/chat/format.ts's
+# stripCitationMarkers mirrors this exact pattern shape for the same reason.
+_CITATION_GROUP_PATTERN = re.compile(
+    rf"\[({_CITATION_REF}(?:\s*,\s*{_CITATION_REF})*)\]"
 )
 
 
@@ -23,6 +33,7 @@ def extract_citations(answer: str) -> list[str]:
     actually used, not every passage that happened to be in its context.
     """
     seen: dict[str, None] = {}
-    for match in _CITATION_PATTERN.finditer(answer):
-        seen.setdefault(match.group(1), None)
+    for group_match in _CITATION_GROUP_PATTERN.finditer(answer):
+        for single_match in _SINGLE_CITATION_PATTERN.finditer(group_match.group(1)):
+            seen.setdefault(single_match.group(0), None)
     return list(seen)

@@ -147,7 +147,7 @@ async def _resolve_citations(raw_citations: list[str]) -> list[ChatCitationOut]:
     same document.
 
     A malformed raw citation (document_id isn't a real UUID) is skipped
-    rather than raised -- deterministic.py's _CITATION_PATTERN already
+    rather than raised -- agents/citations.py's extract_citations already
     filters these at the source, but this stays defensive since any
     registered workflow can hand this function raw citation strings, and a
     ValueError here previously crashed the entire SSE stream for an

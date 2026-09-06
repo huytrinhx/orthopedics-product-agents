@@ -15,14 +15,25 @@ export const STATUS_LABELS: Record<string, string> = {
   finalize: "Finishing up…",
 };
 
-// Mirrors backend/agents/citations.py's _CITATION_PATTERN exactly -- the
-// model writes these `[document-id#chunk-index]` markers inline as its
+// Mirrors backend/agents/citations.py's _CITATION_GROUP_PATTERN exactly --
+// the model writes these `[document-id#chunk-index]` markers inline as its
 // citation convention, but a raw Postgres UUID means nothing to a rep
 // reading the answer. The chat-citations chips below the bubble are the
 // actual clickable source list, so the inline marker is just stripped from
 // what's rendered, not shown as literal bracketed text.
-const _CITATION_DISPLAY_PATTERN =
-  /\s?\[[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}#\d+\]/g;
+//
+// The trailing `(?:\s*,\s*...)*` group matters: found live (2026-09-05)
+// that the model sometimes cites two sources for one claim as a single
+// bracket with a comma between them ("[id-a#3, id-b#5]") rather than two
+// separate brackets -- the original single-ref pattern left that whole
+// bracket completely unmatched, so the raw UUID marker leaked into the
+// rendered answer verbatim. Matches one-or-more comma-separated refs inside
+// one bracket so every shape the model actually produces gets stripped.
+const _CITATION_REF = "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}#\\d+";
+const _CITATION_DISPLAY_PATTERN = new RegExp(
+  `\\s?\\[${_CITATION_REF}(?:\\s*,\\s*${_CITATION_REF})*\\]`,
+  "g"
+);
 
 export function stripCitationMarkers(content: string): string {
   return content.replace(_CITATION_DISPLAY_PATTERN, "");
