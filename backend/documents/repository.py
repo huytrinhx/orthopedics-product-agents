@@ -83,6 +83,32 @@ async def get_document(document_id: uuid.UUID) -> DocumentRecord | None:
         await conn.close()
 
 
+async def replace_file(
+    document_id: uuid.UUID, filename: str, storage_path: str
+) -> DocumentRecord | None:
+    """Points an existing document row at a newly-uploaded file (Re-upload
+    button) -- the id, tags, and history stay put; only what's on disk (and
+    the display filename) changes. Callers re-run process_document against
+    the new storage_path the same way index/set_tags do, so chunks/graph
+    entities keyed by this document_id get overwritten (upsert_document,
+    upsert_chunks) rather than duplicated.
+    """
+    if await get_document(document_id) is None:
+        return None
+    conn = await get_connection()
+    try:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                "UPDATE documents SET filename = %s, storage_path = %s, updated_at = now() "
+                "WHERE id = %s",
+                (filename, storage_path, document_id),
+            )
+        await conn.commit()
+    finally:
+        await conn.close()
+    return await get_document(document_id)
+
+
 async def set_status(
     document_id: uuid.UUID, status: DocumentStatus, error: str | None = None
 ) -> None:

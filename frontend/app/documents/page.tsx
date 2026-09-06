@@ -4,8 +4,10 @@ import { useCallback, useEffect, useRef, useState, type FormEvent } from "react"
 import Link from "next/link";
 import {
   deleteDocument,
+  downloadDocumentFile,
   indexDocument,
   listDocuments,
+  reuploadDocumentFile,
   setDocumentTags,
   uploadDocument,
 } from "../../lib/documents/api";
@@ -35,6 +37,42 @@ function StatusBadge({ doc }: { doc: DocumentRecord }) {
   );
 }
 
+// Re-upload/Download share this outline-icon style (feather-icon shaped,
+// no icon library pulled in for two icons) -- the row's action label lives
+// in the button's title/aria-label instead of on its face, so these two
+// don't force the actions column wider than Index/Reindex and Delete need.
+function UploadIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+      <polyline points="17 8 12 3 7 8" />
+      <line x1="12" y1="3" x2="12" y2="15" />
+    </svg>
+  );
+}
+
+function DownloadIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+      <polyline points="7 10 12 15 17 10" />
+      <line x1="12" y1="15" x2="12" y2="3" />
+    </svg>
+  );
+}
+
+function TrashIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <polyline points="3 6 5 6 21 6" />
+      <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+      <path d="M10 11v6" />
+      <path d="M14 11v6" />
+      <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
+    </svg>
+  );
+}
+
 // Index/Reindex trigger for the (still stubbed, see backend/documents/service.py)
 // ingestion pipeline: upload leaves a document "pending" rather than
 // auto-indexing it, so this is the only way a document reaches "done".
@@ -59,6 +97,13 @@ export default function DocumentsPage() {
   const [uploadSystemId, setUploadSystemId] = useState("");
   const [uploadDocTypeId, setUploadDocTypeId] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Re-upload's hidden per-row file picker: one shared <input>, retargeted
+  // at whichever row's button was clicked (see handleReuploadClick) rather
+  // than rendering one file input per row.
+  const reuploadInputRef = useRef<HTMLInputElement>(null);
+  const reuploadTargetId = useRef<string | null>(null);
+  const [reuploadingId, setReuploadingId] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -137,6 +182,35 @@ export default function DocumentsPage() {
     }
   }
 
+  function handleReuploadClick(doc: DocumentRecord) {
+    reuploadTargetId.current = doc.id;
+    reuploadInputRef.current?.click();
+  }
+
+  async function handleReuploadFileChosen(e: FormEvent<HTMLInputElement>) {
+    const file = e.currentTarget.files?.[0];
+    const documentId = reuploadTargetId.current;
+    e.currentTarget.value = ""; // allow picking the same filename again next time
+    if (!file || !documentId) return;
+    setReuploadingId(documentId);
+    try {
+      const updated = await reuploadDocumentFile(documentId, file);
+      setDocuments((prev) => prev.map((d) => (d.id === documentId ? updated : d)));
+    } catch (err) {
+      setListError(err instanceof Error ? err.message : "failed to reupload document");
+    } finally {
+      setReuploadingId(null);
+    }
+  }
+
+  async function handleDownload(doc: DocumentRecord) {
+    try {
+      await downloadDocumentFile(doc.id, doc.filename);
+    } catch (err) {
+      setListError(err instanceof Error ? err.message : "failed to download document");
+    }
+  }
+
   async function handleRowTagChange(
     doc: DocumentRecord,
     field: "system" | "document_type",
@@ -200,6 +274,14 @@ export default function DocumentsPage() {
           {uploading ? "Uploading…" : "Upload"}
         </button>
       </form>
+      {/* Shared hidden picker for every row's Re-upload button -- see
+      handleReuploadClick/handleReuploadFileChosen above. */}
+      <input
+        ref={reuploadInputRef}
+        type="file"
+        onChange={handleReuploadFileChosen}
+        style={{ display: "none" }}
+      />
       {uploadError && <p className="alert" role="alert">{uploadError}</p>}
       {listError && <p className="alert" role="alert">{listError}</p>}
 
@@ -215,7 +297,6 @@ export default function DocumentsPage() {
                 <th>System</th>
                 <th>Document type</th>
                 <th>Uploaded</th>
-                <th></th>
                 <th></th>
               </tr>
             </thead>
@@ -246,16 +327,37 @@ export default function DocumentsPage() {
                   </td>
                   <td>{new Date(doc.created_at).toLocaleString()}</td>
                   <td>
-                    <IndexButton doc={doc} onIndex={handleIndex} />
-                  </td>
-                  <td>
-                    <button
-                      type="button"
-                      className="btn-text"
-                      onClick={() => handleDelete(doc)}
-                    >
-                      Delete
-                    </button>
+                    <div className="actions-cell">
+                      <IndexButton doc={doc} onIndex={handleIndex} />
+                      <button
+                        type="button"
+                        className="btn-icon"
+                        disabled={reuploadingId === doc.id}
+                        title={reuploadingId === doc.id ? "Reuploading…" : "Re-upload"}
+                        aria-label={reuploadingId === doc.id ? "Reuploading…" : "Re-upload"}
+                        onClick={() => handleReuploadClick(doc)}
+                      >
+                        <UploadIcon />
+                      </button>
+                      <button
+                        type="button"
+                        className="btn-icon"
+                        title="Download"
+                        aria-label="Download"
+                        onClick={() => handleDownload(doc)}
+                      >
+                        <DownloadIcon />
+                      </button>
+                      <button
+                        type="button"
+                        className="btn-icon btn-icon-danger"
+                        title="Delete"
+                        aria-label="Delete"
+                        onClick={() => handleDelete(doc)}
+                      >
+                        <TrashIcon />
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}

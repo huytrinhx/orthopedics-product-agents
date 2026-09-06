@@ -35,6 +35,22 @@ export async function indexDocument(documentId: string): Promise<DocumentRecord>
   return request(`/documents/${documentId}/index`, { method: "POST" });
 }
 
+// Re-upload: swaps this document's underlying file (same id/tags/history)
+// and queues it for reindexing, same multipart shape as uploadDocument.
+export async function reuploadDocumentFile(
+  documentId: string,
+  file: File
+): Promise<DocumentRecord> {
+  const form = new FormData();
+  form.append("file", file);
+  const res = await fetch(`${API_BASE}/documents/${documentId}/file`, {
+    method: "POST",
+    headers: authHeaders(), // no Content-Type: fetch sets the multipart boundary itself
+    body: form,
+  });
+  return unwrap<DocumentRecord>(res);
+}
+
 export async function getDocumentChunks(documentId: string): Promise<DocumentChunk[]> {
   return request(`/documents/${documentId}/chunks`);
 }
@@ -50,6 +66,23 @@ export async function getDocumentFile(documentId: string): Promise<Blob> {
     throw new Error(`request failed: ${res.status}`);
   }
   return res.blob();
+}
+
+// Download button: reuses getDocumentFile's authenticated blob fetch (the
+// same one the citation viewer uses), then drives a normal browser
+// save-as via a throwaway <a download> -- a bare <a href> can't carry the
+// Authorization header GET /file requires.
+export async function downloadDocumentFile(documentId: string, filename: string): Promise<void> {
+  const blob = await getDocumentFile(documentId);
+  const url = URL.createObjectURL(blob);
+  try {
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename;
+    link.click();
+  } finally {
+    URL.revokeObjectURL(url);
+  }
 }
 
 export async function deleteDocument(documentId: string): Promise<void> {

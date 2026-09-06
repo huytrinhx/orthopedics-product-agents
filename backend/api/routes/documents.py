@@ -27,6 +27,7 @@ from documents.repository import (
     get_document,
     list_chunks,
     list_documents,
+    replace_file,
     set_status,
     set_tags,
 )
@@ -60,6 +61,18 @@ def _document_out(doc) -> DocumentOut:
     )
 
 
+async def _save_upload(file: UploadFile) -> Path:
+    """Prefix with a fresh id so two uploads of the same filename never
+    collide on disk; the original filename is kept (and shown in the UI) in
+    the documents row, not derived from this path. Shared by upload
+    (new document) and reupload_document_file (existing document's file).
+    """
+    storage_path = _ingest_data_dir() / f"{uuid.uuid4()}-{file.filename}"
+    contents = await file.read()
+    storage_path.write_bytes(contents)
+    return storage_path
+
+
 @router.post("/upload", response_model=DocumentOut)
 async def upload_document(
     file: UploadFile,
@@ -70,12 +83,7 @@ async def upload_document(
     if not file.filename:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Uploaded file has no filename")
 
-    # Prefix with a fresh id so two uploads of the same filename never
-    # collide on disk; the original filename is kept (and shown in the UI)
-    # in the documents row, not derived from this path.
-    storage_path = _ingest_data_dir() / f"{uuid.uuid4()}-{file.filename}"
-    contents = await file.read()
-    storage_path.write_bytes(contents)
+    storage_path = await _save_upload(file)
 
     try:
         doc = await create_document(
@@ -144,6 +152,43 @@ async def get_document_file(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Document file not found")
     media_type = mimetypes.guess_type(doc.filename)[0] or "application/octet-stream"
     return FileResponse(path, media_type=media_type, filename=doc.filename)
+
+
+@router.post("/{document_id}/file", response_model=DocumentOut)
+async def reupload_document_file(
+    document_id: uuid.UUID,
+    background_tasks: BackgroundTasks,
+    file: UploadFile,
+    admin: UserRecord = Depends(require_admin),
+) -> DocumentOut:
+    """Re-upload button: swaps an existing document's underlying file (e.g.
+    a corrected PDF, or recovering one lost to a pre-volume Railway deploy --
+    see README's Railway deploy section) without losing its id, tags, or
+    upload history. Same tags/re-tag pipeline seam as set_document_tags/
+    index_document below: queue + process_document re-extracts and
+    re-indexes against the new file, upserting this document_id's chunks/
+    graph entities in place rather than duplicating them.
+    """
+    doc = await get_document(document_id)
+    if doc is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Document not found")
+    if not file.filename:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Uploaded file has no filename")
+
+    storage_path = await _save_upload(file)
+    old_storage_path = doc.storage_path
+    doc = await replace_file(document_id, file.filename, str(storage_path))
+    assert doc is not None
+    # Best-effort, same as delete_one_document below: the DB row (now
+    # pointing at the new file) is the source of truth, so a missing/
+    # already-gone old file shouldn't turn a reupload into a 500.
+    Path(old_storage_path).unlink(missing_ok=True)
+
+    await set_status(document_id, "queued")
+    background_tasks.add_task(process_document, doc.id, doc.storage_path)
+    doc = await get_document(document_id)
+    assert doc is not None
+    return _document_out(doc)
 
 
 @router.post("/{document_id}/index", response_model=DocumentOut)

@@ -252,6 +252,54 @@ a {
   text-underline-offset: 3px;
 }
 
+/* Icon-only action button (e.g. document-manager row actions) -- label
+lives in the `title`/`aria-label` instead of on the button face, so a row
+of actions doesn't force the table wider than it needs to be. */
+.btn-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  color: var(--verify);
+  cursor: pointer;
+}
+
+.btn-icon:hover:not(:disabled) {
+  background: var(--diffuser-dim);
+  border-color: var(--steel-line);
+}
+
+.btn-icon:disabled {
+  color: var(--steel);
+  cursor: not-allowed;
+}
+
+.btn-icon svg {
+  width: 18px;
+  height: 18px;
+  stroke: currentColor;
+}
+
+.btn-icon-danger {
+  color: var(--danger);
+}
+
+.btn-icon-danger:hover:not(:disabled) {
+  background: var(--danger-wash);
+  border-color: var(--danger);
+}
+
+.actions-cell {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
 .field {
   display: flex;
   flex-direction: column;

@@ -210,6 +210,89 @@ def test_chunks_content_matches_the_indexed_document(monkeypatch, tmp_path):
     assert any("1.2" in c["content"] for c in chunks)
 
 
+def test_admin_can_reupload_document_file(monkeypatch, tmp_path):
+    token = _admin_token(monkeypatch, tmp_path)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    upload = client.post(
+        "/documents/upload",
+        headers=headers,
+        files={"file": ("original.txt", b"original contents", "text/plain")},
+    )
+    doc_id = upload.json()["id"]
+    original_files = set(tmp_path.iterdir())
+
+    reupload = client.post(
+        f"/documents/{doc_id}/file",
+        headers=headers,
+        files={"file": ("replacement.txt", b"replacement contents", "text/plain")},
+    )
+    assert reupload.status_code == 200
+    body = reupload.json()
+    assert body["id"] == doc_id
+    # Same id, new display filename, and queued for reindexing against the
+    # new file -- same pipeline seam as Index/Reindex and re-tagging.
+    assert body["filename"] == "replacement.txt"
+    assert body["status"] in ("queued", "processing", "done")
+
+    # The old file is gone and a new one replaced it -- not both kept.
+    current_files = set(tmp_path.iterdir())
+    assert not (original_files & current_files)
+    assert len(current_files) == 1
+
+    for _ in range(20):
+        detail = client.get(f"/documents/{doc_id}", headers=headers)
+        if detail.json()["status"] == "done":
+            break
+        time.sleep(0.05)
+    assert detail.json()["status"] == "done"
+
+
+def test_reupload_unknown_document_404s(monkeypatch, tmp_path):
+    token = _admin_token(monkeypatch, tmp_path)
+    headers = {"Authorization": f"Bearer {token}"}
+    res = client.post(
+        f"/documents/{uuid.uuid4()}/file",
+        headers=headers,
+        files={"file": ("a.txt", b"x", "text/plain")},
+    )
+    assert res.status_code == 404
+
+
+def test_non_admin_cannot_reupload(monkeypatch, tmp_path):
+    admin_headers = {"Authorization": f"Bearer {_admin_token(monkeypatch, tmp_path)}"}
+    upload = client.post(
+        "/documents/upload",
+        headers=admin_headers,
+        files={"file": ("a.txt", b"x", "text/plain")},
+    )
+    doc_id = upload.json()["id"]
+
+    user_headers = {"Authorization": f"Bearer {_user_token(monkeypatch, tmp_path)}"}
+    res = client.post(
+        f"/documents/{doc_id}/file",
+        headers=user_headers,
+        files={"file": ("b.txt", b"y", "text/plain")},
+    )
+    assert res.status_code == 403
+
+
+def test_admin_can_download_document_file(monkeypatch, tmp_path):
+    token = _admin_token(monkeypatch, tmp_path)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    upload = client.post(
+        "/documents/upload",
+        headers=headers,
+        files={"file": ("brochure.txt", b"downloadable contents", "text/plain")},
+    )
+    doc_id = upload.json()["id"]
+
+    download = client.get(f"/documents/{doc_id}/file", headers=headers)
+    assert download.status_code == 200
+    assert download.content == b"downloadable contents"
+
+
 def test_upload_requires_a_filename(monkeypatch, tmp_path):
     token = _admin_token(monkeypatch, tmp_path)
     headers = {"Authorization": f"Bearer {token}"}
