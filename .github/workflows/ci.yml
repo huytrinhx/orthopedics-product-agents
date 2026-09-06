@@ -51,7 +51,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: "3.11.16"
       - run: pip install -e ".[dev]"
       - name: Wait for Neo4j
         run: |
@@ -73,11 +73,11 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          # Must match the Dockerfile's frontend-build stage (node:22-slim)
-          # -- pdfjs-dist needs Promise.withResolvers (Node 21+), and Node
-          # 20 builds "successfully" here while actually being broken.
-          node-version: "22"
-      - run: npm install
+          # Must match the Dockerfile's frontend-build stage exactly --
+          # pdfjs-dist needs Promise.withResolvers (Node 21+), and Node 20
+          # builds "successfully" here while actually being broken.
+          node-version: "22.23.2"
+      - run: npm ci
       - run: npm run lint
       - run: npm run build
 
@@ -92,7 +92,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: "3.11.16"
       - run: pip install -e ".[dev]"
       - name: Run golden dataset evals
         run: python -m evals.harness --all-workflows --dataset evals/golden_datasets

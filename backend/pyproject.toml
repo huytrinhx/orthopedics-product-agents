@@ -2,40 +2,49 @@
 name = "orthopedics-product-agents-backend"
 version = "0.1.0"
 description = "Agentic retrieval backend for orthopedics product knowledge"
-requires-python = ">=3.11"
+requires-python = ">=3.11,<3.12"
+# Every dependency here is pinned exactly, not a >= floor -- both
+# `pip install -e ".[dev]"` (used by the Dockerfile, CI, and README's local
+# dev instructions) and `uv sync` read these directly, and none of those
+# three paths otherwise re-resolves against uv.lock. A loose floor meant a
+# fresh install on any given day could silently pick up whatever's newest
+# on PyPI that satisfies it -- these exact versions are what's actually in
+# uv.lock and backend/.venv today (verified via `pip freeze` against the
+# real venv, not guessed). Bump a version here only when explicitly asked;
+# see agents.md/feedback memory on not upgrading dependencies unprompted.
 dependencies = [
-    "langgraph>=0.2",
-    "langchain-openai>=0.2",
-    "langgraph-checkpoint-postgres>=2.0",
-    "fastapi>=0.115",
-    "python-multipart>=0.0.9",
-    "uvicorn[standard]>=0.30",
-    "pydantic>=2.9",
-    "psycopg[binary]>=3.2",
-    "pgvector>=0.3",
-    "neo4j>=5.24",
-    "pdfplumber>=0.11",
-    "tiktoken>=0.14",
-    "alembic>=1.13",
-    "bcrypt>=4.2",
-    "pyjwt>=2.9",
-    "email-validator>=2.2",
-    "httpx>=0.27",
-    "opentelemetry-sdk>=1.27",
-    "opentelemetry-exporter-otlp>=1.27",
-    "langfuse>=2.50",
+    "langgraph==1.2.11",
+    "langchain-openai==1.6.0",
+    "langgraph-checkpoint-postgres==3.1.2",
+    "fastapi==0.141.1",
+    "python-multipart==0.0.32",
+    "uvicorn[standard]==0.52.4",
+    "pydantic==2.13.5",
+    "psycopg[binary]==3.3.4",
+    "pgvector==0.5.0",
+    "neo4j==6.3.0",
+    "pdfplumber==0.11.10",
+    "tiktoken==0.14.0",
+    "alembic==1.19.1",
+    "bcrypt==5.0.0",
+    "pyjwt==2.13.0",
+    "email-validator==2.3.0",
+    "httpx==0.28.1",
+    "opentelemetry-sdk==1.44.0",
+    "opentelemetry-exporter-otlp==1.44.0",
+    "langfuse==4.15.1",
     # Only langchain-core/langchain-openai were needed until now --
     # langfuse.langchain.CallbackHandler (backend/observability/langfuse_setup.py)
     # requires the full langchain meta-package at import time.
-    "langchain>=1.0",
+    "langchain==1.4.0",
 ]
 
 [project.optional-dependencies]
 dev = [
-    "pytest>=8.3",
-    "pytest-asyncio>=0.24",
-    "ruff>=0.6",
-    "fpdf2>=2.7",
+    "pytest==9.1.1",
+    "pytest-asyncio==1.4.0",
+    "ruff==0.16.5",
+    "fpdf2==2.8.8",
 ]
 
 [tool.pytest.ini_options]

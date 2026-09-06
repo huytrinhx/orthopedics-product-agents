@@ -3,6 +3,6 @@
   "private": true,
   "description": "Root-level package.json for .railway/railway.ts only -- the frontend app has its own package.json in frontend/. Provides the 'railway' npm package (railway-ts-sdk) that the Railway CLI's node runner needs to resolve `import ... from \"railway/iac\"` when evaluating .railway/railway.ts.",
   "devDependencies": {
-    "railway": "^3.11.0"
+    "railway": "3.11.0"
   }
 }

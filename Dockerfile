@@ -6,15 +6,21 @@
 # node:22, not 20 -- react-pdf's pdfjs-dist (ticket 26) calls
 # Promise.withResolvers(), which doesn't exist before Node 21. Node 20
 # builds fine but crashes prerendering /chat with "TypeError:
-# Promise.withResolvers is not a function".
-FROM node:22-slim AS frontend-build
+# Promise.withResolvers is not a function". Pinned to an exact patch
+# version (not a floating "22-slim" tag) so this stays reproducible --
+# bump only when explicitly asked, and re-verify the Promise.withResolvers
+# fix still holds after any bump.
+FROM node:22.23.2-slim AS frontend-build
 WORKDIR /app/frontend
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci
 COPY frontend/ ./
 RUN npm run build
 
-FROM python:3.11-slim AS backend
+# Pinned to an exact patch version -- matches pyproject.toml's
+# requires-python constraint and backend/.venv; bump only when explicitly
+# asked.
+FROM python:3.11.16-slim AS backend
 WORKDIR /app
 
 COPY backend/ ./backend/

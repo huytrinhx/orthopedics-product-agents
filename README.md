@@ -75,7 +75,7 @@ backend/            FastAPI + LangGraph service (Python)
   api/                FastAPI app: chat (streaming/resume), documents, feedback routes;
                        also serves the built frontend in production (see main.py)
   evals/              golden-dataset harness, run against any registered workflow
-  observability/      OpenTelemetry + Langfuse setup
+  observability/      Langfuse tracing setup (OTel is a stub, see decision 7)
   tests/
 frontend/            Next.js app: /chat, /documents, /evals (static export)
 Dockerfile            builds the frontend, then serves it + the API from one process
@@ -83,6 +83,17 @@ Dockerfile            builds the frontend, then serves it + the API from one pro
 .github/workflows/     ci.yml (lint/test/eval on PR) — no deploy workflow, Railway
                         deploys straight from git via .railway/railway.ts
 ```
+
+## Dependency versions
+
+Every dependency is pinned to an exact version, not a range — `backend/pyproject.toml`,
+`frontend/package.json`, root `package.json`, the `Dockerfile`'s base
+images, and `.github/workflows/ci.yml`'s `python-version`/`node-version`
+are the source of truth for what's actually running; state facts from
+those files, not from memory or an older doc. **Don't bump any pinned
+version without being explicitly asked** — a version that looks outdated
+or has a newer release available is not, on its own, a reason to update
+it.
 
 ## Local Development
 
