@@ -115,6 +115,12 @@ no CORS in production.
 1. **Database.** Postgres needs the `pgvector` extension. Either use
    Supabase (has it built in) or a `pgvector`-flavored Postgres template on
    Railway. Run `CREATE EXTENSION IF NOT EXISTS vector;` once against it.
+   If pointing at Supabase, either connection string works — every psycopg
+   connection this app opens (`config/db.py`, `retrieval/vector_store.py`,
+   and LangGraph's own checkpointer/store) sets `prepare_threshold=0`, so a
+   PgBouncer transaction-mode pooler (Supabase's pooled connection string,
+   port 6543) swapping the underlying server connection between queries
+   won't produce `prepared statement ... does not exist` errors.
 2. **Graph DB.** Neo4j runs as AuraDB — provision it via the Neo4j Aura
    console / Azure or AWS Marketplace listing, not through this repo. Point
    `NEO4J_URI`/`NEO4J_USER`/`NEO4J_PASSWORD` at it.
@@ -135,11 +141,30 @@ no CORS in production.
    Railway volume mounted at that path — ingested documents are plain files
    on disk, not object storage; a volume is required or they're lost on
    every redeploy since container filesystems are otherwise ephemeral.
-6. **Seed the knowledge graph once, against production.** Same as local-dev
-   step 6 above, but pointed at the production `NEO4J_URI`/`DATABASE_URL`:
-   `python -m ingestion.seed_master_catalog && python -m ingestion.seed_synonyms`.
-   Uploaded documents won't produce any graph facts until this has run —
-   easy to miss since nothing else in this section triggers it.
+6. **Seed the knowledge graph once, against production.** Uploaded
+   documents produce zero graph facts until this has run — nothing else in
+   this section triggers it, so it's easy to miss on a first deploy.
+
+   Run it from your own machine with the Railway CLI, *not* `railway ssh`:
+   `railway run` executes locally but with the service's production env
+   vars injected, and since these two scripts only read local fixture CSVs
+   (already in your checkout, under `backend/evals/`) and write to Neo4j
+   over the network — no local output file the way `INGEST_DATA_DIR`-based
+   document ingestion has — running locally against production Neo4j/Postgres
+   is correct here, not a shortcut.
+
+   ```bash
+   cd backend
+   railway run python -m ingestion.seed_master_catalog
+   railway run python -m ingestion.seed_synonyms
+   ```
+
+   Order matters — `seed_synonyms` doesn't depend on the catalog, but
+   `seed_master_catalog` must run before any document is indexed, since
+   prose extraction only *attaches* facts to parts this seed already
+   created. Both scripts are pure `MERGE`s in Neo4j, so they're idempotent —
+   safe to rerun (e.g. after fixing a bad row in the source CSV) without
+   duplicating anything.
 
 ## Adding a new agent workflow
 

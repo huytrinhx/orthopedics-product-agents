@@ -181,7 +181,10 @@ def _reciprocal_rank_fusion(
 
 @asynccontextmanager
 async def get_vector_store() -> AsyncIterator[VectorStoreClient]:
-    conn = await psycopg.AsyncConnection.connect(os.environ["DATABASE_URL"])
+    # prepare_threshold=0 -- see config/db.py's get_connection for why.
+    conn = await psycopg.AsyncConnection.connect(
+        os.environ["DATABASE_URL"], prepare_threshold=0
+    )
     await register_vector_async(conn)
     try:
         yield VectorStoreClient(conn)
