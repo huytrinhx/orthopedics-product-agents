@@ -6,9 +6,13 @@ Schema (see CONTEXT.md's glossary for the domain story behind these):
 
     (Tray)-[:BELONGS_TO_FAMILY]->(ProductFamily)
     (Part)-[:BELONGS_TO_TRAY]->(Tray)
-    (Part)-[:LOCATED_IN]->(TraySection)              -- shape only; unpopulated
-                                                          until tray-overhead-
-                                                          guide extraction exists
+    (Part)-[:LOCATED_IN {document_id}]->(TraySection) -- ticket 25: populated
+                                                          from tray-photo vision
+                                                          extraction (backend/
+                                                          ingestion/tray_layout_
+                                                          extraction.py); coarse
+                                                          (tray+level+region),
+                                                          not pixel position
     (Part)-[:COMPATIBLE_WITH]->(Part)                -- e.g. plate <-> screw family
     (Part)-[:REQUIRES_TOOL]->(Part)                  -- e.g. screw <-> guidewire/driver
     (Part)-[:DIFFERENTIATES_FROM {explanation}]->(Part)
@@ -235,27 +239,97 @@ class GraphClient:
             )
             return await result.single() is not None
 
+    # ---- Tray-layout visual extraction (ticket 25, backend/ingestion/tray_layout_extraction.py) ----
+
+    async def replace_tray_sections(self, document_id: str, groups: list[dict]) -> None:
+        """Writes this document's `Part -[:LOCATED_IN]-> TraySection` edges,
+        first deleting whatever this same document previously wrote (ticket
+        25: idempotent re-ingestion -- a re-index after a fix self-corrects
+        instead of leaving two disagreeing answers for the same slot).
+        Scoped by `document_id` on the relationship itself, not by tray name
+        -- precise even if two different documents both describe the same
+        physical tray, unlike a name-prefix delete would be.
+
+        `groups` is `[{"tray": ..., "level": ..., "region": ..., "skus": [...]},
+        ...]`, already validated against the real known parts/trays for this
+        document's system by the caller (tray_layout_extraction.py) --
+        `TraySection.key` is built here from tray+level+region since the
+        `tray_section_key` constraint (ticket 07) is global, not
+        per-system: an unscoped label like "Top Level" alone would collide
+        across different trays.
+
+        `document_id` is part of the MERGE key on the relationship itself,
+        not just a property set afterward -- found live via a test writing
+        the same (sku, tray, level, region) fact from two different
+        document_ids: `MERGE (p)-[r:LOCATED_IN]->(s)` matches on the
+        pattern alone, so a second document's write reused the first
+        document's edge and overwrote its `document_id` in place, leaving
+        only one edge attributed to whichever document happened to write
+        last -- silently orphaning the delete-then-recreate above for the
+        other document (its own document_id no longer matched anything to
+        delete on the next re-ingestion). Keying the MERGE on document_id
+        too gives each document its own edge for the same fact.
+        """
+        async with self._driver.session() as session:
+            await session.run(
+                "MATCH (:Part)-[r:LOCATED_IN {document_id: $document_id}]->(:TraySection) DELETE r",
+                document_id=document_id,
+            )
+            for group in groups:
+                key = f"{group['tray']}::{group.get('level', '')}::{group['region']}"
+                await session.run(
+                    """
+                    MERGE (s:TraySection {key: $key})
+                    SET s.tray = $tray, s.level = $level, s.region = $region
+                    WITH s
+                    UNWIND $skus AS sku
+                    MATCH (p:Part {sku: sku})
+                    MERGE (p)-[r:LOCATED_IN {document_id: $document_id}]->(s)
+                    """,
+                    key=key,
+                    tray=group["tray"],
+                    level=group.get("level", ""),
+                    region=group["region"],
+                    skus=group["skus"],
+                    document_id=document_id,
+                )
+
     # ---- Lookups used to keep the LLM prompt scoped to real SKUs/trays ----
 
     async def list_parts_for_family(self, product_family: str) -> list[dict]:
+        # Found live (2026-09-05, ticket 25): callers hand this whatever
+        # taxonomy they have on hand, which is usually documents.system_name
+        # -- the Postgres systems-tag name ("MIS - Foot Recon"), one level
+        # more specific than the Neo4j ProductFamily name ("MIS") it
+        # actually needs to match. Every real document tagged this way
+        # (i.e. every document with a system at all) was silently getting
+        # zero known parts back, with entity_extraction.py's own `if not
+        # known_parts: return` then silently no-op'ing the whole graph leg
+        # for it -- this bug predates ticket 25, it just went unnoticed
+        # because a silent empty-list no-op looks identical to "nothing to
+        # extract from this text" from the caller's side. Same
+        # normalization find_parts (below) already applies, just never
+        # ported to these two lookups.
+        family = product_family.split(" - ")[0].strip() if product_family else product_family
         async with self._driver.session() as session:
             result = await session.run(
                 """
                 MATCH (p:Part)-[:BELONGS_TO_TRAY]->(:Tray)-[:BELONGS_TO_FAMILY]->(f:ProductFamily {name: $family})
                 RETURN p.sku AS sku, p.description AS description
                 """,
-                family=product_family,
+                family=family,
             )
             return [dict(record) async for record in result]
 
     async def list_trays_for_family(self, product_family: str) -> list[str]:
+        family = product_family.split(" - ")[0].strip() if product_family else product_family
         async with self._driver.session() as session:
             result = await session.run(
                 """
                 MATCH (t:Tray)-[:BELONGS_TO_FAMILY]->(:ProductFamily {name: $family})
                 RETURN t.name AS name
                 """,
-                family=product_family,
+                family=family,
             )
             return [record["name"] async for record in result]
 
