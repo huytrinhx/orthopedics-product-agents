@@ -21,10 +21,14 @@ directly). The Langfuse SDK itself no-ops safely (logs a warning, never
 raises) when LANGFUSE_PUBLIC_KEY/LANGFUSE_SECRET_KEY aren't set -- e.g. in
 CI, which has neither -- so nothing here needs to guard against that.
 """
+import logging
+
 from langfuse import get_client
 from langfuse.langchain import CallbackHandler
 
 from agents.state import EvalScores
+
+logger = logging.getLogger(__name__)
 
 
 def configure_langfuse() -> None:
@@ -74,14 +78,27 @@ def score_trace(trace_id: str | None, *, eval_scores: EvalScores | None, loop_co
     """
     if not trace_id:
         return
-    client = get_client()
-    for axis, value in (eval_scores or {}).items():
-        client.create_score(trace_id=trace_id, name=axis, value=value, data_type="NUMERIC")
-    if loop_count is not None:
-        client.create_score(trace_id=trace_id, name="loop_count", value=loop_count, data_type="NUMERIC")
+    try:
+        client = get_client()
+        for axis, value in (eval_scores or {}).items():
+            client.create_score(trace_id=trace_id, name=axis, value=value, data_type="NUMERIC")
+        if loop_count is not None:
+            client.create_score(trace_id=trace_id, name="loop_count", value=loop_count, data_type="NUMERIC")
+    except Exception:
+        logger.warning("Langfuse score_trace failed; continuing without it", exc_info=True)
 
 
 def get_trace_url(trace_id: str | None) -> str | None:
+    """Best-effort only: get_client().get_trace_url() calls the Langfuse API
+    synchronously (unlike tracing/scoring, which queue and fail silently in
+    the background) -- e.g. it raises on bad credentials -- and this is
+    called from the middle of _stream_graph's per-turn response, after the
+    answer already exists. Never let it take the answer down with it.
+    """
     if not trace_id:
         return None
-    return get_client().get_trace_url(trace_id=trace_id)
+    try:
+        return get_client().get_trace_url(trace_id=trace_id)
+    except Exception:
+        logger.warning("Langfuse get_trace_url failed; continuing without it", exc_info=True)
+        return None

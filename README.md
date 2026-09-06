@@ -175,7 +175,13 @@ automatic.
 5. **Mount a volume for document storage.** Set `INGEST_DATA_DIR` to an
    absolute path (e.g. `/app/data`) and mount a Railway volume at that same
    path — uploaded PDFs are plain files, not object storage, and are lost
-   on every redeploy without a volume.
+   on every redeploy without a volume. Symptom if this step is skipped:
+   `GET /documents/{id}/file` 404s (the file is gone) while
+   `GET /documents/{id}/chunks` still 200s (chunks live in Postgres, not on
+   disk) — that split is the tell that the volume is missing, not an
+   application bug. Files lost to a redeploy before the volume existed
+   don't come back once the volume is added; affected documents need
+   re-uploading.
 6. **Run the first migration by hand**, once the service has deployed —
    see "Subsequent deployments" below for the command; it's the same one.
 7. **Seed the knowledge graph** — see "Subsequent deployments" below;
