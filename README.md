@@ -33,11 +33,13 @@ Agentic retrieval over an orthopedics product/clinical knowledge base
    Built as a static export (`output: "export"`, see
    `frontend/next.config.js`) and served by the backend in production — see
    decision 9.
-7. **Observability: OpenTelemetry**, exported to any OTLP collector
-   (`OTEL_EXPORTER_OTLP_ENDPOINT` — no cloud-specific export path), plus
-   **self-hosted Langfuse** for LLM/agent-specific tracing — prompts, token
-   usage, per-node execution, judge scores — kept off external SaaS since it
-   carries prompt/document content.
+7. **Observability: Langfuse Cloud** for LLM/agent-specific tracing —
+   prompts, token usage, per-node execution, judge scores. One project
+   covers local dev, production, and offline evals; `LANGFUSE_TRACING_ENVIRONMENT`
+   tags which is which (`LANGFUSE_PUBLIC_KEY`/`LANGFUSE_SECRET_KEY`/`LANGFUSE_BASE_URL`
+   are the other three). `backend/observability/otel_setup.py` is a stub
+   (`configure_otel` raises `NotImplementedError`, never called) — no
+   OpenTelemetry/OTLP collector is actually wired up today.
 8. **Persistence: one Postgres instance**, multiple roles — LangGraph
    checkpointer (conversation memory), LangGraph Store (user memory),
    document/ingestion metadata, feedback, eval results, and the pgvector
@@ -130,13 +132,15 @@ automatic.
 
 ### First deployment
 
-1. **Provision Postgres with the `pgvector` extension.** Use Supabase (has
-   it built in) or a `pgvector`-flavored Postgres template on Railway. Run
-   `CREATE EXTENSION IF NOT EXISTS vector;` once against it. Either the
-   pooled or direct connection string works — every psycopg connection this
-   app opens sets `prepare_threshold=0`, which avoids the `prepared
-   statement ... does not exist` errors a PgBouncer transaction-mode
-   pooler otherwise causes.
+1. **Provision Postgres via Supabase** (pgvector-enabled by default).
+   Use the **pooler** connection string as `DATABASE_URL`
+   (`aws-<region>.pooler.supabase.com`, not the direct
+   `db.<project-ref>.supabase.co` host) — Supabase's direct connections
+   have a low hard cap, and Railway can run multiple replicas/restarts
+   against the same database. Every psycopg connection this app opens
+   sets `prepare_threshold=0`, which is what makes the pooler safe (it
+   avoids the `prepared statement ... does not exist` errors a PgBouncer
+   transaction-mode pooler otherwise causes).
 2. **Provision Neo4j as AuraDB**, via the Neo4j Aura console (or the
    AWS/Azure Marketplace listing) — not through this repo.
 3. **Create the Railway service** from this GitHub repo. Railway picks up
@@ -153,61 +157,61 @@ automatic.
    `GOOGLE_REDIRECT_URI` (set to
    `https://<your-railway-domain>/auth/google/callback` — that exact URL
    must also be added as an authorized redirect URI on the OAuth client in
-   the Google Cloud Console). Optional:
-   `OTEL_EXPORTER_OTLP_ENDPOINT`/`LANGFUSE_*`. Leave `PORT` (Railway sets
-   it itself), `NEXT_PUBLIC_API_BASE`, and `FRONTEND_PUBLIC_URL`
-   (local-dev only, production is same-origin) unset.
+   the Google Cloud Console). Optional: `LANGFUSE_PUBLIC_KEY`/`LANGFUSE_SECRET_KEY`/
+   `LANGFUSE_BASE_URL`/`LANGFUSE_TRACING_ENVIRONMENT`. Leave `PORT`
+   (Railway sets it itself), `NEXT_PUBLIC_API_BASE`, and
+   `FRONTEND_PUBLIC_URL` (local-dev only, production is same-origin) unset.
 5. **Mount a volume for document storage.** Set `INGEST_DATA_DIR` to an
    absolute path (e.g. `/app/data`) and mount a Railway volume at that same
    path — uploaded PDFs are plain files, not object storage, and are lost
    on every redeploy without a volume.
-6. **Run the first migration by hand**, once the service has deployed:
+6. **Run the first migration by hand**, once the service has deployed —
+   see "Subsequent deployments" below for the command; it's the same one.
+7. **Seed the knowledge graph** — see "Subsequent deployments" below;
+   it's the same commands, just run for the first time here.
+8. **Set "Restart Policy" to On Failure** in the Railway dashboard's
+   service settings. `deploy.restartPolicyType` in `.railway/railway.ts`
+   doesn't reliably persist via `railway config apply` — check this again
+   any time you run `railway config apply`, not just on first setup.
+
+### Subsequent deployments
+
+Pushing to `main` is enough for most changes — Railway builds and deploys
+automatically. These steps are **not** automatic and need a manual
+re-run whenever they apply:
+
+1. **A new migration was added.** From `backend/`:
 
    ```bash
-   cd backend
    railway run .venv/bin/alembic upgrade head
    ```
 
-7. **Seed the knowledge graph**, from `backend/`:
+   Idempotent — safe to run even when there's nothing new to apply.
+   `.railway/railway.ts` intentionally has no pre-deploy command: Railway
+   fails an entire deploy with no retry if a pre-deploy command exits
+   non-zero, so running migrations that way would permanently block every
+   future deploy the moment one migration failed for any reason.
+2. **The master-catalog or synonym source CSVs changed.** From `backend/`:
 
    ```bash
    railway run .venv/bin/python -m ingestion.seed_master_catalog
    railway run .venv/bin/python -m ingestion.seed_synonyms
    ```
 
-   Uploaded documents produce zero graph facts until this has run — prose
-   extraction only *attaches* facts to parts this seed already created.
-   Both are pure Neo4j `MERGE`s, so they're idempotent — safe to rerun
-   (e.g. after fixing a bad row in the source CSV) without duplicating
-   anything.
-8. **Set "Restart Policy" to On Failure** in the Railway dashboard's
-   service settings. `deploy.restartPolicyType` in `.railway/railway.ts`
-   doesn't reliably persist via `railway config apply`, so this needs a
-   manual, one-time check.
-
-### Subsequent deployments
-
-Pushing to `main` is enough for most changes — Railway builds and deploys
-automatically. Two things are **not** automatic and need a manual step
-after a deploy:
-
-1. **A new migration was added.** Run the same command as step 6 above:
-   `cd backend && railway run .venv/bin/alembic upgrade head`. This is
-   idempotent — safe to run even when there's nothing new to apply.
-   `.railway/railway.ts` intentionally has no pre-deploy command: Railway
-   fails an entire deploy with no retry if a pre-deploy command exits
-   non-zero, so running migrations that way would permanently block every
-   future deploy the moment one migration failed for any reason.
-2. **A new environment variable was added to the app.** Set its value in
+   Uploaded documents produce zero graph facts until `seed_master_catalog`
+   has run at least once — prose extraction only *attaches* facts to parts
+   this seed already created. Both are pure Neo4j `MERGE`s, so they're
+   idempotent — safe to rerun (e.g. after fixing a bad row in a CSV)
+   without duplicating anything.
+3. **A new environment variable was added to the app.** Set its value in
    the Railway dashboard, then also add its name to `.railway/railway.ts`'s
    `env` block (as `preserve()`) and run `railway config plan` then
    `railway config apply` — Infrastructure as Code treats an undeclared
    variable as drift to remove, so skipping this step gets it deleted on
    the next apply.
-
-New master-catalog or synonym rows (step 7 above) are rare enough not to
-have their own trigger — rerun those two commands by hand if the source
-CSVs change.
+4. **You just ran `railway config apply` for any reason.** Re-check
+   "Restart Policy" reads On Failure in the dashboard (see step 8 above) —
+   `apply` can silently drop it.
 
 ## Adding a new agent workflow
 
