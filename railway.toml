@@ -1,3 +1,9 @@
+# Deprecated "Config as Code" -- Railway's replacement is .railway/railway.ts
+# (Infrastructure as Code), which already mirrors every field below and has
+# been applied live. This file is kept only as a fallback for
+# deploy.restartPolicyType, which `railway config apply` (CLI v5.43.1)
+# silently fails to persist -- see README.md's "Deploying to Railway".
+# Existing Config as Code files stop being read entirely on 2026-12-01.
 [build]
 builder = "DOCKERFILE"
 dockerfilePath = "Dockerfile"

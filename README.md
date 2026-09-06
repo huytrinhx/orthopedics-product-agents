@@ -45,9 +45,11 @@ Agentic retrieval over an orthopedics product/clinical knowledge base
 9. **Deployment: Railway, single service.** The root `Dockerfile` builds the
    frontend's static export and serves it plus the API out of one FastAPI
    process (`backend/api/main.py` mounts `frontend/out`) — no separate
-   frontend host, no CORS in production. `railway.toml` is all Railway needs
-   to build/deploy on every push to `main`; there's no GitHub Actions deploy
-   step. Postgres runs on Supabase (pgvector-enabled); Neo4j runs on AuraDB.
+   frontend host, no CORS in production. `.railway/railway.ts` (Infrastructure
+   as Code — Railway's `railway.toml`/`railway.json` "Config as Code" is
+   deprecated, hard cutoff 2026-12-01) is all Railway needs to build/deploy
+   on every push to `main`; there's no GitHub Actions deploy step. Postgres
+   runs on Supabase (pgvector-enabled); Neo4j runs on AuraDB.
 10. **Model provider: OpenAI API**, direct (`OPENAI_API_KEY`) — see
     `backend/config/llm_clients.py`. LangGraph is model-agnostic, so this is
     a low-cost-to-change default; swapping the chat model to Kyma
@@ -75,9 +77,10 @@ backend/            FastAPI + LangGraph service (Python)
   tests/
 frontend/            Next.js app: /chat, /documents, /evals (static export)
 Dockerfile            builds the frontend, then serves it + the API from one process
-railway.toml           tells Railway to build with that Dockerfile
+.railway/railway.ts    tells Railway to build with that Dockerfile (railway.toml, kept
+                        for now as a fallback, is deprecated -- see "Deploying to Railway")
 .github/workflows/     ci.yml (lint/test/eval on PR) — no deploy workflow, Railway
-                        deploys straight from git via railway.toml
+                        deploys straight from git via .railway/railway.ts
 ```
 
 ## Local Development
@@ -108,9 +111,23 @@ production, and every other service (Postgres, Neo4j) runs in Docker.
 ## Deploying to Railway
 
 The app deploys as a **single Railway service** (root `Dockerfile` +
-`railway.toml`): it builds the frontend's static export and serves it plus
-the API from one FastAPI process, so there's no separate frontend host and
-no CORS in production.
+`.railway/railway.ts`): it builds the frontend's static export and serves
+it plus the API from one FastAPI process, so there's no separate frontend
+host and no CORS in production.
+
+`.railway/railway.ts` is Railway's Infrastructure as Code format — its
+older Config as Code format (`railway.toml`/`railway.json`) is deprecated
+and stops working entirely on **2026-12-01**. `railway.toml` is kept in
+this repo for now purely as a fallback (its values are already fully
+mirrored in `.railway/railway.ts` and applied live — see that file's own
+comments); it can be deleted once Railway's IaC `apply` reliably persists
+every field (as of CLI v5.43.1, `deploy.restartPolicyType` is accepted by
+`railway config apply` without error but silently doesn't stick — verified
+by re-running `railway config plan` immediately after applying, which
+still shows it pending. `railway.toml` currently covers that one gap).
+The root-level `package.json`/`package-lock.json` exist solely to provide
+the `railway` npm package (`railway-ts-sdk`) that `.railway/railway.ts`
+imports from — unrelated to `frontend/`'s own `package.json`.
 
 1. **Database.** Postgres needs the `pgvector` extension. Either use
    Supabase (has it built in) or a `pgvector`-flavored Postgres template on
@@ -125,8 +142,8 @@ no CORS in production.
    console / Azure or AWS Marketplace listing, not through this repo. Point
    `NEO4J_URI`/`NEO4J_USER`/`NEO4J_PASSWORD` at it.
 3. **Create the Railway service** from this GitHub repo. Railway picks up
-   `railway.toml`/`Dockerfile` automatically and redeploys on every push to
-   `main` — no GitHub Actions deploy step involved.
+   `.railway/railway.ts`/`Dockerfile` automatically and redeploys on every
+   push to `main` — no GitHub Actions deploy step involved.
 4. **Environment variables.** Required: `OPENAI_API_KEY`, `DATABASE_URL`,
    `NEO4J_URI`/`NEO4J_USER`/`NEO4J_PASSWORD`, `JWT_SECRET` (a real random
    value — it falls back to an insecure dev default if unset), `ADMIN_EMAILS`
