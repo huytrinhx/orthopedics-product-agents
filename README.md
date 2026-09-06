@@ -116,35 +116,27 @@ host and no CORS in production.
 
 `.railway/railway.ts` is Railway's Infrastructure as Code format — its
 older Config as Code format (`railway.toml`/`railway.json`) is deprecated
-and stops working entirely on **2026-12-01**. `railway.toml` has been
-deleted from this repo (its fields are all mirrored in `.railway/railway.ts`
-and applied live).
+and stops working entirely on **2026-12-01**; this repo has already fully
+cut over (`railway.toml` is deleted). The root-level
+`package.json`/`package-lock.json` exist solely to provide the `railway`
+npm package (`railway-ts-sdk`) that `.railway/railway.ts` imports from —
+unrelated to `frontend/`'s own `package.json`.
 
-**Known issue, not yet resolved: the pre-deploy step (`alembic upgrade
-head`) fails silently on every fresh deploy**, confirmed by Railway's own
-support diagnosis — it fails within seconds of a successful build with no
-captured log output. The app itself is not down (the last deployment from
-before this migration is still active and serving), and a significant
-side-finding while investigating this: the production Supabase database
-had **no schema applied at all** until this was manually run once via
-`railway run .venv/bin/alembic upgrade head` from `backend/` — meaning no
-prior deploy, under either the old or new config format, had ever
-successfully migrated it, and `/health`'s 200 response never actually
-proved otherwise (it's a static check with no DB query). Real
-functionality (signup, login, chat) is confirmed working now that the
-schema exists. See `.railway/railway.ts`'s own comments for the full
-investigation and what's been ruled out (it is not the command, the
-credentials, or network reachability from outside Railway — all verified
-directly). **Until the pre-deploy step is fixed, run `railway run
-.venv/bin/alembic upgrade head` (from `backend/`) by hand after any deploy
-that adds a new migration** — it's idempotent, so re-running it when
-nothing's new is a no-op. Separately, `deploy.restartPolicyType` doesn't
-reliably persist via `railway config apply` as of CLI v5.43.1 and has no
-CaC fallback anymore — verify "Restart Policy" reads "On Failure" in the
-Railway dashboard. The root-level `package.json`/`package-lock.json` exist
-solely to provide the `railway` npm package (`railway-ts-sdk`) that
-`.railway/railway.ts` imports from — unrelated to `frontend/`'s own
-`package.json`.
+**Open issue — action required on every deploy that adds a migration:**
+the pre-deploy step (`alembic upgrade head`) currently fails silently on
+Railway (see `.railway/railway.ts`'s comments for the standing diagnosis).
+Until Railway resolves this, run the migration by hand after deploying:
+
+```bash
+cd backend
+railway run .venv/bin/alembic upgrade head
+```
+
+This is idempotent — safe to run even when there's nothing new to apply.
+Also verify "Restart Policy" reads **On Failure** in the Railway
+dashboard's service settings; `deploy.restartPolicyType` doesn't reliably
+persist via `railway config apply` as of CLI v5.43.1, and there's no
+Config-as-Code fallback now that `railway.toml` is gone.
 
 1. **Database.** Postgres needs the `pgvector` extension. Either use
    Supabase (has it built in) or a `pgvector`-flavored Postgres template on
