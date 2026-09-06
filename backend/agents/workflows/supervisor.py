@@ -13,8 +13,8 @@ react_agent's actual failures looks like "needed two framings and only got
 one" (its miss is same-agent phrasing-dependent routing; its worst partial
 is a tool/data-layer grounding bug `deterministic` hits identically through
 a totally different architecture). Full reasoning, what was ruled out, and
-the revisit condition: ticket 24
-(.scratch/chat-documents-evals/issues/24-supervisor-multi-agent-deferred.md).
+the revisit condition: ticket 27
+(.scratch/chat-documents-evals/issues/27-supervisor-multi-agent-deferred.md).
 
 Do not build against the "clinical-guidelines/product-catalog" split -- it
 was the original ungrounded placeholder, not a real design decision.

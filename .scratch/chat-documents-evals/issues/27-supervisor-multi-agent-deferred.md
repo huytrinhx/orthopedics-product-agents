@@ -1,4 +1,4 @@
-# 24: `supervisor.py` multi-agent workflow -- considered, deferred
+# 27: `supervisor.py` multi-agent workflow -- considered, deferred
 
 **What was considered:** replacing `supervisor.py`'s original stub premise
 (a router dispatching to domain specialists like "clinical-guidelines" vs

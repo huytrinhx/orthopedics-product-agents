@@ -23,10 +23,10 @@ class _Entry:
     factory: Callable[[BaseCheckpointSaver], CompiledStateGraph]
     # False for a workflow that's registered (so it's visible/comparable)
     # but whose build_graph is still a stub that raises NotImplementedError
-    # -- see workflows/react_agent.py and workflows/supervisor.py. The
-    # admin workflow-selector (ticket 14) is the one place this matters:
-    # it's what lets the picker show those as disabled instead of letting
-    # an admin pick a workflow that can't actually run.
+    # -- see workflows/supervisor.py (deferred, ticket 27). The admin
+    # workflow-selector (ticket 14) is the one place this matters: it's what
+    # lets the picker show those as disabled instead of letting an admin
+    # pick a workflow that can't actually run.
     functional: bool
 
 

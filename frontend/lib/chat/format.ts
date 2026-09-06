@@ -9,6 +9,8 @@ export const STATUS_LABELS: Record<string, string> = {
   resolve_synonyms: "Checking terminology…",
   hybrid_retrieve: "Searching documents…",
   rerank: "Ranking results…",
+  resolve_skus: "Matching part numbers…",
+  aggregate_facts: "Gathering catalog facts…",
   generate: "Writing answer…",
   self_eval: "Checking answer quality…",
   request_clarification: "Preparing a follow-up question…",

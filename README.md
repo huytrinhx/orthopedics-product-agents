@@ -121,13 +121,25 @@ no CORS in production.
 3. **Create the Railway service** from this GitHub repo. Railway picks up
    `railway.toml`/`Dockerfile` automatically and redeploys on every push to
    `main` — no GitHub Actions deploy step involved.
-4. **Environment variables.** Set `OPENAI_API_KEY`, `DATABASE_URL`,
-   `NEO4J_URI`/`NEO4J_USER`/`NEO4J_PASSWORD`, and optionally
-   `OTEL_EXPORTER_OTLP_ENDPOINT`/`LANGFUSE_*`.
+4. **Environment variables.** Required: `OPENAI_API_KEY`, `DATABASE_URL`,
+   `NEO4J_URI`/`NEO4J_USER`/`NEO4J_PASSWORD`, `JWT_SECRET` (a real random
+   value — it falls back to an insecure dev default if unset), `ADMIN_EMAILS`
+   (comma-separated; grants `is_admin`). Required only if Google sign-in is
+   used: `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET` plus a matching redirect
+   URI added in the Google Cloud Console (a dashboard step, not code — see
+   `auth/`). Optional: `OTEL_EXPORTER_OTLP_ENDPOINT`/`LANGFUSE_*`. Railway
+   injects `PORT` itself; don't set it. `NEXT_PUBLIC_API_BASE` and
+   `FRONTEND_PUBLIC_URL` are local-dev-only (production is same-origin, see
+   above) and should be left unset.
 5. **Document storage volume.** `INGEST_DATA_DIR` (default `./data`) needs a
    Railway volume mounted at that path — ingested documents are plain files
    on disk, not object storage; a volume is required or they're lost on
    every redeploy since container filesystems are otherwise ephemeral.
+6. **Seed the knowledge graph once, against production.** Same as local-dev
+   step 6 above, but pointed at the production `NEO4J_URI`/`DATABASE_URL`:
+   `python -m ingestion.seed_master_catalog && python -m ingestion.seed_synonyms`.
+   Uploaded documents won't produce any graph facts until this has run —
+   easy to miss since nothing else in this section triggers it.
 
 ## Adding a new agent workflow
 
@@ -140,11 +152,15 @@ no CORS in production.
 
 ## Status
 
-This is a scaffold: directory structure, shared contracts (state schema,
-judge interface, workflow registry), and infra/CI wiring are in place.
-Workflow graph logic, retrieval clients, and the frontend UI are stubs
-(`NotImplementedError` / `TODO`) pending the experimentation phase.
+Auth, document ingestion (vector + graph + tray-layout legs), chat (both
+the `deterministic` and `react_agent` workflows), the evals dashboard, and
+the citation-scrolling PDF viewer are all built and deployed. The
+`supervisor` multi-agent workflow is registered but deliberately left a
+stub (`NotImplementedError`) — see ticket 27
+(`.scratch/chat-documents-evals/issues/27-supervisor-multi-agent-deferred.md`).
 
 See `agents.md` for standing technical decisions and conventions carried
 forward for whoever (human or AI) works on this repo next, and
-`build-log.md` for a chronological record of how it got here.
+`build-log.md` for a chronological record of how it got here (currently
+recorded through ticket 11 — later tickets are captured in their own
+`.scratch/chat-documents-evals/issues/*.md` files instead).
