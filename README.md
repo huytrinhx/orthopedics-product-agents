@@ -84,7 +84,9 @@ Dockerfile            builds the frontend, then serves it + the API from one pro
 
 ## Local Development
 
-1. **Prerequisites**: Docker Desktop, Python 3.11+, Node 20+.
+1. **Prerequisites**: Docker Desktop, Python 3.11+, Node 22+ (matches the
+   Dockerfile's build stage — `react-pdf`'s `pdfjs-dist` dependency needs
+   `Promise.withResolvers`, which Node 20 doesn't have).
 2. **Start local infra**: `docker compose up -d` — brings up Postgres with
    pgvector (`localhost:5432`) and Neo4j (browser `localhost:7474`, bolt
    `localhost:7687`).
@@ -112,90 +114,100 @@ production, and every other service (Postgres, Neo4j) runs in Docker.
 The app deploys as a **single Railway service** (root `Dockerfile` +
 `.railway/railway.ts`): it builds the frontend's static export and serves
 it plus the API from one FastAPI process, so there's no separate frontend
-host and no CORS in production.
+host and no CORS in production. `.railway/railway.ts` is Railway's
+Infrastructure as Code format — its older Config as Code format
+(`railway.toml`/`railway.json`) is deprecated and stops working entirely
+on **2026-12-01**. The root-level `package.json`/`package-lock.json` exist
+solely to provide the `railway` npm package (`railway-ts-sdk`) that
+`.railway/railway.ts` imports from — unrelated to `frontend/`'s own
+`package.json`.
 
-`.railway/railway.ts` is Railway's Infrastructure as Code format — its
-older Config as Code format (`railway.toml`/`railway.json`) is deprecated
-and stops working entirely on **2026-12-01**; this repo has already fully
-cut over (`railway.toml` is deleted). The root-level
-`package.json`/`package-lock.json` exist solely to provide the `railway`
-npm package (`railway-ts-sdk`) that `.railway/railway.ts` imports from —
-unrelated to `frontend/`'s own `package.json`.
+Database migrations and graph seeding are **not** part of the automated
+deploy — both are run by hand, on your own machine, via `railway run`
+(which executes locally but injects the linked service's real production
+env vars). See "Subsequent deployments" below for why migrations aren't
+automatic.
 
-**Migrations run manually, not as a Railway pre-deploy step** —
-`.railway/railway.ts` intentionally sets no `preDeploy`. Railway's pre-deploy
-commands fail the whole deploy with no retry if they exit non-zero, and this
-one reliably did, for a cause not diagnosable from outside Railway's
-infrastructure (confirmed: same command/credentials succeed from a local
-`railway run`) — leaving it configured meant no deploy could ever succeed.
-**Action required after every deploy that adds a new migration:**
+### First deployment
 
-```bash
-cd backend
-railway run .venv/bin/alembic upgrade head
-```
-
-This is idempotent — safe to run even when there's nothing new to apply.
-Also verify "Restart Policy" reads **On Failure** in the Railway
-dashboard's service settings; `deploy.restartPolicyType` doesn't reliably
-persist via `railway config apply` as of CLI v5.43.1, and there's no
-Config-as-Code fallback now that `railway.toml` is gone.
-
-1. **Database.** Postgres needs the `pgvector` extension. Either use
-   Supabase (has it built in) or a `pgvector`-flavored Postgres template on
-   Railway. Run `CREATE EXTENSION IF NOT EXISTS vector;` once against it.
-   If pointing at Supabase, either connection string works — every psycopg
-   connection this app opens (`config/db.py`, `retrieval/vector_store.py`,
-   and LangGraph's own checkpointer/store) sets `prepare_threshold=0`, so a
-   PgBouncer transaction-mode pooler (Supabase's pooled connection string,
-   port 6543) swapping the underlying server connection between queries
-   won't produce `prepared statement ... does not exist` errors.
-2. **Graph DB.** Neo4j runs as AuraDB — provision it via the Neo4j Aura
-   console / Azure or AWS Marketplace listing, not through this repo. Point
-   `NEO4J_URI`/`NEO4J_USER`/`NEO4J_PASSWORD` at it.
+1. **Provision Postgres with the `pgvector` extension.** Use Supabase (has
+   it built in) or a `pgvector`-flavored Postgres template on Railway. Run
+   `CREATE EXTENSION IF NOT EXISTS vector;` once against it. Either the
+   pooled or direct connection string works — every psycopg connection this
+   app opens sets `prepare_threshold=0`, which avoids the `prepared
+   statement ... does not exist` errors a PgBouncer transaction-mode
+   pooler otherwise causes.
+2. **Provision Neo4j as AuraDB**, via the Neo4j Aura console (or the
+   AWS/Azure Marketplace listing) — not through this repo.
 3. **Create the Railway service** from this GitHub repo. Railway picks up
    `.railway/railway.ts`/`Dockerfile` automatically and redeploys on every
    push to `main` — no GitHub Actions deploy step involved.
-4. **Environment variables.** Required: `OPENAI_API_KEY`, `DATABASE_URL`,
-   `NEO4J_URI`/`NEO4J_USER`/`NEO4J_PASSWORD`, `JWT_SECRET` (a real random
-   value — it falls back to an insecure dev default if unset), `ADMIN_EMAILS`
-   (comma-separated; grants `is_admin`). Required only if Google sign-in is
-   used: `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET` and `GOOGLE_REDIRECT_URI`
-   (set to `https://<your-railway-domain>/auth/google/callback`) — that
-   exact URL must also be added as an authorized redirect URI on the OAuth
-   client in the Google Cloud Console (a dashboard step, not code — see
-   `auth/oauth.py`). Optional: `OTEL_EXPORTER_OTLP_ENDPOINT`/`LANGFUSE_*`. Railway
-   injects `PORT` itself; don't set it. `NEXT_PUBLIC_API_BASE` and
-   `FRONTEND_PUBLIC_URL` are local-dev-only (production is same-origin, see
-   above) and should be left unset.
-5. **Document storage volume.** `INGEST_DATA_DIR` (default `./data`) needs a
-   Railway volume mounted at that path — ingested documents are plain files
-   on disk, not object storage; a volume is required or they're lost on
-   every redeploy since container filesystems are otherwise ephemeral.
-6. **Seed the knowledge graph once, against production.** Uploaded
-   documents produce zero graph facts until this has run — nothing else in
-   this section triggers it, so it's easy to miss on a first deploy.
-
-   Run it from your own machine with the Railway CLI, *not* `railway ssh`:
-   `railway run` executes locally but with the service's production env
-   vars injected, and since these two scripts only read local fixture CSVs
-   (already in your checkout, under `backend/evals/`) and write to Neo4j
-   over the network — no local output file the way `INGEST_DATA_DIR`-based
-   document ingestion has — running locally against production Neo4j/Postgres
-   is correct here, not a shortcut.
+4. **Set environment variables** in the Railway dashboard.
+   `.railway/railway.ts` already declares every variable name below (via
+   `preserve()`, so it never manages the actual value) — this step is just
+   giving each one a real value. Required: `OPENAI_API_KEY`,
+   `DATABASE_URL`, `NEO4J_URI`/`NEO4J_USER`/`NEO4J_PASSWORD`, `JWT_SECRET`
+   (a real random value — it falls back to an insecure dev default if
+   unset), `ADMIN_EMAILS` (comma-separated; grants `is_admin`). Required
+   only for Google sign-in: `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET` and
+   `GOOGLE_REDIRECT_URI` (set to
+   `https://<your-railway-domain>/auth/google/callback` — that exact URL
+   must also be added as an authorized redirect URI on the OAuth client in
+   the Google Cloud Console). Optional:
+   `OTEL_EXPORTER_OTLP_ENDPOINT`/`LANGFUSE_*`. Leave `PORT` (Railway sets
+   it itself), `NEXT_PUBLIC_API_BASE`, and `FRONTEND_PUBLIC_URL`
+   (local-dev only, production is same-origin) unset.
+5. **Mount a volume for document storage.** Set `INGEST_DATA_DIR` to an
+   absolute path (e.g. `/app/data`) and mount a Railway volume at that same
+   path — uploaded PDFs are plain files, not object storage, and are lost
+   on every redeploy without a volume.
+6. **Run the first migration by hand**, once the service has deployed:
 
    ```bash
    cd backend
-   railway run python -m ingestion.seed_master_catalog
-   railway run python -m ingestion.seed_synonyms
+   railway run .venv/bin/alembic upgrade head
    ```
 
-   Order matters — `seed_synonyms` doesn't depend on the catalog, but
-   `seed_master_catalog` must run before any document is indexed, since
-   prose extraction only *attaches* facts to parts this seed already
-   created. Both scripts are pure `MERGE`s in Neo4j, so they're idempotent —
-   safe to rerun (e.g. after fixing a bad row in the source CSV) without
-   duplicating anything.
+7. **Seed the knowledge graph**, from `backend/`:
+
+   ```bash
+   railway run .venv/bin/python -m ingestion.seed_master_catalog
+   railway run .venv/bin/python -m ingestion.seed_synonyms
+   ```
+
+   Uploaded documents produce zero graph facts until this has run — prose
+   extraction only *attaches* facts to parts this seed already created.
+   Both are pure Neo4j `MERGE`s, so they're idempotent — safe to rerun
+   (e.g. after fixing a bad row in the source CSV) without duplicating
+   anything.
+8. **Set "Restart Policy" to On Failure** in the Railway dashboard's
+   service settings. `deploy.restartPolicyType` in `.railway/railway.ts`
+   doesn't reliably persist via `railway config apply`, so this needs a
+   manual, one-time check.
+
+### Subsequent deployments
+
+Pushing to `main` is enough for most changes — Railway builds and deploys
+automatically. Two things are **not** automatic and need a manual step
+after a deploy:
+
+1. **A new migration was added.** Run the same command as step 6 above:
+   `cd backend && railway run .venv/bin/alembic upgrade head`. This is
+   idempotent — safe to run even when there's nothing new to apply.
+   `.railway/railway.ts` intentionally has no pre-deploy command: Railway
+   fails an entire deploy with no retry if a pre-deploy command exits
+   non-zero, so running migrations that way would permanently block every
+   future deploy the moment one migration failed for any reason.
+2. **A new environment variable was added to the app.** Set its value in
+   the Railway dashboard, then also add its name to `.railway/railway.ts`'s
+   `env` block (as `preserve()`) and run `railway config plan` then
+   `railway config apply` — Infrastructure as Code treats an undeclared
+   variable as drift to remove, so skipping this step gets it deleted on
+   the next apply.
+
+New master-catalog or synonym rows (step 7 above) are rare enough not to
+have their own trigger — rerun those two commands by hand if the source
+CSVs change.
 
 ## Adding a new agent workflow
 
