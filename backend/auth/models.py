@@ -19,9 +19,14 @@ class UserOut(BaseModel):
     id: uuid.UUID
     email: str
     is_admin: bool
+    is_active: bool
     created_at: datetime
 
 
 class TokenResponse(BaseModel):
     access_token: str
     user: UserOut
+
+
+class SetUserActiveRequest(BaseModel):
+    is_active: bool

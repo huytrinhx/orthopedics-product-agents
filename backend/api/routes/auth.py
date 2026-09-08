@@ -25,7 +25,11 @@ router = APIRouter()
 
 def _user_out(user: UserRecord) -> UserOut:
     return UserOut(
-        id=user.id, email=user.email, is_admin=user.is_admin, created_at=user.created_at
+        id=user.id,
+        email=user.email,
+        is_admin=user.is_admin,
+        is_active=user.is_active,
+        created_at=user.created_at,
     )
 
 
@@ -34,10 +38,16 @@ async def signup(body: SignupRequest) -> TokenResponse:
     if await get_user_by_email(body.email) is not None:
         raise HTTPException(status.HTTP_409_CONFLICT, "An account with this email already exists")
 
+    # A brand-new non-admin starts is_active=False -- pending until an admin
+    # enables them (auth.dependencies.require_chat_access is what actually
+    # blocks them). Admins are active immediately since the check never
+    # applies to them anyway.
+    admin = is_allowlisted_admin(body.email)
     user = await create_user(
         email=body.email,
         hashed_password=hash_password(body.password),
-        is_admin=is_allowlisted_admin(body.email),
+        is_admin=admin,
+        is_active=admin,
     )
     return TokenResponse(access_token=create_access_token(user.id), user=_user_out(user))
 
@@ -78,7 +88,10 @@ async def google_callback(code: str, state: str) -> RedirectResponse:
         # Signing in with an email that already has a password account
         # (the `if user is None` above being False) links to that same row
         # instead of creating a duplicate.
-        user = await create_user(email=email, hashed_password=None, is_admin=is_allowlisted_admin(email))
+        admin = is_allowlisted_admin(email)
+        user = await create_user(
+            email=email, hashed_password=None, is_admin=admin, is_active=admin
+        )
 
     session_token = create_access_token(user.id)
     frontend_base = os.environ.get("FRONTEND_PUBLIC_URL", "")

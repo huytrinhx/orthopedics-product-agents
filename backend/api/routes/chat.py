@@ -35,7 +35,7 @@ from langgraph.types import Command
 from pydantic import BaseModel
 
 from agents.registry import get_workflow, list_workflows
-from auth.dependencies import get_current_user, require_admin
+from auth.dependencies import require_admin, require_chat_access
 from auth.repository import UserRecord
 from chat_threads.models import ChatCitationOut, ChatMessageOut, ChatThreadOut, ChatTranscriptOut
 from chat_threads.repository import (
@@ -195,7 +195,7 @@ async def stream_chat(
     workflow_name: str,
     body: ChatStreamRequest,
     request: Request,
-    user: UserRecord = Depends(get_current_user),
+    user: UserRecord = Depends(require_chat_access),
 ) -> StreamingResponse:
     """Explicit workflow selection -- used by evals/testing to run a named
     workflow directly. The chat UI itself never calls this; it calls
@@ -211,7 +211,7 @@ async def stream_chat(
 async def stream_chat_default(
     body: ChatStreamRequest,
     request: Request,
-    user: UserRecord = Depends(get_current_user),
+    user: UserRecord = Depends(require_chat_access),
 ) -> StreamingResponse:
     settings = await get_settings()
     return await _stream_chat(settings.default_workflow, body, request, user)
@@ -357,7 +357,7 @@ async def resume_chat(
     workflow_name: str,
     body: ChatResumeRequest,
     request: Request,
-    user: UserRecord = Depends(get_current_user),
+    user: UserRecord = Depends(require_chat_access),
 ) -> StreamingResponse:
     """Explicit-workflow counterpart to resume_chat_default below, same
     split as stream_chat/stream_chat_default and for the same reason."""
@@ -368,7 +368,7 @@ async def resume_chat(
 async def resume_chat_default(
     body: ChatResumeRequest,
     request: Request,
-    user: UserRecord = Depends(get_current_user),
+    user: UserRecord = Depends(require_chat_access),
 ) -> StreamingResponse:
     settings = await get_settings()
     return await _resume_chat(settings.default_workflow, body, request, user)
@@ -482,7 +482,7 @@ async def rerun_chat(
 
 
 @router.get("/threads", response_model=list[ChatThreadOut])
-async def list_chat_threads(user: UserRecord = Depends(get_current_user)) -> list[ChatThreadOut]:
+async def list_chat_threads(user: UserRecord = Depends(require_chat_access)) -> list[ChatThreadOut]:
     return [
         ChatThreadOut(
             thread_id=t.thread_id, title=t.title, created_at=t.created_at, updated_at=t.updated_at
@@ -495,7 +495,7 @@ async def list_chat_threads(user: UserRecord = Depends(get_current_user)) -> lis
 async def get_chat_thread(
     thread_id: str,
     request: Request,
-    user: UserRecord = Depends(get_current_user),
+    user: UserRecord = Depends(require_chat_access),
 ) -> ChatTranscriptOut:
     if not owns_thread(str(user.id), thread_id):
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Not your thread")

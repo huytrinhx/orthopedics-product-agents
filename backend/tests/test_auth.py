@@ -47,6 +47,8 @@ def test_signup_then_me():
     body = res.json()
     assert body["user"]["email"] == email
     assert body["user"]["is_admin"] is False
+    # Pending until an admin enables them -- see auth.dependencies.require_chat_access.
+    assert body["user"]["is_active"] is False
 
     me = client.get("/auth/me", headers={"Authorization": f"Bearer {body['access_token']}"})
     assert me.status_code == 200
@@ -85,6 +87,8 @@ def test_admin_emails_allowlist_grants_is_admin(monkeypatch):
     monkeypatch.setenv("ADMIN_EMAILS", f"someone-else@example.com, {email}")
     res = client.post("/auth/signup", json={"email": email, "password": "correct horse battery"})
     assert res.json()["user"]["is_admin"] is True
+    # Admins never need the pending-approval gate -- active immediately.
+    assert res.json()["user"]["is_active"] is True
 
 
 def test_google_login_redirects_to_google_with_signed_state():

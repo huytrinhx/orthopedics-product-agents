@@ -515,6 +515,20 @@ tr:last-child td {
   color: var(--danger);
 }
 
+.badge-enabled {
+  background: var(--verify-wash);
+  color: var(--verify-dark);
+}
+
+.badge-disabled {
+  background: var(--diffuser-dim);
+  color: var(--steel);
+}
+
+.users-readonly {
+  color: var(--steel);
+}
+
 /* ---------------- admin workflow picker ---------------- */
 
 .workflow-picker {

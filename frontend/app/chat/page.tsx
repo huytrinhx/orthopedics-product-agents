@@ -332,6 +332,18 @@ export default function ChatPage() {
     );
   }
 
+  // New signups start is_active=False (backend/auth/dependencies.py's
+  // require_chat_access) until an admin enables them from the Users tab --
+  // admins bypass this check entirely, so it never applies to them.
+  if (!user.is_admin && !user.is_active) {
+    return (
+      <main className="page">
+        <h1>Chat</h1>
+        <p>Your account is pending admin approval. You&rsquo;ll be able to chat once an admin enables it.</p>
+      </main>
+    );
+  }
+
   return (
     <main className="page-full">
       <span className="eyebrow">Ask OrthoMate</span>

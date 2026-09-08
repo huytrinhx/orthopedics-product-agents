@@ -79,11 +79,16 @@ picking this repo up cold, read this before making structural changes.
   rows land there, don't hand-edit the JSONL.
 - **Auth is JWT-based, stateless, client-held.** `backend/auth/` issues a
   signed JWT on signup/login (`JWT_SECRET`); the frontend stores it in
-  `localStorage` (`frontend/lib/auth.ts`) and attaches it as a Bearer token —
-  there's no server-side session store to invalidate on logout. `is_admin` is
-  decided once, at signup, from the `ADMIN_EMAILS` allowlist — it's not
-  editable via any UI yet. Admin-gated pages (Documents, Evals) check this
-  flag; regular chat access doesn't require it.
+  `localStorage` (`frontend/lib/auth/token.ts`) and attaches it as a Bearer
+  token — there's no server-side session store to invalidate on logout.
+  `is_admin` is decided once, at signup, from the `ADMIN_EMAILS` allowlist —
+  it's not editable via any UI. Admin-gated pages (Documents, Evals, Users)
+  check this flag; regular chat access doesn't require it, but does require
+  `is_active` (the Users tab's Enable/Disable) — a new non-admin signup
+  starts `is_active=False` and is blocked from chat
+  (`auth.dependencies.require_chat_access`) until an admin enables them.
+  Admins bypass the `is_active` check entirely, so an admin's row is
+  read-only in the Users tab.
 - **Schema changes go through Alembic (`backend/migrations/`), not hand-run
   SQL.** `alembic upgrade head` reads `DATABASE_URL` (same env var as
   everything else) and applies pending migrations; it's a required step in

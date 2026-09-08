@@ -5,6 +5,7 @@ workflow, thread ownership) don't need a real LLM; anything that has to
 complete an actual chat turn does, so those are gated behind OPENAI_API_KEY
 like test_entity_extraction.py.
 """
+import asyncio
 import json
 import os
 import time
@@ -15,6 +16,7 @@ from fastapi.testclient import TestClient
 
 import agents.workflows.deterministic as det
 from api.main import app
+from auth.repository import set_user_active
 
 needs_openai_key = pytest.mark.skipif(
     not os.environ.get("OPENAI_API_KEY"), reason="requires a real OPENAI_API_KEY"
@@ -25,10 +27,21 @@ def _unique_email() -> str:
     return f"test-{uuid.uuid4().hex[:12]}@example.com"
 
 
-def _signup(client: TestClient) -> dict:
+def _signup_pending(client: TestClient) -> dict:
+    """Raw signup, left is_active=False -- everything below this except the
+    is_active gate tests wants an already-enabled rep, same as an admin
+    would produce via PATCH /users/{id}/active, so _signup activates by
+    default. This is the one helper that doesn't.
+    """
     email = _unique_email()
     res = client.post("/auth/signup", json={"email": email, "password": "correct horse battery"})
     return res.json()
+
+
+def _signup(client: TestClient) -> dict:
+    body = _signup_pending(client)
+    asyncio.run(set_user_active(uuid.UUID(body["user"]["id"]), True))
+    return body
 
 
 def _user_token(client: TestClient) -> str:
@@ -67,6 +80,35 @@ def test_stream_default_requires_auth():
     with TestClient(app) as client:
         res = client.post("/chat/stream", json={"message": "hi"})
     assert res.status_code == 401
+
+
+def test_stream_rejects_a_pending_not_yet_enabled_user():
+    with TestClient(app) as client:
+        token = _signup_pending(client)["access_token"]
+        res = client.post(
+            "/chat/deterministic/stream",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"message": "hi"},
+        )
+    assert res.status_code == 403
+
+
+def test_threads_rejects_a_pending_not_yet_enabled_user():
+    with TestClient(app) as client:
+        token = _signup_pending(client)["access_token"]
+        res = client.get("/chat/threads", headers={"Authorization": f"Bearer {token}"})
+    assert res.status_code == 403
+
+
+def test_chat_access_reopens_once_an_admin_enables_the_user():
+    with TestClient(app) as client:
+        user = _signup_pending(client)
+        headers = {"Authorization": f"Bearer {user['access_token']}"}
+        assert client.get("/chat/threads", headers=headers).status_code == 403
+
+        asyncio.run(set_user_active(uuid.UUID(user["user"]["id"]), True))
+        res = client.get("/chat/threads", headers=headers)
+    assert res.status_code == 200
 
 
 def test_stream_default_resolves_the_admin_configured_workflow(monkeypatch):

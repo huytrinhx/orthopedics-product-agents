@@ -18,7 +18,7 @@ def _unique(prefix: str) -> str:
 
 
 async def _create_document() -> uuid.UUID:
-    user = await create_user(f"{_unique('user')}@example.com", None, False)
+    user = await create_user(f"{_unique('user')}@example.com", None, False, True)
     doc = await create_document(
         filename=_unique("doc") + ".txt",
         storage_path=f"/tmp/{_unique('storage')}.txt",
