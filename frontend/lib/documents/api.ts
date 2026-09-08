@@ -1,4 +1,4 @@
-import { API_BASE, authHeaders, request, unwrap } from "../api/client";
+import { API_BASE, authHeaders, handleUnauthorized, request, unwrap } from "../api/client";
 import type { DocumentChunk, DocumentRecord } from "./types";
 
 export async function uploadDocument(
@@ -63,6 +63,7 @@ export async function getDocumentFile(documentId: string): Promise<Blob> {
     headers: authHeaders(),
   });
   if (!res.ok) {
+    handleUnauthorized(res);
     throw new Error(`request failed: ${res.status}`);
   }
   return res.blob();
@@ -91,6 +92,7 @@ export async function deleteDocument(documentId: string): Promise<void> {
     headers: authHeaders(),
   });
   if (!res.ok) {
+    handleUnauthorized(res);
     const body = await res.json().catch(() => ({}));
     throw new Error(body.detail ?? `request failed: ${res.status}`);
   }

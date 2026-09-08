@@ -7,7 +7,7 @@ import { API_BASE } from "../../lib/api/client";
 import { useAuth } from "../../lib/auth-context";
 
 export default function LoginPage() {
-  const { login } = useAuth();
+  const { login, sessionExpired } = useAuth();
   const router = useRouter();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -31,6 +31,11 @@ export default function LoginPage() {
   return (
     <main className="page-narrow">
       <h1>Log in</h1>
+      {sessionExpired && (
+        <p className="alert" role="alert">
+          Your session has expired. Log in again to continue.
+        </p>
+      )}
       <div className="card">
         <form onSubmit={handleSubmit}>
           <label className="field">

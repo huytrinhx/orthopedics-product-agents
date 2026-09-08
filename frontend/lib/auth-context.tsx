@@ -2,12 +2,18 @@
 
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
 import { getCurrentUser, login as apiLogin, signup as apiSignup } from "./auth/api";
+import { onSessionExpired } from "./auth/session-expiry";
 import { clearToken, getToken, setToken } from "./auth/token";
 import type { AuthUser } from "./auth/types";
 
 interface AuthContextValue {
   user: AuthUser | null;
   loading: boolean;
+  // True once an in-session API call has 401'd (see lib/api/client.ts's
+  // handleUnauthorized), as opposed to never having logged in -- lets the
+  // UI say *why* it's showing the logged-out state instead of just showing
+  // it silently.
+  sessionExpired: boolean;
   login: (email: string, password: string) => Promise<void>;
   signup: (email: string, password: string) => Promise<void>;
   logout: () => void;
@@ -18,6 +24,14 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [loading, setLoading] = useState(true);
+  const [sessionExpired, setSessionExpired] = useState(false);
+
+  useEffect(() => {
+    return onSessionExpired(() => {
+      setUser(null);
+      setSessionExpired(true);
+    });
+  }, []);
 
   useEffect(() => {
     // A Google OAuth redirect (backend/api/routes/auth.py's google_callback)
@@ -44,21 +58,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const { access_token, user } = await apiLogin(email, password);
     setToken(access_token);
     setUser(user);
+    setSessionExpired(false);
   }
 
   async function signup(email: string, password: string) {
     const { access_token, user } = await apiSignup(email, password);
     setToken(access_token);
     setUser(user);
+    setSessionExpired(false);
   }
 
   function logout() {
     clearToken();
     setUser(null);
+    setSessionExpired(false);
   }
 
   return (
-    <AuthContext.Provider value={{ user, loading, login, signup, logout }}>
+    <AuthContext.Provider value={{ user, loading, sessionExpired, login, signup, logout }}>
       {children}
     </AuthContext.Provider>
   );

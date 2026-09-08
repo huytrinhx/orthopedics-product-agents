@@ -151,6 +151,12 @@ a {
   color: var(--highlighter);
 }
 
+.nav-alert {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  color: var(--highlighter);
+}
+
 /* ---------------- layout ---------------- */
 
 .page {

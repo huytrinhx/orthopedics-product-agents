@@ -1,4 +1,4 @@
-import { API_BASE, authHeaders, request } from "../api/client";
+import { API_BASE, authHeaders, handleUnauthorized, request } from "../api/client";
 import type { ChatFeedback, ChatStreamEvent, ChatThread, ChatTranscript, SubmitFeedbackRequest } from "./types";
 
 // SSE (event: <name>\ndata: <json>\n\n) but over a POST, so the native
@@ -12,6 +12,7 @@ import type { ChatFeedback, ChatStreamEvent, ChatThread, ChatTranscript, SubmitF
 // POST /chat/rerun and its resume too.
 export async function* parseSseStream(res: Response): AsyncGenerator<ChatStreamEvent> {
   if (!res.ok || !res.body) {
+    handleUnauthorized(res);
     const body = await res.json().catch(() => ({}));
     throw new Error(body.detail ?? `request failed: ${res.status}`);
   }

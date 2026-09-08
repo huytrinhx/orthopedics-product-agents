@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useAuth } from "../lib/auth-context";
 
 export function Nav() {
-  const { user, loading, logout } = useAuth();
+  const { user, loading, sessionExpired, logout } = useAuth();
 
   return (
     <nav className="nav">
@@ -37,6 +37,7 @@ export function Nav() {
 
         {!loading && !user && (
           <div className="nav-links">
+            {sessionExpired && <span className="nav-alert">Your session expired.</span>}
             <Link href="/login">Log in</Link>
             <Link href="/signup">Sign up</Link>
           </div>

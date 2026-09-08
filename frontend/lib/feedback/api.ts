@@ -1,4 +1,4 @@
-import { API_BASE, authHeaders, request } from "../api/client";
+import { API_BASE, authHeaders, handleUnauthorized, request } from "../api/client";
 import { parseSseStream } from "../chat/api";
 import type { ChatFeedback, ChatStreamEvent } from "../chat/types";
 import type { FlaggedFeedback, Rerun } from "./types";
@@ -33,6 +33,7 @@ export async function deleteFlaggedFeedback(messageId: string): Promise<void> {
     headers: authHeaders(),
   });
   if (!res.ok) {
+    handleUnauthorized(res);
     const body = await res.json().catch(() => ({}));
     throw new Error(body.detail ?? `request failed: ${res.status}`);
   }
