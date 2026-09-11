@@ -16,6 +16,25 @@ from memory.checkpointer import get_checkpointer
 from observability.langfuse_setup import configure_langfuse
 
 
+class CleanUrlStaticFiles(StaticFiles):
+    """`next build`'s static export (output: "export") writes each page as a
+    flat file -- frontend/out/users.html, not out/users/index.html -- so a
+    plain StaticFiles(html=True) mount can serve "/" (index.html) and
+    "/users.html" but has no logic to resolve the extensionless "/users" a
+    browser actually requests. In-app <Link> navigation never hits this (it's
+    a client-side transition, no server round trip), which is why the gap
+    went unnoticed until a hard/direct navigation to a route other than "/"
+    404'd. This tries appending ".html" to an extensionless miss before
+    giving up, mirroring the "clean URL" rewrite most static hosts do.
+    """
+
+    def lookup_path(self, path: str) -> tuple[str, os.stat_result | None]:
+        full_path, stat_result = super().lookup_path(path)
+        if stat_result is None and path and "." not in os.path.basename(path):
+            return super().lookup_path(f"{path}.html")
+        return full_path, stat_result
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Initializes (and logs a warning if unconfigured) up front, rather than
@@ -68,4 +87,4 @@ async def health() -> dict:
 # its own dev server instead.
 FRONTEND_DIST = Path(__file__).resolve().parent.parent.parent / "frontend" / "out"
 if FRONTEND_DIST.is_dir():
-    app.mount("/", StaticFiles(directory=FRONTEND_DIST, html=True), name="frontend")
+    app.mount("/", CleanUrlStaticFiles(directory=FRONTEND_DIST, html=True), name="frontend")
