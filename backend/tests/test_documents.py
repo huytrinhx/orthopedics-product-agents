@@ -49,6 +49,44 @@ def test_non_admin_cannot_upload_or_list(monkeypatch, tmp_path):
     assert listing.status_code == 403
 
 
+def test_health_check_reports_all_components_ok(monkeypatch, tmp_path):
+    """Real round-trips against the local test infra (docker-compose's
+    postgres-test/neo4j-test, see tests/conftest.py) -- not mocked, since the
+    point of this endpoint is proving those connections actually work, not
+    just that the code compiles.
+    """
+    token = _admin_token(monkeypatch, tmp_path)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    res = client.get("/documents/health", headers=headers)
+    assert res.status_code == 200
+    body = res.json()
+    assert body["volume"] == {"ok": True, "detail": "0 files"}
+    assert body["graph_db"]["ok"] is True
+    assert body["vector_db"]["ok"] is True
+
+
+def test_health_check_volume_reflects_file_count(monkeypatch, tmp_path):
+    token = _admin_token(monkeypatch, tmp_path)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    for name in ("a.txt", "b.txt"):
+        client.post(
+            "/documents/upload",
+            headers=headers,
+            files={"file": (name, b"x", "text/plain")},
+        )
+
+    res = client.get("/documents/health", headers=headers)
+    assert res.json()["volume"] == {"ok": True, "detail": "2 files"}
+
+
+def test_non_admin_cannot_check_health(monkeypatch, tmp_path):
+    token = _user_token(monkeypatch, tmp_path)
+    headers = {"Authorization": f"Bearer {token}"}
+    assert client.get("/documents/health", headers=headers).status_code == 403
+
+
 def test_admin_upload_appears_in_list_pending_until_indexed(monkeypatch, tmp_path):
     token = _admin_token(monkeypatch, tmp_path)
     headers = {"Authorization": f"Bearer {token}"}

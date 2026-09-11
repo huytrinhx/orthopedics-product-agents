@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import Link from "next/link";
 import {
+  checkSystemHealth,
   deleteDocument,
   downloadDocumentFile,
   indexDocument,
@@ -20,7 +21,7 @@ import {
   listSystems,
 } from "../../lib/documents/tags/api";
 import { useAuth } from "../../lib/auth-context";
-import type { DocumentRecord } from "../../lib/documents/types";
+import type { ComponentHealth, DocumentRecord, SystemHealth } from "../../lib/documents/types";
 import type { Tag } from "../../lib/documents/tags/types";
 import { TagList, TagSelect } from "./tag-select";
 
@@ -75,6 +76,33 @@ function TrashIcon() {
   );
 }
 
+// One dot per component (backend/api/routes/documents.py's check_system_health
+// pokes each for real on every call -- volume file count, a Neo4j query, a
+// Postgres/pgvector connection -- rather than reporting a cached status).
+// `health` is undefined until the fetch resolves and stays undefined forever
+// if it fails outright (see HealthStrip's catch), both shown as "pending".
+function HealthItem({ label, health }: { label: string; health?: ComponentHealth }) {
+  const state = !health ? "pending" : health.ok ? "ok" : "down";
+  const title = health ? health.detail : "Checking…";
+  return (
+    <span className={`health-item health-${state}`} title={title}>
+      <span className="health-dot" />
+      {label}
+    </span>
+  );
+}
+
+function HealthStrip({ health, error }: { health: SystemHealth | null; error: string | null }) {
+  return (
+    <div className="health-row">
+      <HealthItem label="Storage" health={health?.volume} />
+      <HealthItem label="Graph DB" health={health?.graph_db} />
+      <HealthItem label="Vector DB" health={health?.vector_db} />
+      {error && <span className="tag-add-error">{error}</span>}
+    </div>
+  );
+}
+
 // Index/Reindex trigger for the (still stubbed, see backend/documents/service.py)
 // ingestion pipeline: upload leaves a document "pending" rather than
 // auto-indexing it, so this is the only way a document reaches "done".
@@ -93,6 +121,8 @@ export default function DocumentsPage() {
   const [documents, setDocuments] = useState<DocumentRecord[]>([]);
   const [systems, setSystems] = useState<Tag[]>([]);
   const [documentTypes, setDocumentTypes] = useState<Tag[]>([]);
+  const [health, setHealth] = useState<SystemHealth | null>(null);
+  const [healthError, setHealthError] = useState<string | null>(null);
   const [listError, setListError] = useState<string | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
@@ -121,6 +151,18 @@ export default function DocumentsPage() {
     refresh();
     listSystems().then(setSystems).catch(() => {});
     listDocumentTypes().then(setDocumentTypes).catch(() => {});
+    // A fresh poke every time this page loads (component mount), not a
+    // cached/periodic status -- see backend/api/routes/documents.py's
+    // check_system_health.
+    checkSystemHealth()
+      .then((h) => {
+        setHealth(h);
+        setHealthError(null);
+      })
+      .catch((err) => {
+        setHealth(null);
+        setHealthError(err instanceof Error ? err.message : "failed to check system health");
+      });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user]);
 
@@ -258,6 +300,8 @@ export default function DocumentsPage() {
         Upload the technique guides, IFUs, and brochures OrthoMate cites from. Tag each with
         the system and document type it belongs to — reuse an existing tag, or add a new one.
       </p>
+
+      <HealthStrip health={health} error={healthError} />
 
       {/* TagSelect's own "add new" affordance renders a <form> (see
       tag-select.tsx), so these live outside the upload form rather than

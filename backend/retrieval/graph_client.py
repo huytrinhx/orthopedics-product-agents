@@ -510,6 +510,16 @@ class GraphClient:
                 groups.append(group)
             return groups
 
+    async def ping(self) -> None:
+        """Round-trips to AuraDB and back -- backs the Document Manager's
+        health check (api/routes/documents.py). Raises on any connectivity
+        or auth failure; callers decide how to report that, this just proves
+        the driver can actually reach and query the database, which a driver
+        that merely constructed without error doesn't guarantee.
+        """
+        async with self._driver.session() as session:
+            await session.run("RETURN 1")
+
     async def close(self) -> None:
         await self._driver.close()
 

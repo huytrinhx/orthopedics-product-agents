@@ -35,3 +35,14 @@ class ChunkOut(BaseModel):
     # 26) -- None for non-PDF documents and for chunks written before this
     # shipped (no backfill migration).
     page_number: int | None
+
+
+class ComponentHealth(BaseModel):
+    ok: bool
+    detail: str
+
+
+class SystemHealthOut(BaseModel):
+    volume: ComponentHealth
+    graph_db: ComponentHealth
+    vector_db: ComponentHealth

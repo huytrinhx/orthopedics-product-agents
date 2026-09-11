@@ -14,13 +14,20 @@ import os
 import uuid
 from pathlib import Path
 
+import neo4j.exceptions
 import psycopg
 from fastapi import APIRouter, BackgroundTasks, Depends, Form, HTTPException, UploadFile, status
 from fastapi.responses import FileResponse
 
 from auth.dependencies import get_current_user, require_admin
 from auth.repository import UserRecord
-from documents.models import ChunkOut, DocumentOut, SetDocumentTagsRequest
+from documents.models import (
+    ChunkOut,
+    ComponentHealth,
+    DocumentOut,
+    SetDocumentTagsRequest,
+    SystemHealthOut,
+)
 from documents.repository import (
     create_document,
     delete_document,
@@ -32,6 +39,8 @@ from documents.repository import (
     set_tags,
 )
 from documents.service import process_document
+from retrieval.graph_client import get_graph_client
+from retrieval.vector_store import get_vector_store
 from tags.models import TagOut
 
 router = APIRouter()
@@ -103,6 +112,50 @@ async def upload_document(
 @router.get("/", response_model=list[DocumentOut])
 async def list_all_documents(admin: UserRecord = Depends(require_admin)) -> list[DocumentOut]:
     return [_document_out(doc) for doc in await list_documents()]
+
+
+async def _check_volume() -> ComponentHealth:
+    try:
+        count = sum(1 for p in _ingest_data_dir().iterdir() if p.is_file())
+    except OSError as exc:
+        return ComponentHealth(ok=False, detail=str(exc))
+    return ComponentHealth(ok=True, detail=f"{count} file{'s' if count != 1 else ''}")
+
+
+async def _check_graph_db() -> ComponentHealth:
+    try:
+        await get_graph_client().ping()
+    except neo4j.exceptions.GqlError as exc:
+        # Common ancestor of both the driver's own errors (connection
+        # refused, DNS failure) and Neo4jError (auth, query) -- see
+        # neo4j.exceptions' hierarchy.
+        return ComponentHealth(ok=False, detail=str(exc))
+    return ComponentHealth(ok=True, detail="connected")
+
+
+async def _check_vector_db() -> ComponentHealth:
+    try:
+        async with get_vector_store():
+            pass
+    except psycopg.Error as exc:
+        return ComponentHealth(ok=False, detail=str(exc))
+    return ComponentHealth(ok=True, detail="connected")
+
+
+# Placed before "/{document_id}" -- registration order decides the match
+# here (Starlette has no notion of a literal path beating a param one), so
+# a GET /documents/health that landed after "/{document_id}" would 422
+# trying to parse "health" as a UUID instead of ever reaching this route.
+@router.get("/health", response_model=SystemHealthOut)
+async def check_system_health(admin: UserRecord = Depends(require_admin)) -> SystemHealthOut:
+    # Real round-trips, not "did the client construct" -- a poke each time
+    # the Document Manager page loads (see frontend/app/documents/page.tsx),
+    # not a cached/periodic check, so it reflects what's true right now.
+    return SystemHealthOut(
+        volume=await _check_volume(),
+        graph_db=await _check_graph_db(),
+        vector_db=await _check_vector_db(),
+    )
 
 
 @router.get("/{document_id}", response_model=DocumentOut)

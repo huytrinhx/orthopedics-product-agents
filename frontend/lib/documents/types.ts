@@ -24,3 +24,15 @@ export interface DocumentChunk {
   // null for non-PDF documents and for chunks indexed before this shipped.
   page_number: number | null;
 }
+
+// Mirrors backend/documents/models.py's ComponentHealth/SystemHealthOut.
+export interface ComponentHealth {
+  ok: boolean;
+  detail: string;
+}
+
+export interface SystemHealth {
+  volume: ComponentHealth;
+  graph_db: ComponentHealth;
+  vector_db: ComponentHealth;
+}

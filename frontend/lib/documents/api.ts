@@ -1,5 +1,5 @@
 import { API_BASE, authHeaders, handleUnauthorized, request, unwrap } from "../api/client";
-import type { DocumentChunk, DocumentRecord } from "./types";
+import type { DocumentChunk, DocumentRecord, SystemHealth } from "./types";
 
 export async function uploadDocument(
   file: File,
@@ -19,6 +19,13 @@ export async function uploadDocument(
 
 export async function listDocuments(): Promise<DocumentRecord[]> {
   return request("/documents/");
+}
+
+// Real round-trips (volume file count, a Neo4j query, a Postgres/pgvector
+// connection), not cached -- see backend/api/routes/documents.py's
+// check_system_health. Meant to be called fresh on every page load.
+export async function checkSystemHealth(): Promise<SystemHealth> {
+  return request("/documents/health");
 }
 
 export async function setDocumentTags(

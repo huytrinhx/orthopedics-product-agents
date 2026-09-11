@@ -372,6 +372,42 @@ select:focus-visible {
   color: var(--danger);
 }
 
+.health-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-bottom: 20px;
+}
+
+.health-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--ink-soft);
+}
+
+.health-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--steel);
+}
+
+.health-ok .health-dot {
+  background: var(--verify);
+}
+
+.health-down .health-dot {
+  background: var(--danger);
+}
+
+.health-down {
+  color: var(--danger);
+}
+
 .tag-manager {
   margin-bottom: 20px;
 }
