@@ -35,7 +35,12 @@ def _user_token(monkeypatch, tmp_path) -> str:
     return res.json()["access_token"]
 
 
-def test_system_tags_only_list_once_a_document_uses_them(monkeypatch, tmp_path):
+def test_system_tags_list_immediately_on_creation(monkeypatch, tmp_path):
+    """The picker (and any tag-management UI) shows every tag an admin has
+    created, not just ones already attached to a document -- otherwise a
+    freshly created tag would be invisible to pick until some other flow
+    (upload) referenced it first.
+    """
     token = _admin_token(monkeypatch, tmp_path)
     headers = {"Authorization": f"Bearer {token}"}
     name = _unique_name("REFLEX")
@@ -45,24 +50,12 @@ def test_system_tags_only_list_once_a_document_uses_them(monkeypatch, tmp_path):
     system_id = create.json()["id"]
     assert create.json()["name"] == name
 
-    # Created but not yet attached to any document -- shouldn't clutter the
-    # picker yet.
     listing = client.get("/systems", headers=headers)
     assert listing.status_code == 200
-    assert not any(s["id"] == system_id for s in listing.json())
-
-    client.post(
-        "/documents/upload",
-        headers=headers,
-        data={"system_id": system_id},
-        files={"file": ("a.txt", b"x", "text/plain")},
-    )
-
-    listing = client.get("/systems", headers=headers)
     assert any(s["id"] == system_id for s in listing.json())
 
 
-def test_document_type_tags_only_list_once_a_document_uses_them(monkeypatch, tmp_path):
+def test_document_type_tags_list_immediately_on_creation(monkeypatch, tmp_path):
     token = _admin_token(monkeypatch, tmp_path)
     headers = {"Authorization": f"Bearer {token}"}
     name = _unique_name("Brochure")
@@ -74,20 +67,15 @@ def test_document_type_tags_only_list_once_a_document_uses_them(monkeypatch, tmp
 
     listing = client.get("/document-types", headers=headers)
     assert listing.status_code == 200
-    assert not any(dt["id"] == doc_type_id for dt in listing.json())
-
-    client.post(
-        "/documents/upload",
-        headers=headers,
-        data={"document_type_id": doc_type_id},
-        files={"file": ("a.txt", b"x", "text/plain")},
-    )
-
-    listing = client.get("/document-types", headers=headers)
     assert any(dt["id"] == doc_type_id for dt in listing.json())
 
 
-def test_deleting_a_documents_only_document_drops_its_tags_from_the_list(monkeypatch, tmp_path):
+def test_deleting_a_documents_only_document_leaves_its_tags_listed(monkeypatch, tmp_path):
+    """Tags are reusable, admin-managed labels, not derived from what's
+    currently tagged -- a tag's row (and its visibility in the list) only
+    goes away via an explicit delete, never as a side effect of untagging
+    the last document that used it.
+    """
     token = _admin_token(monkeypatch, tmp_path)
     headers = {"Authorization": f"Bearer {token}"}
     system = client.post("/systems", headers=headers, json={"name": _unique_name("MIS")}).json()
@@ -103,7 +91,72 @@ def test_deleting_a_documents_only_document_drops_its_tags_from_the_list(monkeyp
 
     client.delete(f"/documents/{doc_id}", headers=headers)
 
+    assert any(s["id"] == system["id"] for s in client.get("/systems", headers=headers).json())
+
+
+def test_delete_unused_system_tag(monkeypatch, tmp_path):
+    token = _admin_token(monkeypatch, tmp_path)
+    headers = {"Authorization": f"Bearer {token}"}
+    system = client.post("/systems", headers=headers, json={"name": _unique_name("MIS")}).json()
+
+    res = client.delete(f"/systems/{system['id']}", headers=headers)
+    assert res.status_code == 204
     assert not any(s["id"] == system["id"] for s in client.get("/systems", headers=headers).json())
+
+
+def test_delete_unused_document_type_tag(monkeypatch, tmp_path):
+    token = _admin_token(monkeypatch, tmp_path)
+    headers = {"Authorization": f"Bearer {token}"}
+    doc_type = client.post(
+        "/document-types", headers=headers, json={"name": _unique_name("Brochure")}
+    ).json()
+
+    res = client.delete(f"/document-types/{doc_type['id']}", headers=headers)
+    assert res.status_code == 204
+    assert not any(
+        dt["id"] == doc_type["id"] for dt in client.get("/document-types", headers=headers).json()
+    )
+
+
+def test_delete_system_tag_still_in_use_conflicts(monkeypatch, tmp_path):
+    token = _admin_token(monkeypatch, tmp_path)
+    headers = {"Authorization": f"Bearer {token}"}
+    system = client.post("/systems", headers=headers, json={"name": _unique_name("REFLEX")}).json()
+    client.post(
+        "/documents/upload",
+        headers=headers,
+        data={"system_id": system["id"]},
+        files={"file": ("a.txt", b"x", "text/plain")},
+    )
+
+    res = client.delete(f"/systems/{system['id']}", headers=headers)
+    assert res.status_code == 409
+    # Still there -- the blocked delete didn't half-apply.
+    assert any(s["id"] == system["id"] for s in client.get("/systems", headers=headers).json())
+
+
+def test_delete_document_type_tag_still_in_use_conflicts(monkeypatch, tmp_path):
+    token = _admin_token(monkeypatch, tmp_path)
+    headers = {"Authorization": f"Bearer {token}"}
+    doc_type = client.post(
+        "/document-types", headers=headers, json={"name": _unique_name("IFU")}
+    ).json()
+    client.post(
+        "/documents/upload",
+        headers=headers,
+        data={"document_type_id": doc_type["id"]},
+        files={"file": ("a.txt", b"x", "text/plain")},
+    )
+
+    res = client.delete(f"/document-types/{doc_type['id']}", headers=headers)
+    assert res.status_code == 409
+
+
+def test_delete_nonexistent_tag_404s(monkeypatch, tmp_path):
+    token = _admin_token(monkeypatch, tmp_path)
+    headers = {"Authorization": f"Bearer {token}"}
+    assert client.delete(f"/systems/{uuid.uuid4()}", headers=headers).status_code == 404
+    assert client.delete(f"/document-types/{uuid.uuid4()}", headers=headers).status_code == 404
 
 
 def test_duplicate_system_name_conflicts_case_insensitively(monkeypatch, tmp_path):
@@ -124,8 +177,10 @@ def test_non_admin_cannot_manage_tags(monkeypatch, tmp_path):
 
     assert client.post("/systems", headers=headers, json={"name": "x"}).status_code == 403
     assert client.get("/systems", headers=headers).status_code == 403
+    assert client.delete(f"/systems/{uuid.uuid4()}", headers=headers).status_code == 403
     assert client.post("/document-types", headers=headers, json={"name": "x"}).status_code == 403
     assert client.get("/document-types", headers=headers).status_code == 403
+    assert client.delete(f"/document-types/{uuid.uuid4()}", headers=headers).status_code == 403
 
 
 def test_upload_with_tags_and_list_shows_them(monkeypatch, tmp_path):

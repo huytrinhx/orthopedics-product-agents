@@ -12,9 +12,6 @@ from datetime import datetime
 from config.db import get_connection
 
 _TABLES = {"systems", "document_types"}
-# Which `documents` column references each lookup table -- used to scope the
-# picker down to tags actually in use (see _list_tags).
-_FK_COLUMNS = {"systems": "system_id", "document_types": "document_type_id"}
 
 
 @dataclass
@@ -41,24 +38,38 @@ async def _create_tag(table: str, name: str) -> TagRecord:
 
 
 async def _list_tags(table: str) -> list[TagRecord]:
-    """Tags currently attached to at least one document -- the picker
-    reflects what's actually in use, not everything ever created, so a tag
-    stops showing up once its last document is deleted or re-tagged away
-    from it (create still leaves the row in place; nothing lists it again
-    until a document references it).
+    """Every tag ever created, in use or not -- an admin managing the list
+    (creating ahead of the first document that'll use it, or cleaning up an
+    unused one) needs to see it regardless of whether any document currently
+    references it.
     """
     assert table in _TABLES
-    fk_column = _FK_COLUMNS[table]
     conn = await get_connection()
     try:
         async with conn.cursor() as cur:
-            await cur.execute(
-                f"SELECT t.id, t.name, t.created_at FROM {table} t "
-                f"WHERE EXISTS (SELECT 1 FROM documents d WHERE d.{fk_column} = t.id) "
-                "ORDER BY t.name"
-            )
+            await cur.execute(f"SELECT id, name, created_at FROM {table} ORDER BY name")
             rows = await cur.fetchall()
             return [TagRecord(*row) for row in rows]
+    finally:
+        await conn.close()
+
+
+async def _delete_tag(table: str, tag_id: uuid.UUID) -> bool:
+    """Returns whether a row was actually deleted (False means no such tag).
+    Deleting a tag still assigned to a document raises psycopg.errors.
+    ForeignKeyViolation -- the FK columns added in
+    ..._create_systems_and_document_types.py have no ON DELETE clause, so
+    Postgres itself blocks it; the route layer turns that into a 409 rather
+    than silently orphaning documents or cascading the delete into them.
+    """
+    assert table in _TABLES
+    conn = await get_connection()
+    try:
+        async with conn.cursor() as cur:
+            await cur.execute(f"DELETE FROM {table} WHERE id = %s", (tag_id,))
+            deleted = cur.rowcount > 0
+        await conn.commit()
+        return deleted
     finally:
         await conn.close()
 
@@ -71,9 +82,17 @@ async def list_systems() -> list[TagRecord]:
     return await _list_tags("systems")
 
 
+async def delete_system(tag_id: uuid.UUID) -> bool:
+    return await _delete_tag("systems", tag_id)
+
+
 async def create_document_type(name: str) -> TagRecord:
     return await _create_tag("document_types", name)
 
 
 async def list_document_types() -> list[TagRecord]:
     return await _list_tags("document_types")
+
+
+async def delete_document_type(tag_id: uuid.UUID) -> bool:
+    return await _delete_tag("document_types", tag_id)

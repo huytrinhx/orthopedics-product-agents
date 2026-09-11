@@ -92,3 +92,62 @@ export function TagSelect({
     </select>
   );
 }
+
+// The admin-facing counterpart to TagSelect above: every System/Document
+// Type tag that exists (the picker's `tags` prop, unfiltered -- see
+// backend/tags/repository.py's _list_tags), each removable on the spot.
+// Deleting one still assigned to a document is rejected server-side (409),
+// surfaced here rather than silently dropping the chip.
+export function TagList({
+  label,
+  tags,
+  onDelete,
+}: {
+  label: string;
+  tags: Tag[];
+  onDelete: (tag: Tag) => Promise<void>;
+}) {
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  async function handleDelete(tag: Tag) {
+    if (!window.confirm(`Delete the "${tag.name}" ${label.toLowerCase()}?`)) return;
+    setDeletingId(tag.id);
+    setError(null);
+    try {
+      await onDelete(tag);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : `failed to delete ${label.toLowerCase()}`);
+    } finally {
+      setDeletingId(null);
+    }
+  }
+
+  return (
+    <div className="tag-list">
+      <span className="tag-list-label">{label}s</span>
+      {tags.length === 0 ? (
+        <span className="tag-list-empty">None yet</span>
+      ) : (
+        <ul className="tag-chips">
+          {tags.map((tag) => (
+            <li key={tag.id} className="tag-chip">
+              <span>{tag.name}</span>
+              <button
+                type="button"
+                className="tag-chip-delete"
+                disabled={deletingId === tag.id}
+                title={`Delete ${tag.name}`}
+                aria-label={`Delete ${tag.name}`}
+                onClick={() => handleDelete(tag)}
+              >
+                ×
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      {error && <span className="tag-add-error">{error}</span>}
+    </div>
+  );
+}

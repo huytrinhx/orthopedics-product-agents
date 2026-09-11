@@ -4,6 +4,8 @@ management (see auth.dependencies.require_admin). Deliberately no fixed
 enum -- an admin grows these two lists as new product systems and document
 types show up.
 """
+import uuid
+
 import psycopg
 from fastapi import APIRouter, Depends, HTTPException, status
 
@@ -13,6 +15,8 @@ from tags.models import CreateTagRequest, TagOut
 from tags.repository import (
     create_document_type,
     create_system,
+    delete_document_type,
+    delete_system,
     list_document_types,
     list_systems,
 )
@@ -42,6 +46,18 @@ async def list_system_tags(admin: UserRecord = Depends(require_admin)) -> list[T
     return [_tag_out(tag) for tag in await list_systems()]
 
 
+@router.delete("/systems/{tag_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_system_tag(tag_id: uuid.UUID, admin: UserRecord = Depends(require_admin)) -> None:
+    try:
+        deleted = await delete_system(tag_id)
+    except psycopg.errors.ForeignKeyViolation:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "This system is still assigned to one or more documents"
+        )
+    if not deleted:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "System not found")
+
+
 @router.post("/document-types", response_model=TagOut)
 async def create_document_type_tag(
     body: CreateTagRequest, admin: UserRecord = Depends(require_admin)
@@ -60,3 +76,18 @@ async def create_document_type_tag(
 @router.get("/document-types", response_model=list[TagOut])
 async def list_document_type_tags(admin: UserRecord = Depends(require_admin)) -> list[TagOut]:
     return [_tag_out(tag) for tag in await list_document_types()]
+
+
+@router.delete("/document-types/{tag_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_document_type_tag(
+    tag_id: uuid.UUID, admin: UserRecord = Depends(require_admin)
+) -> None:
+    try:
+        deleted = await delete_document_type(tag_id)
+    except psycopg.errors.ForeignKeyViolation:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "This document type is still assigned to one or more documents",
+        )
+    if not deleted:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Document type not found")

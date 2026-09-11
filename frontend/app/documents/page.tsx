@@ -14,13 +14,15 @@ import {
 import {
   createDocumentType,
   createSystem,
+  deleteDocumentType,
+  deleteSystem,
   listDocumentTypes,
   listSystems,
 } from "../../lib/documents/tags/api";
 import { useAuth } from "../../lib/auth-context";
 import type { DocumentRecord } from "../../lib/documents/types";
 import type { Tag } from "../../lib/documents/tags/types";
-import { TagSelect } from "./tag-select";
+import { TagList, TagSelect } from "./tag-select";
 
 // Polls while anything's still in flight -- the background task (see
 // backend/documents/service.py) is a placeholder today (tickets 06/07 wire
@@ -163,6 +165,16 @@ export default function DocumentsPage() {
     return tag;
   }
 
+  async function handleDeleteSystem(tag: Tag): Promise<void> {
+    await deleteSystem(tag.id);
+    setSystems((prev) => prev.filter((s) => s.id !== tag.id));
+  }
+
+  async function handleDeleteDocumentType(tag: Tag): Promise<void> {
+    await deleteDocumentType(tag.id);
+    setDocumentTypes((prev) => prev.filter((dt) => dt.id !== tag.id));
+  }
+
   async function handleDelete(doc: DocumentRecord) {
     if (!window.confirm(`Delete "${doc.filename}"? This can't be undone.`)) return;
     try {
@@ -268,6 +280,13 @@ export default function DocumentsPage() {
           onCreate={handleCreateDocumentType}
         />
       </div>
+      <details className="tag-manager">
+        <summary>Manage tags</summary>
+        <div className="tag-manager-body">
+          <TagList label="System" tags={systems} onDelete={handleDeleteSystem} />
+          <TagList label="Document type" tags={documentTypes} onDelete={handleDeleteDocumentType} />
+        </div>
+      </details>
       <form onSubmit={handleUpload} className="upload-row">
         <input ref={fileInputRef} type="file" required />
         <button type="submit" className="btn btn-primary" disabled={uploading}>
