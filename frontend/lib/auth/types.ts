@@ -8,6 +8,10 @@ export interface AuthUser {
   // false and need an admin to flip them on via the Users tab.
   is_active: boolean;
   created_at: string;
+  // Stamped on signup and every later login/OAuth callback (backend/auth/
+  // repository.py's touch_last_login/promote_to_admin) -- null is only
+  // possible for a row that predates the last_login_at column.
+  last_login_at: string | null;
 }
 
 export interface TokenResponse {

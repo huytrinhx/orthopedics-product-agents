@@ -1,8 +1,9 @@
 """Admin-only user management, backing the Users tab: list every account and
 flip a non-admin's is_active flag (see auth.dependencies.require_chat_access
 for where that flag is actually enforced). Admin rows are read-only here --
-is_admin is decided once at signup from ADMIN_EMAILS (agents.md's "Standing
-technical decisions") and this API never changes it.
+is_admin comes from ADMIN_EMAILS (agents.md's "Standing technical
+decisions"), re-checked on every login (auth.repository.promote_to_admin),
+and this API never changes it directly.
 """
 import uuid
 
@@ -22,6 +23,7 @@ def _user_out(user: UserRecord) -> UserOut:
         is_admin=user.is_admin,
         is_active=user.is_active,
         created_at=user.created_at,
+        last_login_at=user.last_login_at,
     )
 
 

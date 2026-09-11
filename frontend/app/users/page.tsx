@@ -18,9 +18,10 @@ function ActiveToggle({
   onToggle: (user: AuthUser) => void;
 }) {
   if (user.is_admin) {
-    // Read-only: is_admin is decided once at signup from ADMIN_EMAILS and
-    // backend/auth/dependencies.py's require_chat_access never even
-    // consults is_active for an admin, so there's nothing to toggle here.
+    // Read-only: is_admin comes from ADMIN_EMAILS (granted at signup or on a
+    // later login) and backend/auth/dependencies.py's require_chat_access
+    // never even consults is_active for an admin, so there's nothing to
+    // toggle here.
     return <span className="users-readonly">—</span>;
   }
   return (
@@ -96,6 +97,7 @@ export default function UsersPage() {
                 <th>Role</th>
                 <th>Status</th>
                 <th>Joined</th>
+                <th>Last logged in at</th>
                 <th></th>
               </tr>
             </thead>
@@ -110,6 +112,7 @@ export default function UsersPage() {
                     </span>
                   </td>
                   <td>{new Date(u.created_at).toLocaleString()}</td>
+                  <td>{u.last_login_at ? new Date(u.last_login_at).toLocaleString() : "Never"}</td>
                   <td>
                     <ActiveToggle user={u} toggling={togglingId === u.id} onToggle={handleToggle} />
                   </td>

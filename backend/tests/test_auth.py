@@ -91,6 +91,45 @@ def test_admin_emails_allowlist_grants_is_admin(monkeypatch):
     assert res.json()["user"]["is_active"] is True
 
 
+def test_login_promotes_to_admin_when_added_to_allowlist_after_signup(monkeypatch):
+    """Adding someone to ADMIN_EMAILS after they already have an account
+    shouldn't require a DB edit -- it should just take effect on their next
+    login.
+    """
+    email = _unique_email()
+    signup = client.post(
+        "/auth/signup", json={"email": email, "password": "correct horse battery"}
+    ).json()
+    assert signup["user"]["is_admin"] is False
+    assert signup["user"]["is_active"] is False
+
+    monkeypatch.setenv("ADMIN_EMAILS", email)
+    res = client.post("/auth/login", json={"email": email, "password": "correct horse battery"})
+    assert res.status_code == 200
+    assert res.json()["user"]["is_admin"] is True
+    # Promotion also lifts the pending-approval gate, same as an admin signup.
+    assert res.json()["user"]["is_active"] is True
+
+
+def test_signup_stamps_last_login_at():
+    email = _unique_email()
+    res = client.post("/auth/signup", json={"email": email, "password": "correct horse battery"})
+    assert res.json()["user"]["last_login_at"] is not None
+
+
+def test_login_updates_last_login_at():
+    email = _unique_email()
+    signup = client.post(
+        "/auth/signup", json={"email": email, "password": "correct horse battery"}
+    ).json()
+    first_login_at = signup["user"]["last_login_at"]
+
+    res = client.post("/auth/login", json={"email": email, "password": "correct horse battery"})
+    assert res.status_code == 200
+    assert res.json()["user"]["last_login_at"] is not None
+    assert res.json()["user"]["last_login_at"] >= first_login_at
+
+
 def test_google_login_redirects_to_google_with_signed_state():
     res = client.get("/auth/google/login", follow_redirects=False)
     assert res.status_code in (302, 307)
@@ -159,6 +198,23 @@ def test_google_callback_applies_admin_allowlist(mock_google, monkeypatch):
     token = res.headers["location"].split("auth_token=", 1)[1]
     me = client.get("/auth/me", headers={"Authorization": f"Bearer {token}"})
     assert me.json()["is_admin"] is True
+
+
+def test_google_callback_promotes_existing_user_when_added_to_allowlist(mock_google, monkeypatch):
+    email = _unique_email()
+    client.post("/auth/signup", json={"email": email, "password": "correct horse battery"})
+    mock_google(email)
+
+    monkeypatch.setenv("ADMIN_EMAILS", email)
+    res = client.get(
+        "/auth/google/callback",
+        params={"code": "some-code", "state": create_oauth_state()},
+        follow_redirects=False,
+    )
+    token = res.headers["location"].split("auth_token=", 1)[1]
+    me = client.get("/auth/me", headers={"Authorization": f"Bearer {token}"})
+    assert me.json()["is_admin"] is True
+    assert me.json()["is_active"] is True
 
 
 def test_google_callback_rejects_unverified_email(mock_google):

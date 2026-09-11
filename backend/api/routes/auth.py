@@ -1,6 +1,8 @@
 """Signup/login/current-user, plus Google OAuth as a second way in. is_admin
-is decided once, at (first) signup, by checking the account's email against
-the ADMIN_EMAILS allowlist — see agents.md's "Standing technical decisions".
+is granted at signup by checking the account's email against the
+ADMIN_EMAILS allowlist, and re-checked on every subsequent login so adding
+someone to the allowlist after they already have an account still promotes
+them on their next sign-in — see agents.md's "Standing technical decisions".
 """
 import os
 
@@ -10,7 +12,13 @@ from fastapi.responses import RedirectResponse
 from auth import oauth
 from auth.dependencies import get_current_user
 from auth.models import LoginRequest, SignupRequest, TokenResponse, UserOut
-from auth.repository import UserRecord, create_user, get_user_by_email
+from auth.repository import (
+    UserRecord,
+    create_user,
+    get_user_by_email,
+    promote_to_admin,
+    touch_last_login,
+)
 from auth.security import (
     create_access_token,
     create_oauth_state,
@@ -30,6 +38,7 @@ def _user_out(user: UserRecord) -> UserOut:
         is_admin=user.is_admin,
         is_active=user.is_active,
         created_at=user.created_at,
+        last_login_at=user.last_login_at,
     )
 
 
@@ -59,6 +68,13 @@ async def login(body: LoginRequest) -> TokenResponse:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Incorrect email or password")
     if not verify_password(body.password, user.hashed_password):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Incorrect email or password")
+
+    # Being added to ADMIN_EMAILS after a user already has an account only
+    # takes effect on their next login -- this is that check.
+    if not user.is_admin and is_allowlisted_admin(user.email):
+        user = await promote_to_admin(user.id)
+    else:
+        user = await touch_last_login(user.id)
 
     return TokenResponse(access_token=create_access_token(user.id), user=_user_out(user))
 
@@ -92,6 +108,10 @@ async def google_callback(code: str, state: str) -> RedirectResponse:
         user = await create_user(
             email=email, hashed_password=None, is_admin=admin, is_active=admin
         )
+    elif not user.is_admin and is_allowlisted_admin(email):
+        user = await promote_to_admin(user.id)
+    else:
+        user = await touch_last_login(user.id)
 
     session_token = create_access_token(user.id)
     frontend_base = os.environ.get("FRONTEND_PUBLIC_URL", "")

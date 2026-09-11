@@ -81,14 +81,18 @@ picking this repo up cold, read this before making structural changes.
   signed JWT on signup/login (`JWT_SECRET`); the frontend stores it in
   `localStorage` (`frontend/lib/auth/token.ts`) and attaches it as a Bearer
   token — there's no server-side session store to invalidate on logout.
-  `is_admin` is decided once, at signup, from the `ADMIN_EMAILS` allowlist —
-  it's not editable via any UI. Admin-gated pages (Documents, Evals, Users)
-  check this flag; regular chat access doesn't require it, but does require
-  `is_active` (the Users tab's Enable/Disable) — a new non-admin signup
-  starts `is_active=False` and is blocked from chat
-  (`auth.dependencies.require_chat_access`) until an admin enables them.
-  Admins bypass the `is_active` check entirely, so an admin's row is
-  read-only in the Users tab.
+  `is_admin` is granted from the `ADMIN_EMAILS` allowlist at signup and
+  re-checked on every later login (`auth.repository.promote_to_admin`, called
+  from `/auth/login` and `/auth/google/callback`) — so adding someone to the
+  allowlist after they already have an account promotes them on their next
+  sign-in, no DB edit needed. It's still not editable via any UI. Admin-gated
+  pages (Documents, Evals, Users) check this flag; regular chat access
+  doesn't require it, but does require `is_active` (the Users tab's
+  Enable/Disable) — a new non-admin signup starts `is_active=False` and is
+  blocked from chat (`auth.dependencies.require_chat_access`) until an admin
+  enables them. Admins bypass the `is_active` check entirely, so an admin's
+  row is read-only in the Users tab. The Users tab also shows `last_login_at`
+  per account (stamped on signup and every subsequent login/OAuth callback).
 - **Schema changes go through Alembic (`backend/migrations/`), not hand-run
   SQL.** `alembic upgrade head` reads `DATABASE_URL` (same env var as
   everything else) and applies pending migrations; it's a required step in

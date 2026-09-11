@@ -21,6 +21,7 @@ class UserOut(BaseModel):
     is_admin: bool
     is_active: bool
     created_at: datetime
+    last_login_at: datetime | None
 
 
 class TokenResponse(BaseModel):
