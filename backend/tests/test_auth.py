@@ -2,7 +2,9 @@
 see README's local-dev setup / CI's postgres service) — no mocking of the
 users table, since the point is to prove the real SQL round-trips.
 """
+import asyncio
 import uuid
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
@@ -10,6 +12,7 @@ from fastapi.testclient import TestClient
 from api.main import app
 from auth import oauth
 from auth.security import create_oauth_state
+from config.db import get_connection
 
 client = TestClient(app)
 
@@ -117,17 +120,67 @@ def test_signup_stamps_last_login_at():
     assert res.json()["user"]["last_login_at"] is not None
 
 
+def _backdate_last_login(email: str, minutes: int) -> datetime:
+    """Pushes last_login_at into the past so a later stamp is provably a new
+    write -- comparing against the signup stamp alone can't tell "updated"
+    from "left alone" when both happen within the same instant.
+    """
+    backdated = datetime.now(UTC) - timedelta(minutes=minutes)
+
+    async def _run() -> None:
+        connection = await get_connection()
+        try:
+            async with connection.cursor() as cursor:
+                await cursor.execute(
+                    "UPDATE users SET last_login_at = %s WHERE email = %s", (backdated, email)
+                )
+            await connection.commit()
+        finally:
+            await connection.close()
+
+    asyncio.run(_run())
+    return backdated
+
+
 def test_login_updates_last_login_at():
+    email = _unique_email()
+    client.post("/auth/signup", json={"email": email, "password": "correct horse battery"})
+    backdated = _backdate_last_login(email, minutes=60)
+
+    response = client.post(
+        "/auth/login", json={"email": email, "password": "correct horse battery"}
+    )
+    assert response.status_code == 200
+    assert datetime.fromisoformat(response.json()["user"]["last_login_at"]) > backdated
+
+
+def test_authenticated_request_refreshes_stale_last_login_at():
     email = _unique_email()
     signup = client.post(
         "/auth/signup", json={"email": email, "password": "correct horse battery"}
     ).json()
-    first_login_at = signup["user"]["last_login_at"]
+    backdated = _backdate_last_login(email, minutes=60)
 
-    res = client.post("/auth/login", json={"email": email, "password": "correct horse battery"})
-    assert res.status_code == 200
-    assert res.json()["user"]["last_login_at"] is not None
-    assert res.json()["user"]["last_login_at"] >= first_login_at
+    response = client.get(
+        "/auth/me", headers={"Authorization": f"Bearer {signup['access_token']}"}
+    )
+    assert response.status_code == 200
+    assert datetime.fromisoformat(response.json()["last_login_at"]) > backdated
+
+
+def test_authenticated_request_leaves_fresh_last_login_at_alone():
+    email = _unique_email()
+    signup = client.post(
+        "/auth/signup", json={"email": email, "password": "correct horse battery"}
+    ).json()
+    # Inside the 5-minute throttle window: token reuse must not write.
+    backdated = _backdate_last_login(email, minutes=2)
+
+    response = client.get(
+        "/auth/me", headers={"Authorization": f"Bearer {signup['access_token']}"}
+    )
+    assert response.status_code == 200
+    assert datetime.fromisoformat(response.json()["last_login_at"]) == backdated
 
 
 def test_google_login_redirects_to_google_with_signed_state():
