@@ -41,8 +41,8 @@ export default function UsersPage() {
     try {
       setUsers(await listUsers());
       setListError(null);
-    } catch (err) {
-      setListError(err instanceof Error ? err.message : "failed to load users");
+    } catch (caughtError) {
+      setListError(caughtError instanceof Error ? caughtError.message : "failed to load users");
     }
   }, []);
 
@@ -55,9 +55,9 @@ export default function UsersPage() {
     setTogglingId(target.id);
     try {
       const updated = await setUserActive(target.id, !target.is_active);
-      setUsers((prev) => prev.map((u) => (u.id === target.id ? updated : u)));
-    } catch (err) {
-      setListError(err instanceof Error ? err.message : "failed to update user");
+      setUsers((previous) => previous.map((listedUser) => (listedUser.id === target.id ? updated : listedUser)));
+    } catch (caughtError) {
+      setListError(caughtError instanceof Error ? caughtError.message : "failed to update user");
     } finally {
       setTogglingId(null);
     }
@@ -102,19 +102,19 @@ export default function UsersPage() {
               </tr>
             </thead>
             <tbody>
-              {users.map((u) => (
-                <tr key={u.id}>
-                  <td>{u.email}</td>
-                  <td>{u.is_admin ? <span className="admin-tag">Admin</span> : "User"}</td>
+              {users.map((listedUser) => (
+                <tr key={listedUser.id}>
+                  <td>{listedUser.email}</td>
+                  <td>{listedUser.is_admin ? <span className="admin-tag">Admin</span> : "User"}</td>
                   <td>
-                    <span className={`badge badge-${u.is_active ? "enabled" : "disabled"}`}>
-                      {u.is_active ? "Enabled" : "Pending"}
+                    <span className={`badge badge-${listedUser.is_active ? "enabled" : "disabled"}`}>
+                      {listedUser.is_active ? "Enabled" : "Pending"}
                     </span>
                   </td>
-                  <td>{new Date(u.created_at).toLocaleString()}</td>
-                  <td>{u.last_login_at ? new Date(u.last_login_at).toLocaleString() : "Never"}</td>
+                  <td>{new Date(listedUser.created_at).toLocaleString()}</td>
+                  <td>{listedUser.last_login_at ? new Date(listedUser.last_login_at).toLocaleString() : "Never"}</td>
                   <td>
-                    <ActiveToggle user={u} toggling={togglingId === u.id} onToggle={handleToggle} />
+                    <ActiveToggle user={listedUser} toggling={togglingId === listedUser.id} onToggle={handleToggle} />
                   </td>
                 </tr>
               ))}

@@ -77,12 +77,12 @@ export function MessageFeedback({
 
   function setAxis(key: keyof EvalScores, value: number) {
     setJustSaved(false);
-    setScores((prev) => {
+    setScores((previous) => {
       if (value === 0) {
-        const { [key]: _omit, ...rest } = prev;
+        const { [key]: _omit, ...rest } = previous;
         return rest;
       }
-      return { ...prev, [key]: value };
+      return { ...previous, [key]: value };
     });
   }
 
@@ -99,8 +99,8 @@ export function MessageFeedback({
       });
       onSubmitted(result);
       setJustSaved(true);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Couldn't save feedback");
+    } catch (caughtError) {
+      setError(caughtError instanceof Error ? caughtError.message : "Couldn't save feedback");
     } finally {
       setSubmitting(false);
     }
@@ -125,7 +125,7 @@ export function MessageFeedback({
           title="Flag this answer"
           onClick={() => {
             setJustSaved(false);
-            setFlagged((f) => !f);
+            setFlagged((wasFlagged) => !wasFlagged);
           }}
         >
           ⚑ Flag
@@ -135,9 +135,9 @@ export function MessageFeedback({
         <input
           className="feedback-comment"
           value={comment}
-          onChange={(e) => {
+          onChange={(event) => {
             setJustSaved(false);
-            setComment(e.target.value);
+            setComment(event.target.value);
           }}
           placeholder="Optional comment…"
         />

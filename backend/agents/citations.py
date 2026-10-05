@@ -12,8 +12,8 @@ dropping the one malformed citation.
 """
 import re
 
-_CITATION_REF = r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}#\d+"
-_SINGLE_CITATION_PATTERN = re.compile(_CITATION_REF)
+_CITATION_REFERENCE = r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}#\d+"
+_SINGLE_CITATION_PATTERN = re.compile(_CITATION_REFERENCE)
 # A bracket containing one *or more* comma-separated refs -- found live
 # (2026-09-05) that the model sometimes cites two sources for one claim as
 # "[id-a#3, id-b#5]" rather than two separate brackets. The original
@@ -23,7 +23,7 @@ _SINGLE_CITATION_PATTERN = re.compile(_CITATION_REF)
 # either source never appeared at all. frontend/lib/chat/format.ts's
 # stripCitationMarkers mirrors this exact pattern shape for the same reason.
 _CITATION_GROUP_PATTERN = re.compile(
-    rf"\[({_CITATION_REF}(?:\s*,\s*{_CITATION_REF})*)\]"
+    rf"\[({_CITATION_REFERENCE}(?:\s*,\s*{_CITATION_REFERENCE})*)\]"
 )
 
 

@@ -18,25 +18,25 @@ export function authHeaders(): Record<string, string> {
 // Called from every fetch call site in lib/*/api.ts that can see a 401, not
 // just unwrap() below (parseSseStream and a few raw-fetch call sites that
 // can't use unwrap because they don't always have a JSON body).
-export function handleUnauthorized(res: Response): void {
-  if (res.status !== 401) return;
+export function handleUnauthorized(response: Response): void {
+  if (response.status !== 401) return;
   clearToken();
   notifySessionExpired();
 }
 
-export async function unwrap<T>(res: Response): Promise<T> {
-  if (!res.ok) {
-    handleUnauthorized(res);
-    const body = await res.json().catch(() => ({}));
-    throw new Error(body.detail ?? `request failed: ${res.status}`);
+export async function unwrap<T>(response: Response): Promise<T> {
+  if (!response.ok) {
+    handleUnauthorized(response);
+    const body = await response.json().catch(() => ({}));
+    throw new Error(body.detail ?? `request failed: ${response.status}`);
   }
-  return res.json();
+  return response.json();
 }
 
 export async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, {
+  const response = await fetch(`${API_BASE}${path}`, {
     headers: { "Content-Type": "application/json", ...authHeaders() },
     ...init,
   });
-  return unwrap<T>(res);
+  return unwrap<T>(response);
 }

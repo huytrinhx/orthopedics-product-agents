@@ -16,13 +16,13 @@ def _unique(prefix: str) -> str:
 
 async def test_ingest_document_upserts_document_even_without_openai_key(monkeypatch):
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    doc_id = _unique("DOC")
+    document_id = _unique("DOC")
 
     await ingest_document(
-        doc_id, "Some prose about a screw.", filename="a.txt", system="MIS", doc_type="Brochure"
+        document_id, "Some prose about a screw.", filename="a.txt", system="MIS", doc_type="Brochure"
     )
 
-    assert await get_graph_client().document_exists(doc_id)
+    assert await get_graph_client().document_exists(document_id)
 
 
 async def test_ingest_document_skips_extraction_without_a_system(monkeypatch):
@@ -30,22 +30,22 @@ async def test_ingest_document_skips_extraction_without_a_system(monkeypatch):
     # `system` guard short-circuits before any real LLM call is made, so
     # this stays safe to run without a real key/network access.
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test-dummy")
-    doc_id = _unique("DOC")
+    document_id = _unique("DOC")
 
-    await ingest_document(doc_id, "Some prose.", filename="a.txt", system=None, doc_type=None)
+    await ingest_document(document_id, "Some prose.", filename="a.txt", system=None, doc_type=None)
 
-    assert await get_graph_client().document_exists(doc_id)
+    assert await get_graph_client().document_exists(document_id)
 
 
 async def test_ingest_document_skips_extraction_when_catalog_not_seeded(monkeypatch):
     # Same reasoning as above: an unseeded system's empty known_parts list
     # short-circuits before any LLM call.
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test-dummy")
-    doc_id = _unique("DOC")
+    document_id = _unique("DOC")
     unseeded_system = _unique("UNSEEDED-SYSTEM")
 
     await ingest_document(
-        doc_id, "Some prose.", filename="a.txt", system=unseeded_system, doc_type="Brochure"
+        document_id, "Some prose.", filename="a.txt", system=unseeded_system, doc_type="Brochure"
     )
 
-    assert await get_graph_client().document_exists(doc_id)
+    assert await get_graph_client().document_exists(document_id)

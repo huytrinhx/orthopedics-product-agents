@@ -62,14 +62,14 @@ _STREAMED_NODES = {"generate"}
 # Sidebar thread titles are derived from the first message rather than set
 # by the user -- long enough to stay recognizable, short enough to fit one
 # sidebar row without wrapping.
-_TITLE_MAX_LEN = 60
+_TITLE_MAX_LENGTH = 60
 
 
 def _title_from_message(message: str) -> str:
     collapsed = " ".join(message.split())
-    if len(collapsed) <= _TITLE_MAX_LEN:
+    if len(collapsed) <= _TITLE_MAX_LENGTH:
         return collapsed
-    return collapsed[:_TITLE_MAX_LEN].rstrip() + "…"
+    return collapsed[:_TITLE_MAX_LENGTH].rstrip() + "…"
 
 
 # Each registered workflow tracks retry/tool-call iterations under its own
@@ -171,14 +171,14 @@ async def _resolve_citations(raw_citations: list[str]) -> list[ChatCitationOut]:
         except ValueError:
             continue
         if document_id not in filenames:
-            doc = await get_document(uuid.UUID(document_id))
+            document = await get_document(uuid.UUID(document_id))
             # A citation can outlive the document it points to (deleted
             # after the answer was generated) -- still worth showing the
             # chip rather than dropping the citation silently, just without
             # a real filename to click through to.
-            filenames[document_id] = doc.filename if doc else "(document removed)"
+            filenames[document_id] = document.filename if document else "(document removed)"
             chunks = await list_document_chunks(uuid.UUID(document_id))
-            section_titles[document_id] = {c.chunk_index: c.section_title for c in chunks}
+            section_titles[document_id] = {chunk.chunk_index: chunk.section_title for chunk in chunks}
         resolved.append(
             ChatCitationOut(
                 document_id=uuid.UUID(document_id),
@@ -343,13 +343,13 @@ async def _stream_graph(
                         "thread_id": thread_id,
                         "message_id": message_id,
                         "answer": output.get("answer"),
-                        "citations": [c.model_dump(mode="json") for c in citations],
+                        "citations": [citation.model_dump(mode="json") for citation in citations],
                         "eval_scores": output.get("eval_scores"),
                         "trace_url": get_trace_url(handler.last_trace_id),
                     },
                 )
-    except Exception as exc:  # noqa: BLE001 - report over the stream rather than a bare 500 mid-stream
-        yield _sse("error", {"message": str(exc)})
+    except Exception as error:  # noqa: BLE001 - report over the stream rather than a bare 500 mid-stream
+        yield _sse("error", {"message": str(error)})
 
 
 @router.post("/{workflow_name}/resume")
@@ -442,7 +442,7 @@ async def rerun_chat(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Original thread not found")
 
     messages = checkpoint_tuple.checkpoint["channel_values"].get("messages", [])
-    flagged_index = next((i for i, m in enumerate(messages) if m.id == body.original_message_id), None)
+    flagged_index = next((index for index, message in enumerate(messages) if message.id == body.original_message_id), None)
     if flagged_index is None or flagged_index == 0 or messages[flagged_index - 1].type != "human":
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Flagged question not found in that thread")
     question = messages[flagged_index - 1]
@@ -485,9 +485,9 @@ async def rerun_chat(
 async def list_chat_threads(user: UserRecord = Depends(require_chat_access)) -> list[ChatThreadOut]:
     return [
         ChatThreadOut(
-            thread_id=t.thread_id, title=t.title, created_at=t.created_at, updated_at=t.updated_at
+            thread_id=thread.thread_id, title=thread.title, created_at=thread.created_at, updated_at=thread.updated_at
         )
-        for t in await list_threads(user.id)
+        for thread in await list_threads(user.id)
     ]
 
 
@@ -513,18 +513,18 @@ async def get_chat_thread(
     messages = checkpoint_tuple.checkpoint["channel_values"].get("messages", [])
     feedback_by_message = await get_feedback_for_thread(thread_id)
     out_messages = []
-    for m in messages:
+    for message in messages:
         # Citations only ever live on the AI's turn (see deterministic.py's
         # finalize) -- additional_kwargs is a plain dict on every message
         # type, so .get is safe on a HumanMessage too, it's just always
         # empty there.
-        citations = await _resolve_citations(m.additional_kwargs.get("citations") or [])
-        record = feedback_by_message.get(m.id)
+        citations = await _resolve_citations(message.additional_kwargs.get("citations") or [])
+        record = feedback_by_message.get(message.id)
         out_messages.append(
             ChatMessageOut(
-                message_id=m.id,
-                role="user" if m.type == "human" else "assistant",
-                content=m.content,
+                message_id=message.id,
+                role="user" if message.type == "human" else "assistant",
+                content=message.content,
                 citations=citations,
                 feedback=to_feedback_out(record) if record else None,
             )

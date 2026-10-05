@@ -44,43 +44,43 @@ async def create_document(
     system_id: uuid.UUID | None = None,
     document_type_id: uuid.UUID | None = None,
 ) -> DocumentRecord:
-    conn = await get_connection()
+    connection = await get_connection()
     try:
-        async with conn.cursor() as cur:
-            await cur.execute(
+        async with connection.cursor() as cursor:
+            await cursor.execute(
                 "INSERT INTO documents (filename, storage_path, uploaded_by, system_id, document_type_id) "
                 "VALUES (%s, %s, %s, %s, %s) RETURNING id",
                 (filename, storage_path, uploaded_by, system_id, document_type_id),
             )
-            (new_id,) = await cur.fetchone()
-        await conn.commit()
+            (new_id,) = await cursor.fetchone()
+        await connection.commit()
     finally:
-        await conn.close()
-    doc = await get_document(new_id)
-    assert doc is not None
-    return doc
+        await connection.close()
+    document = await get_document(new_id)
+    assert document is not None
+    return document
 
 
 async def list_documents() -> list[DocumentRecord]:
-    conn = await get_connection()
+    connection = await get_connection()
     try:
-        async with conn.cursor() as cur:
-            await cur.execute(f"{_SELECT} ORDER BY d.created_at DESC")
-            rows = await cur.fetchall()
+        async with connection.cursor() as cursor:
+            await cursor.execute(f"{_SELECT} ORDER BY d.created_at DESC")
+            rows = await cursor.fetchall()
             return [DocumentRecord(*row) for row in rows]
     finally:
-        await conn.close()
+        await connection.close()
 
 
 async def get_document(document_id: uuid.UUID) -> DocumentRecord | None:
-    conn = await get_connection()
+    connection = await get_connection()
     try:
-        async with conn.cursor() as cur:
-            await cur.execute(f"{_SELECT} WHERE d.id = %s", (document_id,))
-            row = await cur.fetchone()
+        async with connection.cursor() as cursor:
+            await cursor.execute(f"{_SELECT} WHERE d.id = %s", (document_id,))
+            row = await cursor.fetchone()
             return DocumentRecord(*row) if row else None
     finally:
-        await conn.close()
+        await connection.close()
 
 
 async def replace_file(
@@ -95,47 +95,47 @@ async def replace_file(
     """
     if await get_document(document_id) is None:
         return None
-    conn = await get_connection()
+    connection = await get_connection()
     try:
-        async with conn.cursor() as cur:
-            await cur.execute(
+        async with connection.cursor() as cursor:
+            await cursor.execute(
                 "UPDATE documents SET filename = %s, storage_path = %s, updated_at = now() "
                 "WHERE id = %s",
                 (filename, storage_path, document_id),
             )
-        await conn.commit()
+        await connection.commit()
     finally:
-        await conn.close()
+        await connection.close()
     return await get_document(document_id)
 
 
 async def set_status(
     document_id: uuid.UUID, status: DocumentStatus, error: str | None = None
 ) -> None:
-    conn = await get_connection()
+    connection = await get_connection()
     try:
-        async with conn.cursor() as cur:
-            await cur.execute(
+        async with connection.cursor() as cursor:
+            await cursor.execute(
                 "UPDATE documents SET status = %s, error = %s, updated_at = now() WHERE id = %s",
                 (status, error, document_id),
             )
-        await conn.commit()
+        await connection.commit()
     finally:
-        await conn.close()
+        await connection.close()
 
 
 async def delete_document(document_id: uuid.UUID) -> DocumentRecord | None:
-    doc = await get_document(document_id)
-    if doc is None:
+    document = await get_document(document_id)
+    if document is None:
         return None
-    conn = await get_connection()
+    connection = await get_connection()
     try:
-        async with conn.cursor() as cur:
-            await cur.execute("DELETE FROM documents WHERE id = %s", (document_id,))
-        await conn.commit()
+        async with connection.cursor() as cursor:
+            await cursor.execute("DELETE FROM documents WHERE id = %s", (document_id,))
+        await connection.commit()
     finally:
-        await conn.close()
-    return doc
+        await connection.close()
+    return document
 
 
 @dataclass
@@ -154,18 +154,18 @@ async def list_chunks(document_id: uuid.UUID) -> list[ChunkRecord]:
     vector_store.py's pgvector-registered connection; no embedding column
     is read here.
     """
-    conn = await get_connection()
+    connection = await get_connection()
     try:
-        async with conn.cursor() as cur:
-            await cur.execute(
+        async with connection.cursor() as cursor:
+            await cursor.execute(
                 "SELECT chunk_index, content, section_title, page_number FROM chunks "
                 "WHERE document_id = %s ORDER BY chunk_index",
                 (document_id,),
             )
-            rows = await cur.fetchall()
+            rows = await cursor.fetchall()
             return [ChunkRecord(*row) for row in rows]
     finally:
-        await conn.close()
+        await connection.close()
 
 
 async def set_tags(
@@ -173,15 +173,15 @@ async def set_tags(
     system_id: uuid.UUID | None,
     document_type_id: uuid.UUID | None,
 ) -> DocumentRecord | None:
-    conn = await get_connection()
+    connection = await get_connection()
     try:
-        async with conn.cursor() as cur:
-            await cur.execute(
+        async with connection.cursor() as cursor:
+            await cursor.execute(
                 "UPDATE documents SET system_id = %s, document_type_id = %s, updated_at = now() "
                 "WHERE id = %s",
                 (system_id, document_type_id, document_id),
             )
-        await conn.commit()
+        await connection.commit()
     finally:
-        await conn.close()
+        await connection.close()
     return await get_document(document_id)

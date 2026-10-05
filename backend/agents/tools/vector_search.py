@@ -31,7 +31,7 @@ async def vector_search(
     """
     [vector] = await embed_texts([query])
     filters = (
-        RetrievalFilters(document_type_ids=[uuid.UUID(d) for d in document_type_ids])
+        RetrievalFilters(document_type_ids=[uuid.UUID(document_type_id) for document_type_id in document_type_ids])
         if document_type_ids
         else None
     )

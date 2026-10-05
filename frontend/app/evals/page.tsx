@@ -27,9 +27,9 @@ export default function EvalsPage() {
     if (!user?.is_admin) return;
     listFlaggedFeedback()
       .then(setFlagged)
-      .catch((err) => setError(err instanceof Error ? err.message : "Couldn't load flagged feedback"));
+      .catch((caughtError) => setError(caughtError instanceof Error ? caughtError.message : "Couldn't load flagged feedback"));
     getAdminSettings()
-      .then((s) => setWorkflows(s.workflows.filter((w) => w.functional)))
+      .then((settings) => setWorkflows(settings.workflows.filter((workflow) => workflow.functional)))
       .catch(() => {});
   }, [user]);
 
@@ -70,7 +70,7 @@ export default function EvalsPage() {
               item={item}
               workflows={workflows}
               onDeleted={() =>
-                setFlagged((prev) => (prev ? prev.filter((f) => f.message_id !== item.message_id) : prev))
+                setFlagged((previous) => (previous ? previous.filter((flaggedItem) => flaggedItem.message_id !== item.message_id) : previous))
               }
             />
           ))}

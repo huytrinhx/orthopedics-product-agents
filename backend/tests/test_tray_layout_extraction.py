@@ -60,7 +60,7 @@ def test_select_candidate_pages_requires_both_signals(tmp_path):
     tray_page_with_image = tmp_path / "tray.pdf"
     _build_pdf_with_image(tray_page_with_image, text="Tray Layout\nTop Level", image_path=image_path)
     candidates = select_candidate_pages(tray_page_with_image)
-    assert [c["page_number"] for c in candidates] == [1]
+    assert [candidate["page_number"] for candidate in candidates] == [1]
     assert "Tray Layout" in candidates[0]["text"]
 
     image_no_keyword = tmp_path / "image_no_keyword.pdf"
@@ -103,8 +103,8 @@ def test_has_large_images_ignores_small_images(tmp_path):
     path = tmp_path / "small_icon.pdf"
     pdf.output(str(path))
 
-    with pdfplumber.open(path) as doc:
-        page = doc.pages[0]
+    with pdfplumber.open(path) as document:
+        page = document.pages[0]
         assert not _has_large_images(page)
 
 
@@ -115,7 +115,7 @@ async def test_replace_tray_sections_is_idempotent_on_reingestion():
     family = _unique("FAMILY")
     sku_a = _unique("SKU-A")
     sku_b = _unique("SKU-B")
-    doc_id = _unique("DOC")
+    document_id = _unique("DOC")
 
     await client.upsert_product_family(family)
     await client.upsert_tray(tray, family)
@@ -123,7 +123,7 @@ async def test_replace_tray_sections_is_idempotent_on_reingestion():
     await client.upsert_part(sku_b, tray)
 
     await client.replace_tray_sections(
-        doc_id,
+        document_id,
         [{"tray": tray, "level": "Top Level", "region": "Left Side", "skus": [sku_a, sku_b]}],
     )
 
@@ -131,16 +131,16 @@ async def test_replace_tray_sections_is_idempotent_on_reingestion():
         result = await session.run(
             "MATCH (p:Part)-[r:LOCATED_IN {document_id: $doc_id}]->(s:TraySection) "
             "RETURN p.sku AS sku, s.tray AS tray, s.level AS level, s.region AS region",
-            doc_id=doc_id,
+            doc_id=document_id,
         )
         rows = [dict(record) async for record in result]
-    assert {r["sku"] for r in rows} == {sku_a, sku_b}
-    assert all(r["tray"] == tray and r["level"] == "Top Level" and r["region"] == "Left Side" for r in rows)
+    assert {row["sku"] for row in rows} == {sku_a, sku_b}
+    assert all(row["tray"] == tray and row["level"] == "Top Level" and row["region"] == "Left Side" for row in rows)
 
     # Re-ingestion with a corrected grouping (sku_a moved out) should leave
     # no stale edge from the first run behind.
     await client.replace_tray_sections(
-        doc_id,
+        document_id,
         [{"tray": tray, "level": "Top Level", "region": "Right Side", "skus": [sku_b]}],
     )
 
@@ -148,7 +148,7 @@ async def test_replace_tray_sections_is_idempotent_on_reingestion():
         result = await session.run(
             "MATCH (p:Part)-[r:LOCATED_IN {document_id: $doc_id}]->(s:TraySection) "
             "RETURN p.sku AS sku, s.region AS region",
-            doc_id=doc_id,
+            doc_id=document_id,
         )
         rows = [dict(record) async for record in result]
     assert rows == [{"sku": sku_b, "region": "Right Side"}]
@@ -160,18 +160,18 @@ async def test_replace_tray_sections_does_not_touch_other_documents_edges():
     tray = _unique("TRAY")
     family = _unique("FAMILY")
     sku = _unique("SKU")
-    doc_id_a = _unique("DOC-A")
-    doc_id_b = _unique("DOC-B")
+    document_id_a = _unique("DOC-A")
+    document_id_b = _unique("DOC-B")
 
     await client.upsert_product_family(family)
     await client.upsert_tray(tray, family)
     await client.upsert_part(sku, tray)
 
     await client.replace_tray_sections(
-        doc_id_a, [{"tray": tray, "level": "", "region": "Middle", "skus": [sku]}]
+        document_id_a, [{"tray": tray, "level": "", "region": "Middle", "skus": [sku]}]
     )
     await client.replace_tray_sections(
-        doc_id_b, [{"tray": tray, "level": "", "region": "Middle", "skus": [sku]}]
+        document_id_b, [{"tray": tray, "level": "", "region": "Middle", "skus": [sku]}]
     )
 
     async with client._driver.session() as session:
@@ -179,16 +179,16 @@ async def test_replace_tray_sections_does_not_touch_other_documents_edges():
             "MATCH (:Part {sku: $sku})-[r:LOCATED_IN]->(:TraySection) RETURN r.document_id AS doc_id",
             sku=sku,
         )
-        doc_ids = {record["doc_id"] async for record in result}
-    assert doc_ids == {doc_id_a, doc_id_b}
+        document_ids = {record["doc_id"] async for record in result}
+    assert document_ids == {document_id_a, document_id_b}
 
     # Re-running doc A alone must not delete doc B's edge.
-    await client.replace_tray_sections(doc_id_a, [])
+    await client.replace_tray_sections(document_id_a, [])
 
     async with client._driver.session() as session:
         result = await session.run(
             "MATCH (:Part {sku: $sku})-[r:LOCATED_IN]->(:TraySection) RETURN r.document_id AS doc_id",
             sku=sku,
         )
-        doc_ids = {record["doc_id"] async for record in result}
-    assert doc_ids == {doc_id_b}
+        document_ids = {record["doc_id"] async for record in result}
+    assert document_ids == {document_id_b}

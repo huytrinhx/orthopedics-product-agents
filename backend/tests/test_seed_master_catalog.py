@@ -54,8 +54,8 @@ def test_family_inference_matches_word_boundaries_not_substrings():
 
 def test_compatibility_matrix_resolves_via_sku_prefix():
     rows = parse_master_catalog(FIXTURE)
-    plate = next(r for r in rows if r.description.startswith("PLATE, LATERAL FIBULA, XSML, LEFT"))
-    all_skus = [r.sku for r in rows]
+    plate = next(row for row in rows if row.description.startswith("PLATE, LATERAL FIBULA, XSML, LEFT"))
+    all_skus = [row.sku for row in rows]
     matches = resolve_compatible_skus("2.7mm Polyaxial Locking (MPSL27xx)", all_skus, plate.sku)
     assert matches
     assert all(sku.startswith("MPSL27") for sku in matches)
@@ -69,8 +69,8 @@ def test_compatibility_column_without_resolvable_prefix_is_skipped():
 
 def test_guidewire_tool_resolution_matches_by_diameter_and_length_within_tray():
     rows = parse_master_catalog(FIXTURE)
-    screw = next(r for r in rows if r.sku == "MSD14030")
-    tray_rows = [r for r in rows if r.tray == screw.tray]
+    screw = next(row for row in rows if row.sku == "MSD14030")
+    tray_rows = [row for row in rows if row.tray == screw.tray]
     assert resolve_tool_sku("guidewire", screw.guidewire_spec, tray_rows) == "MSG14150"
 
 
@@ -94,8 +94,8 @@ async def test_seed_master_catalog_writes_parts_family_and_compatibility(tmp_pat
         "Full", "Green", "N/A", "N/A", "T15", "",
     ]
     csv_path = tmp_path / "mini-master.csv"
-    with csv_path.open("w", newline="", encoding="latin-1") as f:
-        writer = csv.writer(f, delimiter="\t")
+    with csv_path.open("w", newline="", encoding="latin-1") as file:
+        writer = csv.writer(file, delimiter="\t")
         writer.writerows([header, plate_row, screw_row])
 
     client = get_graph_client()
@@ -103,8 +103,8 @@ async def test_seed_master_catalog_writes_parts_family_and_compatibility(tmp_pat
     await seed_master_catalog(client, csv_path)
 
     related = await client.query_related_entities(plate_sku)
-    families = [r for r in related if r["relationship"] == "BELONGS_TO_TRAY"]
+    families = [related_entry for related_entry in related if related_entry["relationship"] == "BELONGS_TO_TRAY"]
     assert families and families[0]["related_entity"] == tray
 
     compat = await client.query_related_entities(plate_sku, "COMPATIBLE_WITH")
-    assert any(r["related_entity"] == screw_sku for r in compat)
+    assert any(related_entry["related_entity"] == screw_sku for related_entry in compat)

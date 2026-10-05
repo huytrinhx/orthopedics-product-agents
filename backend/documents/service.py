@@ -30,31 +30,31 @@ async def process_document(document_id: uuid.UUID, storage_path: str) -> None:
             raise FileNotFoundError(storage_path)
         await set_status(document_id, "processing")
 
-        doc = await get_document(document_id)
-        assert doc is not None
+        document = await get_document(document_id)
+        assert document is not None
 
-        text = extract_text(path, doc.filename)
+        text = extract_text(path, document.filename)
 
         await ingest_document(
             document_id=str(document_id),
             text=text,
-            filename=doc.filename,
-            system=doc.system_name,
-            doc_type=doc.document_type_name,
+            filename=document.filename,
+            system=document.system_name,
+            doc_type=document.document_type_name,
         )
         await ingest_document_vectors(
             document_id=str(document_id),
             text=text,
-            system_id=doc.system_id,
-            document_type_id=doc.document_type_id,
+            system_id=document.system_id,
+            document_type_id=document.document_type_id,
         )
 
         try:
             await extract_tray_layout(
                 document_id=str(document_id),
                 storage_path=path,
-                filename=doc.filename,
-                system=doc.system_name,
+                filename=document.filename,
+                system=document.system_name,
             )
         except Exception:
             logger.exception(
@@ -65,5 +65,5 @@ async def process_document(document_id: uuid.UUID, storage_path: str) -> None:
             )
 
         await set_status(document_id, "done")
-    except Exception as exc:  # noqa: BLE001 - background task: report, don't crash the process
-        await set_status(document_id, "failed", error=str(exc))
+    except Exception as error:  # noqa: BLE001 - background task: report, don't crash the process
+        await set_status(document_id, "failed", error=str(error))

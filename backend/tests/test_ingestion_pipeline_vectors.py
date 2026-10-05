@@ -19,12 +19,12 @@ def _unique(prefix: str) -> str:
 
 async def _create_document() -> uuid.UUID:
     user = await create_user(f"{_unique('user')}@example.com", None, False, True)
-    doc = await create_document(
+    document = await create_document(
         filename=_unique("doc") + ".txt",
         storage_path=f"/tmp/{_unique('storage')}.txt",
         uploaded_by=user.id,
     )
-    return doc.id
+    return document.id
 
 
 async def _fake_embed_texts(texts: list[str]) -> list[list[float]]:
@@ -44,12 +44,12 @@ async def test_ingest_document_vectors_writes_chunks(monkeypatch):
             document_type_id=None,
         )
 
-        async with get_vector_store() as store, store._connection.cursor() as cur:
-            await cur.execute(
+        async with get_vector_store() as store, store._connection.cursor() as cursor:
+            await cursor.execute(
                 "SELECT chunk_index, content FROM chunks WHERE document_id = %s ORDER BY chunk_index",
                 (document_id,),
             )
-            rows = await cur.fetchall()
+            rows = await cursor.fetchall()
 
         assert len(rows) == 1  # both short paragraphs pack into a single chunk
         assert "First paragraph." in rows[0][1]
@@ -70,11 +70,11 @@ async def test_ingest_document_vectors_denormalizes_tags(monkeypatch):
             str(document_id), "Some text about a part.", system_id=system.id, document_type_id=None
         )
 
-        async with get_vector_store() as store, store._connection.cursor() as cur:
-            await cur.execute(
+        async with get_vector_store() as store, store._connection.cursor() as cursor:
+            await cursor.execute(
                 "SELECT system_id FROM chunks WHERE document_id = %s", (document_id,)
             )
-            (system_id,) = await cur.fetchone()
+            (system_id,) = await cursor.fetchone()
         assert system_id == system.id
     finally:
         await delete_document(document_id)
@@ -90,9 +90,9 @@ async def test_ingest_document_vectors_skips_without_openai_key(monkeypatch):
             str(document_id), "Some text.", system_id=None, document_type_id=None
         )
 
-        async with get_vector_store() as store, store._connection.cursor() as cur:
-            await cur.execute("SELECT count(*) FROM chunks WHERE document_id = %s", (document_id,))
-            (count,) = await cur.fetchone()
+        async with get_vector_store() as store, store._connection.cursor() as cursor:
+            await cursor.execute("SELECT count(*) FROM chunks WHERE document_id = %s", (document_id,))
+            (count,) = await cursor.fetchone()
         assert count == 0
     finally:
         await delete_document(document_id)

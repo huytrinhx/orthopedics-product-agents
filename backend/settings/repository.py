@@ -18,30 +18,30 @@ class AppSettingsRecord:
 
 
 async def get_settings() -> AppSettingsRecord:
-    conn = await get_connection()
+    connection = await get_connection()
     try:
-        async with conn.cursor() as cur:
-            await cur.execute(
+        async with connection.cursor() as cursor:
+            await cursor.execute(
                 "SELECT default_workflow, updated_at, updated_by FROM app_settings WHERE id = 1"
             )
-            row = await cur.fetchone()
+            row = await cursor.fetchone()
             return AppSettingsRecord(*row)
     finally:
-        await conn.close()
+        await connection.close()
 
 
 async def set_default_workflow(workflow_name: str, updated_by: uuid.UUID) -> AppSettingsRecord:
-    conn = await get_connection()
+    connection = await get_connection()
     try:
-        async with conn.cursor() as cur:
-            await cur.execute(
+        async with connection.cursor() as cursor:
+            await cursor.execute(
                 "UPDATE app_settings SET default_workflow = %s, updated_at = now(), updated_by = %s "
                 "WHERE id = 1 "
                 "RETURNING default_workflow, updated_at, updated_by",
                 (workflow_name, updated_by),
             )
-            row = await cur.fetchone()
-        await conn.commit()
+            row = await cursor.fetchone()
+        await connection.commit()
         return AppSettingsRecord(*row)
     finally:
-        await conn.close()
+        await connection.close()

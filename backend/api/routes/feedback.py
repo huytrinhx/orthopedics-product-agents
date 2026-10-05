@@ -81,11 +81,11 @@ def _question_and_answer(messages: list, message_id: str) -> tuple[str, str] | N
     row pointing at a message id from a fresher answer schema than
     expected shouldn't crash the whole list).
     """
-    for i, m in enumerate(messages):
-        if m.id == message_id:
-            if i == 0 or messages[i - 1].type != "human":
+    for index, message in enumerate(messages):
+        if message.id == message_id:
+            if index == 0 or messages[index - 1].type != "human":
                 return None
-            return messages[i - 1].content, m.content
+            return messages[index - 1].content, message.content
     return None
 
 
@@ -103,10 +103,10 @@ async def list_flagged(
         if checkpoint_tuple is None:
             continue  # original thread's checkpoint is gone; nothing to show
         messages = checkpoint_tuple.checkpoint["channel_values"].get("messages", [])
-        qa = _question_and_answer(messages, record.message_id)
-        if qa is None:
+        question_and_answer = _question_and_answer(messages, record.message_id)
+        if question_and_answer is None:
             continue
-        question, answer = qa
+        question, answer = question_and_answer
         out.append(
             FlaggedFeedbackOut(**to_feedback_out(record).model_dump(), question=question, answer=answer)
         )
@@ -128,8 +128,8 @@ async def list_message_reruns(
     message_id: str, admin: UserRecord = Depends(require_admin)
 ) -> list[RerunOut]:
     return [
-        RerunOut(thread_id=t.thread_id, workflow_name=t.workflow_name, created_at=t.created_at)
-        for t in await list_reruns(message_id)
+        RerunOut(thread_id=rerun.thread_id, workflow_name=rerun.workflow_name, created_at=rerun.created_at)
+        for rerun in await list_reruns(message_id)
     ]
 
 

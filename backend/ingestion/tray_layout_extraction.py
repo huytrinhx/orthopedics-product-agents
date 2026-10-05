@@ -156,7 +156,7 @@ def select_candidate_pages(storage_path: str | Path) -> list[dict]:
     """
     candidates: list[dict] = []
     with pdfplumber.open(storage_path) as pdf:
-        for i, page in enumerate(pdf.pages):
+        for page_index, page in enumerate(pdf.pages):
             if len(candidates) >= MAX_PAGES_PER_DOCUMENT:
                 logger.warning(
                     "tray_layout_extraction: hit MAX_PAGES_PER_DOCUMENT (%d) on %s, "
@@ -167,7 +167,7 @@ def select_candidate_pages(storage_path: str | Path) -> list[dict]:
                 break
             text = page.extract_text() or ""
             if _has_large_images(page) and _has_tray_keyword(text):
-                candidates.append({"page_number": i + 1, "text": text})
+                candidates.append({"page_number": page_index + 1, "text": text})
     return candidates
 
 
@@ -271,11 +271,11 @@ async def extract_tray_layout(
         await client.replace_tray_sections(
             document_id,
             [
-                {"tray": g.tray, "level": g.level, "region": g.region, "skus": g.skus}
-                for g in all_valid_groups
+                {"tray": group.tray, "level": group.level, "region": group.region, "skus": group.skus}
+                for group in all_valid_groups
             ],
         )
-        written = sum(len(g.skus) for g in all_valid_groups)
+        written = sum(len(group.skus) for group in all_valid_groups)
         return written
     except Exception:
         logger.exception(

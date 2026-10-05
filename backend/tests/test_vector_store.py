@@ -32,14 +32,14 @@ def _unit_vector(index: int) -> list[float]:
 
 async def _create_document(system_id=None, document_type_id=None) -> uuid.UUID:
     user = await create_user(f"{_unique('user')}@example.com", None, False, True)
-    doc = await create_document(
+    document = await create_document(
         filename=_unique("doc") + ".txt",
         storage_path=f"/tmp/{_unique('storage')}.txt",
         uploaded_by=user.id,
         system_id=system_id,
         document_type_id=document_type_id,
     )
-    return doc.id
+    return document.id
 
 
 async def test_upsert_then_reindex_replaces_rather_than_duplicates():
@@ -58,11 +58,11 @@ async def test_upsert_then_reindex_replaces_rather_than_duplicates():
                 [{"chunk_index": 0, "content": "second version, only one chunk", "embedding": _unit_vector(2)}],
             )
 
-            async with store._connection.cursor() as cur:
-                await cur.execute(
+            async with store._connection.cursor() as cursor:
+                await cursor.execute(
                     "SELECT chunk_index, content FROM chunks WHERE document_id = %s", (document_id,)
                 )
-                rows = await cur.fetchall()
+                rows = await cursor.fetchall()
 
         assert rows == [(0, "second version, only one chunk")]
     finally:
@@ -79,9 +79,9 @@ async def test_document_delete_cascades_to_chunks():
 
     await delete_document(document_id)
 
-    async with get_vector_store() as store, store._connection.cursor() as cur:
-        await cur.execute("SELECT count(*) FROM chunks WHERE document_id = %s", (document_id,))
-        (count,) = await cur.fetchone()
+    async with get_vector_store() as store, store._connection.cursor() as cursor:
+        await cursor.execute("SELECT count(*) FROM chunks WHERE document_id = %s", (document_id,))
+        (count,) = await cursor.fetchone()
     assert count == 0
 
 
@@ -117,7 +117,7 @@ async def test_hybrid_search_fuses_vector_and_keyword_legs():
 
             results = await store.hybrid_search("screwdriver torque", query_vector, top_k=2)
 
-        result_indices = [r["chunk_index"] for r in results]
+        result_indices = [result["chunk_index"] for result in results]
         # chunk 2 (strong keyword leg + present in the vector pool) and
         # chunk 0 (exact vector match) both outrank chunk 1, which has no
         # signal on either leg.

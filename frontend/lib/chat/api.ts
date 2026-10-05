@@ -10,14 +10,14 @@ import type { ChatFeedback, ChatStreamEvent, ChatThread, ChatTranscript, SubmitF
 // Exported for lib/feedback/api.ts's rerun functions (ticket 15) -- same
 // frame format, since backend/api/routes/chat.py's _stream_graph drives
 // POST /chat/rerun and its resume too.
-export async function* parseSseStream(res: Response): AsyncGenerator<ChatStreamEvent> {
-  if (!res.ok || !res.body) {
-    handleUnauthorized(res);
-    const body = await res.json().catch(() => ({}));
-    throw new Error(body.detail ?? `request failed: ${res.status}`);
+export async function* parseSseStream(response: Response): AsyncGenerator<ChatStreamEvent> {
+  if (!response.ok || !response.body) {
+    handleUnauthorized(response);
+    const body = await response.json().catch(() => ({}));
+    throw new Error(body.detail ?? `request failed: ${response.status}`);
   }
 
-  const reader = res.body.getReader();
+  const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
   while (true) {
@@ -47,12 +47,12 @@ export async function* streamChat(
   message: string,
   threadId?: string
 ): AsyncGenerator<ChatStreamEvent> {
-  const res = await fetch(`${API_BASE}/chat/stream`, {
+  const response = await fetch(`${API_BASE}/chat/stream`, {
     method: "POST",
     headers: { "Content-Type": "application/json", ...authHeaders() },
     body: JSON.stringify({ message, thread_id: threadId }),
   });
-  yield* parseSseStream(res);
+  yield* parseSseStream(response);
 }
 
 // Ticket 09: answers a pending detect_intent clarification (a clicked
@@ -62,12 +62,12 @@ export async function* resumeChat(
   threadId: string,
   humanInput: string
 ): AsyncGenerator<ChatStreamEvent> {
-  const res = await fetch(`${API_BASE}/chat/resume`, {
+  const response = await fetch(`${API_BASE}/chat/resume`, {
     method: "POST",
     headers: { "Content-Type": "application/json", ...authHeaders() },
     body: JSON.stringify({ thread_id: threadId, human_input: humanInput }),
   });
-  yield* parseSseStream(res);
+  yield* parseSseStream(response);
 }
 
 export async function listChatThreads(): Promise<ChatThread[]> {

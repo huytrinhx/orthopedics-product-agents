@@ -13,11 +13,11 @@ export async function createSystem(name: string): Promise<Tag> {
 // request()/unwrap(), which always calls res.json() and would choke on the
 // empty body (same reason lib/documents/api.ts's deleteDocument does this).
 export async function deleteSystem(id: string): Promise<void> {
-  const res = await fetch(`${API_BASE}/systems/${id}`, { method: "DELETE", headers: authHeaders() });
-  if (!res.ok) {
-    handleUnauthorized(res);
-    const body = await res.json().catch(() => ({}));
-    throw new Error(body.detail ?? `request failed: ${res.status}`);
+  const response = await fetch(`${API_BASE}/systems/${id}`, { method: "DELETE", headers: authHeaders() });
+  if (!response.ok) {
+    handleUnauthorized(response);
+    const body = await response.json().catch(() => ({}));
+    throw new Error(body.detail ?? `request failed: ${response.status}`);
   }
 }
 
@@ -30,13 +30,13 @@ export async function createDocumentType(name: string): Promise<Tag> {
 }
 
 export async function deleteDocumentType(id: string): Promise<void> {
-  const res = await fetch(`${API_BASE}/document-types/${id}`, {
+  const response = await fetch(`${API_BASE}/document-types/${id}`, {
     method: "DELETE",
     headers: authHeaders(),
   });
-  if (!res.ok) {
-    handleUnauthorized(res);
-    const body = await res.json().catch(() => ({}));
-    throw new Error(body.detail ?? `request failed: ${res.status}`);
+  if (!response.ok) {
+    handleUnauthorized(response);
+    const body = await response.json().catch(() => ({}));
+    throw new Error(body.detail ?? `request failed: ${response.status}`);
   }
 }

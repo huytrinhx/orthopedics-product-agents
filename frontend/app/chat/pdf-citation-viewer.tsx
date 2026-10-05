@@ -40,13 +40,13 @@ export function PdfCitationViewer({ file, pageNumber, searchText, onError }: Pdf
   const [textLayerRenderCount, setTextLayerRenderCount] = useState(0);
 
   useEffect(() => {
-    const el = containerRef.current;
-    if (!el) return;
+    const element = containerRef.current;
+    if (!element) return;
     const observer = new ResizeObserver((entries) => {
       const width = entries[0]?.contentRect.width;
       if (width) setContainerWidth(Math.max(200, Math.floor(width)));
     });
-    observer.observe(el);
+    observer.observe(element);
     return () => observer.disconnect();
   }, []);
 
@@ -57,7 +57,7 @@ export function PdfCitationViewer({ file, pageNumber, searchText, onError }: Pdf
   useEffect(() => {
     if (textLayerRenderCount === 0) return;
     const container = containerRef.current;
-    highlightedRef.current.forEach((el) => el.classList.remove("chat-pdf-highlight"));
+    highlightedRef.current.forEach((element) => element.classList.remove("chat-pdf-highlight"));
     highlightedRef.current = [];
     if (!container) return;
 
@@ -66,26 +66,26 @@ export function PdfCitationViewer({ file, pageNumber, searchText, onError }: Pdf
     );
     if (spans.length === 0) return;
 
-    const parts: { el: HTMLSpanElement; start: number; end: number }[] = [];
-    let hay = "";
-    for (const el of spans) {
-      const norm = normalize(el.textContent ?? "");
-      if (!norm) continue;
-      const start = hay.length === 0 ? 0 : hay.length + 1;
-      hay = hay.length === 0 ? norm : `${hay} ${norm}`;
-      parts.push({ el, start, end: hay.length });
+    const parts: { element: HTMLSpanElement; start: number; end: number }[] = [];
+    let haystack = "";
+    for (const element of spans) {
+      const normalized = normalize(element.textContent ?? "");
+      if (!normalized) continue;
+      const start = haystack.length === 0 ? 0 : haystack.length + 1;
+      haystack = haystack.length === 0 ? normalized : `${haystack} ${normalized}`;
+      parts.push({ element, start, end: haystack.length });
     }
 
     const needle = normalize(searchText).slice(0, SEARCH_ANCHOR_LENGTH);
     if (!needle) return;
-    const idx = hay.indexOf(needle);
-    if (idx === -1) return; // falls back to wherever the page itself scrolled to (its top)
+    const matchIndex = haystack.indexOf(needle);
+    if (matchIndex === -1) return; // falls back to wherever the page itself scrolled to (its top)
 
-    const matchEnd = idx + needle.length;
-    const matched = parts.filter((p) => p.end > idx && p.start < matchEnd);
-    matched.forEach((p) => p.el.classList.add("chat-pdf-highlight"));
-    highlightedRef.current = matched.map((p) => p.el);
-    matched[0]?.el.scrollIntoView({ behavior: "smooth", block: "center" });
+    const matchEnd = matchIndex + needle.length;
+    const matched = parts.filter((part) => part.end > matchIndex && part.start < matchEnd);
+    matched.forEach((part) => part.element.classList.add("chat-pdf-highlight"));
+    highlightedRef.current = matched.map((part) => part.element);
+    matched[0]?.element.scrollIntoView({ behavior: "smooth", block: "center" });
   }, [searchText, textLayerRenderCount]);
 
   return (
@@ -99,7 +99,7 @@ export function PdfCitationViewer({ file, pageNumber, searchText, onError }: Pdf
           key={pageNumber}
           pageNumber={pageNumber}
           width={containerWidth}
-          onRenderTextLayerSuccess={() => setTextLayerRenderCount((n) => n + 1)}
+          onRenderTextLayerSuccess={() => setTextLayerRenderCount((count) => count + 1)}
           onRenderError={onError}
         />
       </Document>

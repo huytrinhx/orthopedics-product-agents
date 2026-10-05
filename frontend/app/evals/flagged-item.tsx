@@ -43,8 +43,8 @@ export function FlaggedItem({
   async function loadReruns() {
     try {
       setReruns(await listReruns(item.message_id));
-    } catch (err) {
-      setRerunsError(err instanceof Error ? err.message : "Couldn't load rerun history");
+    } catch (caughtError) {
+      setRerunsError(caughtError instanceof Error ? caughtError.message : "Couldn't load rerun history");
     }
   }
 
@@ -62,7 +62,7 @@ export function FlaggedItem({
     }
   }
 
-  const historyRows = (reruns ?? []).filter((r) => r.thread_id !== liveRerun?.threadId);
+  const historyRows = (reruns ?? []).filter((rerun) => rerun.thread_id !== liveRerun?.threadId);
 
   async function handleDelete() {
     setDeleting(true);
@@ -70,8 +70,8 @@ export function FlaggedItem({
     try {
       await deleteFlaggedFeedback(item.message_id);
       onDeleted();
-    } catch (err) {
-      setDeleteError(err instanceof Error ? err.message : "Couldn't delete this item");
+    } catch (caughtError) {
+      setDeleteError(caughtError instanceof Error ? caughtError.message : "Couldn't delete this item");
       setDeleting(false);
     }
   }
@@ -119,12 +119,12 @@ export function FlaggedItem({
         <select
           className="flagged-workflow-select"
           value={workflowName}
-          onChange={(e) => setWorkflowName(e.target.value)}
+          onChange={(event) => setWorkflowName(event.target.value)}
           disabled={liveRerun !== null}
         >
-          {workflows.map((w) => (
-            <option key={w.name} value={w.name}>
-              {w.name}
+          {workflows.map((workflow) => (
+            <option key={workflow.name} value={workflow.name}>
+              {workflow.name}
             </option>
           ))}
         </select>
@@ -158,10 +158,10 @@ export function FlaggedItem({
             originalMessageId={item.message_id}
             workflowName={liveRerun.workflowName}
             onThreadCreated={(threadId) => {
-              setLiveRerun((prev) => (prev ? { ...prev, threadId } : prev));
-              setReruns((prev) => [
+              setLiveRerun((previous) => (previous ? { ...previous, threadId } : previous));
+              setReruns((previous) => [
                 { thread_id: threadId, workflow_name: liveRerun.workflowName, created_at: new Date().toISOString() },
-                ...(prev ?? []),
+                ...(previous ?? []),
               ]);
             }}
           />
@@ -171,17 +171,17 @@ export function FlaggedItem({
       {rerunsError && <p className="alert" role="alert">{rerunsError}</p>}
       {historyRows.length > 0 && (
         <div className="rerun-history">
-          {historyRows.map((r) => (
-            <div key={r.thread_id} className="rerun-attempt">
+          {historyRows.map((rerun) => (
+            <div key={rerun.thread_id} className="rerun-attempt">
               <button
                 type="button"
                 className="btn-text rerun-attempt-label"
-                onClick={() => setExpandedThreadId((prev) => (prev === r.thread_id ? null : r.thread_id))}
+                onClick={() => setExpandedThreadId((previous) => (previous === rerun.thread_id ? null : rerun.thread_id))}
               >
-                {new Date(r.created_at).toLocaleString()} &middot; {r.workflow_name ?? "unknown workflow"}
+                {new Date(rerun.created_at).toLocaleString()} &middot; {rerun.workflow_name ?? "unknown workflow"}
               </button>
-              {expandedThreadId === r.thread_id && (
-                <RerunConversation mode="history" threadId={r.thread_id} workflowName={r.workflow_name} />
+              {expandedThreadId === rerun.thread_id && (
+                <RerunConversation mode="history" threadId={rerun.thread_id} workflowName={rerun.workflow_name} />
               )}
             </div>
           ))}

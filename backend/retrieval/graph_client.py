@@ -93,7 +93,7 @@ class GraphClient:
                 await session.run("MERGE (:Tray {name: $name})", name=name)
 
     async def upsert_part(self, sku: str, tray: str, **properties: str | int | None) -> None:
-        clean_props = {k: v for k, v in properties.items() if v is not None}
+        cleaned_properties = {key: value for key, value in properties.items() if value is not None}
         async with self._driver.session() as session:
             await session.run(
                 """
@@ -105,7 +105,7 @@ class GraphClient:
                 """,
                 sku=sku,
                 tray=tray,
-                properties=clean_props,
+                properties=cleaned_properties,
             )
 
     async def upsert_compatible_with(self, sku_a: str, sku_b: str) -> None:
@@ -506,7 +506,7 @@ class GraphClient:
             )
             groups = []
             async for record in result:
-                group = [record["canonical"], *[v for v in record["variants"] if v]]
+                group = [record["canonical"], *[variant for variant in record["variants"] if variant]]
                 groups.append(group)
             return groups
 

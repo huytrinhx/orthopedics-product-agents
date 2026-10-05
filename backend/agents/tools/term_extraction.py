@@ -26,7 +26,7 @@ def extract_candidate_terms(text: str) -> list[str]:
     """Lowercased, punctuation-stripped, deduped (order-preserving) words
     from `text`, dropping stopwords and anything 2 characters or shorter.
     """
-    words = [w.strip(".,?!:;\"'()").lower() for w in text.split()]
+    words = [word.strip(".,?!:;\"'()").lower() for word in text.split()]
     seen: set[str] = set()
     terms = []
     for word in words:

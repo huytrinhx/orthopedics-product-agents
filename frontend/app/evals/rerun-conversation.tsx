@@ -18,7 +18,7 @@ import type { ChatMessage, ChatStreamEvent } from "../../lib/chat/types";
 import { rerunChat, resumeRerunChat } from "../../lib/feedback/api";
 import { MessageFeedback } from "../chat/message-feedback";
 
-function uid(): string {
+function uniqueId(): string {
   return Math.random().toString(36).slice(2);
 }
 
@@ -43,67 +43,67 @@ export function RerunConversation(props: Props) {
   const startedRef = useRef(false);
 
   function updateMessage(id: string, patch: Partial<ChatMessage>) {
-    setMessages((prev) => prev.map((m) => (m.id === id ? { ...m, ...patch } : m)));
+    setMessages((previous) => previous.map((message) => (message.id === id ? { ...message, ...patch } : message)));
   }
 
   // Mirrors app/chat/page.tsx's consumeStream (see its own comment for why
   // "generate" tokens are suppressed until self_eval has accepted a draft).
-  async function consume(gen: AsyncGenerator<ChatStreamEvent>, assistantId: string) {
+  async function consume(eventStream: AsyncGenerator<ChatStreamEvent>, assistantId: string) {
     let sawSelfEval = false;
     let suppressTokens = false;
-    for await (const evt of gen) {
-      if (evt.event === "thread") {
-        setThreadId(evt.data.thread_id);
-        if (props.mode === "live") props.onThreadCreated(evt.data.thread_id);
-        const history = await getChatThread(evt.data.thread_id).catch(() => null);
+    for await (const streamEvent of eventStream) {
+      if (streamEvent.event === "thread") {
+        setThreadId(streamEvent.data.thread_id);
+        if (props.mode === "live") props.onThreadCreated(streamEvent.data.thread_id);
+        const history = await getChatThread(streamEvent.data.thread_id).catch(() => null);
         if (history) {
           setMessages([
-            ...history.messages.map((m) => ({
-              id: uid(),
-              role: m.role,
-              content: m.content,
-              citations: m.citations,
-              messageId: m.message_id,
-              feedback: m.feedback,
+            ...history.messages.map((message) => ({
+              id: uniqueId(),
+              role: message.role,
+              content: message.content,
+              citations: message.citations,
+              messageId: message.message_id,
+              feedback: message.feedback,
             })),
             { id: assistantId, role: "assistant" as const, content: "", pending: true, status: "Thinking…" },
           ]);
         }
-      } else if (evt.event === "status") {
-        if (evt.data.node === "self_eval") sawSelfEval = true;
-        const isRetriedDraft = evt.data.node === "generate" && sawSelfEval;
-        suppressTokens = evt.data.node === "generate";
+      } else if (streamEvent.event === "status") {
+        if (streamEvent.data.node === "self_eval") sawSelfEval = true;
+        const isRetriedDraft = streamEvent.data.node === "generate" && sawSelfEval;
+        suppressTokens = streamEvent.data.node === "generate";
         updateMessage(assistantId, {
-          status: isRetriedDraft ? "Refining the answer…" : STATUS_LABELS[evt.data.node] ?? evt.data.node,
-          ...(evt.data.node === "generate" ? { content: "" } : {}),
+          status: isRetriedDraft ? "Refining the answer…" : STATUS_LABELS[streamEvent.data.node] ?? streamEvent.data.node,
+          ...(streamEvent.data.node === "generate" ? { content: "" } : {}),
         });
-      } else if (evt.event === "token") {
+      } else if (streamEvent.event === "token") {
         if (suppressTokens) continue;
-        setMessages((prev) =>
-          prev.map((m) =>
-            m.id === assistantId ? { ...m, content: m.content + evt.data.content, status: undefined } : m
+        setMessages((previous) =>
+          previous.map((message) =>
+            message.id === assistantId ? { ...message, content: message.content + streamEvent.data.content, status: undefined } : message
           )
         );
-      } else if (evt.event === "clarification") {
+      } else if (streamEvent.event === "clarification") {
         setPendingClarification(true);
         updateMessage(assistantId, {
-          content: evt.data.question,
-          clarification: { question: evt.data.question, options: evt.data.options },
+          content: streamEvent.data.question,
+          clarification: { question: streamEvent.data.question, options: streamEvent.data.options },
           status: undefined,
           pending: false,
         });
-      } else if (evt.event === "done") {
+      } else if (streamEvent.event === "done") {
         setPendingClarification(false);
         updateMessage(assistantId, {
-          content: evt.data.answer,
-          citations: evt.data.citations,
+          content: streamEvent.data.answer,
+          citations: streamEvent.data.citations,
           status: undefined,
           pending: false,
-          messageId: evt.data.message_id,
+          messageId: streamEvent.data.message_id,
         });
-      } else if (evt.event === "error") {
+      } else if (streamEvent.event === "error") {
         updateMessage(assistantId, { pending: false, status: undefined });
-        setError(evt.data.message);
+        setError(streamEvent.data.message);
       }
     }
   }
@@ -111,41 +111,41 @@ export function RerunConversation(props: Props) {
   useEffect(() => {
     if (props.mode === "history") {
       getChatThread(props.threadId)
-        .then((t) =>
+        .then((transcript) =>
           setMessages(
-            t.messages.map((m) => ({
-              id: uid(),
-              role: m.role,
-              content: m.content,
-              citations: m.citations,
-              messageId: m.message_id,
-              feedback: m.feedback,
+            transcript.messages.map((message) => ({
+              id: uniqueId(),
+              role: message.role,
+              content: message.content,
+              citations: message.citations,
+              messageId: message.message_id,
+              feedback: message.feedback,
             }))
           )
         )
-        .catch((err) => setError(err instanceof Error ? err.message : "Couldn't load this rerun"));
+        .catch((caughtError) => setError(caughtError instanceof Error ? caughtError.message : "Couldn't load this rerun"));
       return;
     }
     if (startedRef.current) return; // StrictMode double-invoke guard -- a rerun must fire exactly once
     startedRef.current = true;
-    const assistantId = uid();
+    const assistantId = uniqueId();
     consume(rerunChat(props.originalThreadId, props.originalMessageId, props.workflowName), assistantId).catch(
-      (err) => setError(err instanceof Error ? err.message : "Rerun failed")
+      (caughtError) => setError(caughtError instanceof Error ? caughtError.message : "Rerun failed")
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  async function submitReply(e: React.FormEvent) {
-    e.preventDefault();
+  async function submitReply(event: React.FormEvent) {
+    event.preventDefault();
     const text = replyInput.trim();
     const workflowName = props.workflowName;
     if (!text || !threadId || !workflowName) return;
     setReplyInput("");
     setPendingClarification(false);
-    const userId = uid();
-    const assistantId = uid();
-    setMessages((prev) => [
-      ...prev,
+    const userId = uniqueId();
+    const assistantId = uniqueId();
+    setMessages((previous) => [
+      ...previous,
       { id: userId, role: "user", content: text },
       { id: assistantId, role: "assistant", content: "", pending: true, status: "Thinking…" },
     ]);
@@ -154,34 +154,34 @@ export function RerunConversation(props: Props) {
 
   return (
     <div className="rerun-conversation">
-      {messages.map((m) => (
-        <div key={m.id} className={`chat-bubble chat-bubble-${m.role}`}>
-          {m.content && (
+      {messages.map((message) => (
+        <div key={message.id} className={`chat-bubble chat-bubble-${message.role}`}>
+          {message.content && (
             <div className="chat-bubble-text">
-              <ReactMarkdown>{stripCitationMarkers(m.content)}</ReactMarkdown>
+              <ReactMarkdown>{stripCitationMarkers(message.content)}</ReactMarkdown>
             </div>
           )}
-          {m.status && <div className="chat-status">{m.status}</div>}
-          {m.citations && m.citations.length > 0 && (
+          {message.status && <div className="chat-status">{message.status}</div>}
+          {message.citations && message.citations.length > 0 && (
             <div className="chat-citations">
-              {m.citations.map((c, i) => (
+              {message.citations.map((citation, index) => (
                 <span
-                  key={`${c.document_id}#${c.chunk_index}-${i}`}
+                  key={`${citation.document_id}#${citation.chunk_index}-${index}`}
                   className="chat-citation"
                   style={{ cursor: "default" }}
-                  title={citationLabel(c)}
+                  title={citationLabel(citation)}
                 >
-                  {citationLabel(c)}
+                  {citationLabel(citation)}
                 </span>
               ))}
             </div>
           )}
-          {m.role === "assistant" && m.messageId && threadId && (
+          {message.role === "assistant" && message.messageId && threadId && (
             <MessageFeedback
               threadId={threadId}
-              messageId={m.messageId}
-              initialFeedback={m.feedback}
-              onSubmitted={(feedback) => updateMessage(m.id, { feedback })}
+              messageId={message.messageId}
+              initialFeedback={message.feedback}
+              onSubmitted={(feedback) => updateMessage(message.id, { feedback })}
             />
           )}
         </div>
@@ -190,7 +190,7 @@ export function RerunConversation(props: Props) {
         <form className="rerun-reply-row chat-input-row" onSubmit={submitReply}>
           <input
             value={replyInput}
-            onChange={(e) => setReplyInput(e.target.value)}
+            onChange={(event) => setReplyInput(event.target.value)}
             placeholder="Answer the clarification to continue this rerun…"
             autoFocus
           />

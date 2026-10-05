@@ -35,7 +35,7 @@ def _split_for_extraction(text: str) -> list[str]:
     this only needs "small enough for an extraction prompt," not the same
     boundaries the vector index uses.
     """
-    paragraphs = [p.strip() for p in text.split("\n\n") if p.strip()]
+    paragraphs = [paragraph.strip() for paragraph in text.split("\n\n") if paragraph.strip()]
     chunks: list[str] = []
     current = ""
     for paragraph in paragraphs:

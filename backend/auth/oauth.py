@@ -32,7 +32,7 @@ def build_authorize_url(state: str) -> str:
 
 async def exchange_code_for_access_token(code: str) -> str:
     async with httpx.AsyncClient() as client:
-        res = await client.post(
+        response = await client.post(
             TOKEN_URL,
             data={
                 "client_id": os.environ["GOOGLE_CLIENT_ID"],
@@ -42,17 +42,17 @@ async def exchange_code_for_access_token(code: str) -> str:
                 "grant_type": "authorization_code",
             },
         )
-        res.raise_for_status()
-        return res.json()["access_token"]
+        response.raise_for_status()
+        return response.json()["access_token"]
 
 
 async def fetch_verified_email(access_token: str) -> str:
     async with httpx.AsyncClient() as client:
-        res = await client.get(
+        response = await client.get(
             USERINFO_URL, headers={"Authorization": f"Bearer {access_token}"}
         )
-        res.raise_for_status()
-        info = res.json()
+        response.raise_for_status()
+        info = response.json()
     if not info.get("email_verified"):
         raise ValueError("Google account email is not verified")
     return info["email"]

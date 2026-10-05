@@ -18,8 +18,8 @@ export default function AdminPage() {
     try {
       setSettings(await getAdminSettings());
       setError(null);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "failed to load settings");
+    } catch (caughtError) {
+      setError(caughtError instanceof Error ? caughtError.message : "failed to load settings");
     }
   }, []);
 
@@ -37,8 +37,8 @@ export default function AdminPage() {
     try {
       setSettings(await setDefaultWorkflow(workflowName));
       setError(null);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "failed to update default workflow");
+    } catch (caughtError) {
+      setError(caughtError instanceof Error ? caughtError.message : "failed to update default workflow");
     } finally {
       setSaving(null);
     }
@@ -69,22 +69,22 @@ export default function AdminPage() {
 
       {settings && (
         <div className="workflow-picker">
-          {settings.workflows.map((wf) => (
+          {settings.workflows.map((workflow) => (
             <label
-              key={wf.name}
-              className={`workflow-option${wf.functional ? "" : " workflow-option-disabled"}`}
+              key={workflow.name}
+              className={`workflow-option${workflow.functional ? "" : " workflow-option-disabled"}`}
             >
               <input
                 type="radio"
                 name="default_workflow"
-                value={wf.name}
-                checked={settings.default_workflow === wf.name}
-                disabled={!wf.functional || saving !== null}
-                onChange={() => handleSelect(wf.name)}
+                value={workflow.name}
+                checked={settings.default_workflow === workflow.name}
+                disabled={!workflow.functional || saving !== null}
+                onChange={() => handleSelect(workflow.name)}
               />
-              <span className="workflow-option-name">{wf.name}</span>
-              {!wf.functional && <span className="badge">Coming soon</span>}
-              {saving === wf.name && <span className="workflow-option-saving">Saving…</span>}
+              <span className="workflow-option-name">{workflow.name}</span>
+              {!workflow.functional && <span className="badge">Coming soon</span>}
+              {saving === workflow.name && <span className="workflow-option-saving">Saving…</span>}
             </label>
           ))}
         </div>

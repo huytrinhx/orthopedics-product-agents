@@ -23,18 +23,18 @@ class TagRecord:
 
 async def _create_tag(table: str, name: str) -> TagRecord:
     assert table in _TABLES
-    conn = await get_connection()
+    connection = await get_connection()
     try:
-        async with conn.cursor() as cur:
-            await cur.execute(
+        async with connection.cursor() as cursor:
+            await cursor.execute(
                 f"INSERT INTO {table} (name) VALUES (%s) RETURNING id, name, created_at",
                 (name,),
             )
-            row = await cur.fetchone()
-        await conn.commit()
+            row = await cursor.fetchone()
+        await connection.commit()
         return TagRecord(*row)
     finally:
-        await conn.close()
+        await connection.close()
 
 
 async def _list_tags(table: str) -> list[TagRecord]:
@@ -44,14 +44,14 @@ async def _list_tags(table: str) -> list[TagRecord]:
     references it.
     """
     assert table in _TABLES
-    conn = await get_connection()
+    connection = await get_connection()
     try:
-        async with conn.cursor() as cur:
-            await cur.execute(f"SELECT id, name, created_at FROM {table} ORDER BY name")
-            rows = await cur.fetchall()
+        async with connection.cursor() as cursor:
+            await cursor.execute(f"SELECT id, name, created_at FROM {table} ORDER BY name")
+            rows = await cursor.fetchall()
             return [TagRecord(*row) for row in rows]
     finally:
-        await conn.close()
+        await connection.close()
 
 
 async def _delete_tag(table: str, tag_id: uuid.UUID) -> bool:
@@ -63,15 +63,15 @@ async def _delete_tag(table: str, tag_id: uuid.UUID) -> bool:
     than silently orphaning documents or cascading the delete into them.
     """
     assert table in _TABLES
-    conn = await get_connection()
+    connection = await get_connection()
     try:
-        async with conn.cursor() as cur:
-            await cur.execute(f"DELETE FROM {table} WHERE id = %s", (tag_id,))
-            deleted = cur.rowcount > 0
-        await conn.commit()
+        async with connection.cursor() as cursor:
+            await cursor.execute(f"DELETE FROM {table} WHERE id = %s", (tag_id,))
+            deleted = cursor.rowcount > 0
+        await connection.commit()
         return deleted
     finally:
-        await conn.close()
+        await connection.close()
 
 
 async def create_system(name: str) -> TagRecord:

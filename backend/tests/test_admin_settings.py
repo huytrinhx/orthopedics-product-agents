@@ -19,56 +19,56 @@ def _unique_email() -> str:
 def _admin_token(monkeypatch) -> str:
     email = _unique_email()
     monkeypatch.setenv("ADMIN_EMAILS", email)
-    res = client.post("/auth/signup", json={"email": email, "password": "correct horse battery"})
-    return res.json()["access_token"]
+    response = client.post("/auth/signup", json={"email": email, "password": "correct horse battery"})
+    return response.json()["access_token"]
 
 
 def _user_token() -> str:
     email = _unique_email()
-    res = client.post("/auth/signup", json={"email": email, "password": "correct horse battery"})
-    return res.json()["access_token"]
+    response = client.post("/auth/signup", json={"email": email, "password": "correct horse battery"})
+    return response.json()["access_token"]
 
 
 def test_get_settings_requires_auth():
-    res = client.get("/admin/settings")
-    assert res.status_code == 401
+    response = client.get("/admin/settings")
+    assert response.status_code == 401
 
 
 def test_get_settings_requires_admin():
     token = _user_token()
-    res = client.get("/admin/settings", headers={"Authorization": f"Bearer {token}"})
-    assert res.status_code == 403
+    response = client.get("/admin/settings", headers={"Authorization": f"Bearer {token}"})
+    assert response.status_code == 403
 
 
 def test_get_settings_lists_all_registered_workflows_with_functional_flags(monkeypatch):
     token = _admin_token(monkeypatch)
-    res = client.get("/admin/settings", headers={"Authorization": f"Bearer {token}"})
-    assert res.status_code == 200
-    body = res.json()
+    response = client.get("/admin/settings", headers={"Authorization": f"Bearer {token}"})
+    assert response.status_code == 200
+    body = response.json()
     assert body["default_workflow"] == "deterministic"
-    by_name = {wf["name"]: wf["functional"] for wf in body["workflows"]}
+    by_name = {workflow["name"]: workflow["functional"] for workflow in body["workflows"]}
     # Ticket 23 (2026-09-03): react_agent is real now, not a stub.
     assert by_name == {"deterministic": True, "react_agent": True, "supervisor": False}
 
 
 def test_put_settings_requires_admin():
     token = _user_token()
-    res = client.put(
+    response = client.put(
         "/admin/settings",
         headers={"Authorization": f"Bearer {token}"},
         json={"default_workflow": "deterministic"},
     )
-    assert res.status_code == 403
+    assert response.status_code == 403
 
 
 def test_put_settings_rejects_unknown_workflow(monkeypatch):
     token = _admin_token(monkeypatch)
-    res = client.put(
+    response = client.put(
         "/admin/settings",
         headers={"Authorization": f"Bearer {token}"},
         json={"default_workflow": "not-a-real-workflow"},
     )
-    assert res.status_code == 404
+    assert response.status_code == 404
 
 
 def test_put_settings_rejects_a_non_functional_workflow(monkeypatch):
@@ -79,12 +79,12 @@ def test_put_settings_rejects_a_non_functional_workflow(monkeypatch):
     (2026-09-03) made it real -- supervisor is the one stub left.
     """
     token = _admin_token(monkeypatch)
-    res = client.put(
+    response = client.put(
         "/admin/settings",
         headers={"Authorization": f"Bearer {token}"},
         json={"default_workflow": "supervisor"},
     )
-    assert res.status_code == 400
+    assert response.status_code == 400
 
 
 def test_put_settings_updates_the_default_and_get_reflects_it(monkeypatch):
@@ -92,9 +92,9 @@ def test_put_settings_updates_the_default_and_get_reflects_it(monkeypatch):
     headers = {"Authorization": f"Bearer {token}"}
     # Only "deterministic" is functional today, so this is a no-op change in
     # value but still exercises the real UPDATE + re-read round trip.
-    put_res = client.put("/admin/settings", headers=headers, json={"default_workflow": "deterministic"})
-    assert put_res.status_code == 200
-    assert put_res.json()["default_workflow"] == "deterministic"
+    put_response = client.put("/admin/settings", headers=headers, json={"default_workflow": "deterministic"})
+    assert put_response.status_code == 200
+    assert put_response.json()["default_workflow"] == "deterministic"
 
-    get_res = client.get("/admin/settings", headers=headers)
-    assert get_res.json()["default_workflow"] == "deterministic"
+    get_response = client.get("/admin/settings", headers=headers)
+    assert get_response.json()["default_workflow"] == "deterministic"

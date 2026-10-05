@@ -45,9 +45,9 @@ def _unique_email() -> str:
 
 def test_signup_then_me():
     email = _unique_email()
-    res = client.post("/auth/signup", json={"email": email, "password": "correct horse battery"})
-    assert res.status_code == 200
-    body = res.json()
+    response = client.post("/auth/signup", json={"email": email, "password": "correct horse battery"})
+    assert response.status_code == 200
+    body = response.json()
     assert body["user"]["email"] == email
     assert body["user"]["is_admin"] is False
     # Pending until an admin enables them -- see auth.dependencies.require_chat_access.
@@ -61,23 +61,23 @@ def test_signup_then_me():
 def test_signup_duplicate_email_conflicts():
     email = _unique_email()
     client.post("/auth/signup", json={"email": email, "password": "correct horse battery"})
-    res = client.post("/auth/signup", json={"email": email, "password": "another password"})
-    assert res.status_code == 409
+    response = client.post("/auth/signup", json={"email": email, "password": "another password"})
+    assert response.status_code == 409
 
 
 def test_login_wrong_password_rejected():
     email = _unique_email()
     client.post("/auth/signup", json={"email": email, "password": "correct horse battery"})
-    res = client.post("/auth/login", json={"email": email, "password": "wrong password"})
-    assert res.status_code == 401
+    response = client.post("/auth/login", json={"email": email, "password": "wrong password"})
+    assert response.status_code == 401
 
 
 def test_login_correct_password_succeeds():
     email = _unique_email()
     client.post("/auth/signup", json={"email": email, "password": "correct horse battery"})
-    res = client.post("/auth/login", json={"email": email, "password": "correct horse battery"})
-    assert res.status_code == 200
-    assert res.json()["user"]["email"] == email
+    response = client.post("/auth/login", json={"email": email, "password": "correct horse battery"})
+    assert response.status_code == 200
+    assert response.json()["user"]["email"] == email
 
 
 def test_me_requires_a_token():
@@ -88,10 +88,10 @@ def test_me_requires_a_token():
 def test_admin_emails_allowlist_grants_is_admin(monkeypatch):
     email = _unique_email()
     monkeypatch.setenv("ADMIN_EMAILS", f"someone-else@example.com, {email}")
-    res = client.post("/auth/signup", json={"email": email, "password": "correct horse battery"})
-    assert res.json()["user"]["is_admin"] is True
+    response = client.post("/auth/signup", json={"email": email, "password": "correct horse battery"})
+    assert response.json()["user"]["is_admin"] is True
     # Admins never need the pending-approval gate -- active immediately.
-    assert res.json()["user"]["is_active"] is True
+    assert response.json()["user"]["is_active"] is True
 
 
 def test_login_promotes_to_admin_when_added_to_allowlist_after_signup(monkeypatch):
@@ -107,17 +107,17 @@ def test_login_promotes_to_admin_when_added_to_allowlist_after_signup(monkeypatc
     assert signup["user"]["is_active"] is False
 
     monkeypatch.setenv("ADMIN_EMAILS", email)
-    res = client.post("/auth/login", json={"email": email, "password": "correct horse battery"})
-    assert res.status_code == 200
-    assert res.json()["user"]["is_admin"] is True
+    response = client.post("/auth/login", json={"email": email, "password": "correct horse battery"})
+    assert response.status_code == 200
+    assert response.json()["user"]["is_admin"] is True
     # Promotion also lifts the pending-approval gate, same as an admin signup.
-    assert res.json()["user"]["is_active"] is True
+    assert response.json()["user"]["is_active"] is True
 
 
 def test_signup_stamps_last_login_at():
     email = _unique_email()
-    res = client.post("/auth/signup", json={"email": email, "password": "correct horse battery"})
-    assert res.json()["user"]["last_login_at"] is not None
+    response = client.post("/auth/signup", json={"email": email, "password": "correct horse battery"})
+    assert response.json()["user"]["last_login_at"] is not None
 
 
 def _backdate_last_login(email: str, minutes: int) -> datetime:
@@ -184,31 +184,31 @@ def test_authenticated_request_leaves_fresh_last_login_at_alone():
 
 
 def test_google_login_redirects_to_google_with_signed_state():
-    res = client.get("/auth/google/login", follow_redirects=False)
-    assert res.status_code in (302, 307)
-    assert res.headers["location"].startswith("https://accounts.google.com/o/oauth2/v2/auth")
+    response = client.get("/auth/google/login", follow_redirects=False)
+    assert response.status_code in (302, 307)
+    assert response.headers["location"].startswith("https://accounts.google.com/o/oauth2/v2/auth")
 
 
 def test_google_callback_rejects_bad_state():
-    res = client.get(
+    response = client.get(
         "/auth/google/callback",
         params={"code": "some-code", "state": "not-a-real-state"},
         follow_redirects=False,
     )
-    assert res.status_code == 400
+    assert response.status_code == 400
 
 
 def test_google_callback_creates_oauth_only_user_and_hands_back_session(mock_google):
     email = _unique_email()
     mock_google(email)
 
-    res = client.get(
+    response = client.get(
         "/auth/google/callback",
         params={"code": "some-code", "state": create_oauth_state()},
         follow_redirects=False,
     )
-    assert res.status_code in (302, 307)
-    location = res.headers["location"]
+    assert response.status_code in (302, 307)
+    location = response.headers["location"]
     assert location.startswith("/?auth_token=") or "?auth_token=" in location
 
     token = location.split("auth_token=", 1)[1]
@@ -222,20 +222,20 @@ def test_google_callback_links_to_existing_password_account(mock_google):
     client.post("/auth/signup", json={"email": email, "password": "correct horse battery"})
     mock_google(email)
 
-    res = client.get(
+    response = client.get(
         "/auth/google/callback",
         params={"code": "some-code", "state": create_oauth_state()},
         follow_redirects=False,
     )
-    token = res.headers["location"].split("auth_token=", 1)[1]
+    token = response.headers["location"].split("auth_token=", 1)[1]
     me = client.get("/auth/me", headers={"Authorization": f"Bearer {token}"})
     assert me.status_code == 200
     assert me.json()["email"] == email
 
     # still able to log in with the original password -- linking didn't
     # clobber the existing account
-    login_res = client.post("/auth/login", json={"email": email, "password": "correct horse battery"})
-    assert login_res.status_code == 200
+    login_response = client.post("/auth/login", json={"email": email, "password": "correct horse battery"})
+    assert login_response.status_code == 200
 
 
 def test_google_callback_applies_admin_allowlist(mock_google, monkeypatch):
@@ -243,12 +243,12 @@ def test_google_callback_applies_admin_allowlist(mock_google, monkeypatch):
     monkeypatch.setenv("ADMIN_EMAILS", email)
     mock_google(email)
 
-    res = client.get(
+    response = client.get(
         "/auth/google/callback",
         params={"code": "some-code", "state": create_oauth_state()},
         follow_redirects=False,
     )
-    token = res.headers["location"].split("auth_token=", 1)[1]
+    token = response.headers["location"].split("auth_token=", 1)[1]
     me = client.get("/auth/me", headers={"Authorization": f"Bearer {token}"})
     assert me.json()["is_admin"] is True
 
@@ -259,12 +259,12 @@ def test_google_callback_promotes_existing_user_when_added_to_allowlist(mock_goo
     mock_google(email)
 
     monkeypatch.setenv("ADMIN_EMAILS", email)
-    res = client.get(
+    response = client.get(
         "/auth/google/callback",
         params={"code": "some-code", "state": create_oauth_state()},
         follow_redirects=False,
     )
-    token = res.headers["location"].split("auth_token=", 1)[1]
+    token = response.headers["location"].split("auth_token=", 1)[1]
     me = client.get("/auth/me", headers={"Authorization": f"Bearer {token}"})
     assert me.json()["is_admin"] is True
     assert me.json()["is_active"] is True

@@ -55,4 +55,4 @@ QUESTION_TYPES: list[QuestionType] = [
     ),
 ]
 
-QUESTION_TYPE_NAMES: list[str] = [qt.name for qt in QUESTION_TYPES]
+QUESTION_TYPE_NAMES: list[str] = [question_type.name for question_type in QUESTION_TYPES]

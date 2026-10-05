@@ -26,31 +26,31 @@ class UserRecord:
 
 
 async def get_user_by_email(email: str) -> UserRecord | None:
-    conn = await get_connection()
+    connection = await get_connection()
     try:
-        async with conn.cursor() as cur:
-            await cur.execute(
+        async with connection.cursor() as cursor:
+            await cursor.execute(
                 f"SELECT {_COLUMNS} FROM users WHERE email = %s",
                 (email,),
             )
-            row = await cur.fetchone()
+            row = await cursor.fetchone()
             return UserRecord(*row) if row else None
     finally:
-        await conn.close()
+        await connection.close()
 
 
 async def get_user_by_id(user_id: uuid.UUID) -> UserRecord | None:
-    conn = await get_connection()
+    connection = await get_connection()
     try:
-        async with conn.cursor() as cur:
-            await cur.execute(
+        async with connection.cursor() as cursor:
+            await cursor.execute(
                 f"SELECT {_COLUMNS} FROM users WHERE id = %s",
                 (user_id,),
             )
-            row = await cur.fetchone()
+            row = await cursor.fetchone()
             return UserRecord(*row) if row else None
     finally:
-        await conn.close()
+        await connection.close()
 
 
 async def create_user(
@@ -58,45 +58,45 @@ async def create_user(
 ) -> UserRecord:
     # Signup doubles as the account's first login, so last_login_at is
     # stamped here rather than left NULL until some later /auth/login call.
-    conn = await get_connection()
+    connection = await get_connection()
     try:
-        async with conn.cursor() as cur:
-            await cur.execute(
+        async with connection.cursor() as cursor:
+            await cursor.execute(
                 "INSERT INTO users (email, hashed_password, is_admin, is_active, last_login_at) "
                 f"VALUES (%s, %s, %s, %s, NOW()) RETURNING {_COLUMNS}",
                 (email, hashed_password, is_admin, is_active),
             )
-            row = await cur.fetchone()
-        await conn.commit()
+            row = await cursor.fetchone()
+        await connection.commit()
         return UserRecord(*row)
     finally:
-        await conn.close()
+        await connection.close()
 
 
 async def list_users() -> list[UserRecord]:
-    conn = await get_connection()
+    connection = await get_connection()
     try:
-        async with conn.cursor() as cur:
-            await cur.execute(f"SELECT {_COLUMNS} FROM users ORDER BY created_at")
-            rows = await cur.fetchall()
+        async with connection.cursor() as cursor:
+            await cursor.execute(f"SELECT {_COLUMNS} FROM users ORDER BY created_at")
+            rows = await cursor.fetchall()
             return [UserRecord(*row) for row in rows]
     finally:
-        await conn.close()
+        await connection.close()
 
 
 async def set_user_active(user_id: uuid.UUID, is_active: bool) -> UserRecord | None:
-    conn = await get_connection()
+    connection = await get_connection()
     try:
-        async with conn.cursor() as cur:
-            await cur.execute(
+        async with connection.cursor() as cursor:
+            await cursor.execute(
                 f"UPDATE users SET is_active = %s WHERE id = %s RETURNING {_COLUMNS}",
                 (is_active, user_id),
             )
-            row = await cur.fetchone()
-        await conn.commit()
+            row = await cursor.fetchone()
+        await connection.commit()
         return UserRecord(*row) if row else None
     finally:
-        await conn.close()
+        await connection.close()
 
 
 async def promote_to_admin(user_id: uuid.UUID) -> UserRecord | None:
@@ -104,34 +104,34 @@ async def promote_to_admin(user_id: uuid.UUID) -> UserRecord | None:
     admins bypass the is_active check anyway (auth.dependencies.require_chat_access).
     Also stamps last_login_at, since this only ever runs from the login path.
     """
-    conn = await get_connection()
+    connection = await get_connection()
     try:
-        async with conn.cursor() as cur:
-            await cur.execute(
+        async with connection.cursor() as cursor:
+            await cursor.execute(
                 "UPDATE users SET is_admin = TRUE, is_active = TRUE, last_login_at = NOW() "
                 f"WHERE id = %s RETURNING {_COLUMNS}",
                 (user_id,),
             )
-            row = await cur.fetchone()
-        await conn.commit()
+            row = await cursor.fetchone()
+        await connection.commit()
         return UserRecord(*row) if row else None
     finally:
-        await conn.close()
+        await connection.close()
 
 
 async def touch_last_login(user_id: uuid.UUID) -> UserRecord | None:
-    conn = await get_connection()
+    connection = await get_connection()
     try:
-        async with conn.cursor() as cur:
-            await cur.execute(
+        async with connection.cursor() as cursor:
+            await cursor.execute(
                 f"UPDATE users SET last_login_at = NOW() WHERE id = %s RETURNING {_COLUMNS}",
                 (user_id,),
             )
-            row = await cur.fetchone()
-        await conn.commit()
+            row = await cursor.fetchone()
+        await connection.commit()
         return UserRecord(*row) if row else None
     finally:
-        await conn.close()
+        await connection.close()
 
 
 async def touch_last_seen(user_id: uuid.UUID) -> UserRecord | None:
@@ -141,17 +141,17 @@ async def touch_last_seen(user_id: uuid.UUID) -> UserRecord | None:
     to one write per LAST_SEEN_THROTTLE window; returns None when the stamp
     was still fresh (or the row is gone) and nothing was written.
     """
-    conn = await get_connection()
+    connection = await get_connection()
     try:
-        async with conn.cursor() as cur:
-            await cur.execute(
+        async with connection.cursor() as cursor:
+            await cursor.execute(
                 "UPDATE users SET last_login_at = NOW() "
                 "WHERE id = %s AND (last_login_at IS NULL OR last_login_at < NOW() - %s) "
                 f"RETURNING {_COLUMNS}",
                 (user_id, LAST_SEEN_THROTTLE),
             )
-            row = await cur.fetchone()
-        await conn.commit()
+            row = await cursor.fetchone()
+        await connection.commit()
         return UserRecord(*row) if row else None
     finally:
-        await conn.close()
+        await connection.close()

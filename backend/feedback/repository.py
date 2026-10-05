@@ -42,14 +42,14 @@ def to_feedback_out(record: FeedbackRecord) -> FeedbackOut:
         flagged=record.flagged,
         resolved=record.resolved,
         scores={
-            k: v
-            for k, v in {
+            key: value
+            for key, value in {
                 "faithfulness": record.faithfulness,
                 "relevance": record.relevance,
                 "style": record.style,
                 "citation": record.citation,
             }.items()
-            if v is not None
+            if value is not None
         },
         comment=record.comment,
         submitted_by=record.submitted_by,
@@ -72,10 +72,10 @@ async def upsert_feedback(
     """One row per message_id -- resubmitting the same message overwrites
     the previous feedback (ticket 11's design: a user can correct a
     misclick, no separate edit flow)."""
-    conn = await get_connection()
+    connection = await get_connection()
     try:
-        async with conn.cursor() as cur:
-            await cur.execute(
+        async with connection.cursor() as cursor:
+            await cursor.execute(
                 f"""
                 INSERT INTO feedback
                     (message_id, thread_id, flagged, faithfulness, relevance, style, citation,
@@ -104,10 +104,10 @@ async def upsert_feedback(
                     submitted_by,
                 ),
             )
-            row = await cur.fetchone()
-        await conn.commit()
+            row = await cursor.fetchone()
+        await connection.commit()
     finally:
-        await conn.close()
+        await connection.close()
     return FeedbackRecord(*row)
 
 
@@ -115,17 +115,17 @@ async def get_feedback_for_thread(thread_id: str) -> dict[str, FeedbackRecord]:
     """All submitted feedback for one thread, keyed by message_id -- lets
     GET /chat/threads/{id} (backend/api/routes/chat.py) embed each message's
     own feedback (if any) back into the transcript on reload."""
-    conn = await get_connection()
+    connection = await get_connection()
     try:
-        async with conn.cursor() as cur:
-            await cur.execute(
+        async with connection.cursor() as cursor:
+            await cursor.execute(
                 f"SELECT {_COLUMNS} FROM feedback WHERE thread_id = %s",
                 (thread_id,),
             )
-            rows = await cur.fetchall()
+            rows = await cursor.fetchall()
             return {row[0]: FeedbackRecord(*row) for row in rows}
     finally:
-        await conn.close()
+        await connection.close()
 
 
 async def list_flagged_feedback() -> list[FeedbackRecord]:
@@ -138,16 +138,16 @@ async def list_flagged_feedback() -> list[FeedbackRecord]:
     partial `feedback_flagged_idx` index (migration 5d95b6897886), created
     ahead of this exact need.
     """
-    conn = await get_connection()
+    connection = await get_connection()
     try:
-        async with conn.cursor() as cur:
-            await cur.execute(
+        async with connection.cursor() as cursor:
+            await cursor.execute(
                 f"SELECT {_COLUMNS} FROM feedback WHERE flagged ORDER BY resolved ASC, created_at DESC"
             )
-            rows = await cur.fetchall()
+            rows = await cursor.fetchall()
             return [FeedbackRecord(*row) for row in rows]
     finally:
-        await conn.close()
+        await connection.close()
 
 
 async def delete_feedback(message_id: str) -> bool:
@@ -158,28 +158,28 @@ async def delete_feedback(message_id: str) -> bool:
     that migration's own comment for why. Returns whether a row actually
     existed to delete, so the route can 404 rather than silently no-op.
     """
-    conn = await get_connection()
+    connection = await get_connection()
     try:
-        async with conn.cursor() as cur:
-            await cur.execute("DELETE FROM feedback WHERE message_id = %s", (message_id,))
-            deleted = cur.rowcount > 0
-        await conn.commit()
+        async with connection.cursor() as cursor:
+            await cursor.execute("DELETE FROM feedback WHERE message_id = %s", (message_id,))
+            deleted = cursor.rowcount > 0
+        await connection.commit()
     finally:
-        await conn.close()
+        await connection.close()
     return deleted
 
 
 async def set_resolved(message_id: str, resolved: bool) -> FeedbackRecord | None:
-    conn = await get_connection()
+    connection = await get_connection()
     try:
-        async with conn.cursor() as cur:
-            await cur.execute(
+        async with connection.cursor() as cursor:
+            await cursor.execute(
                 f"UPDATE feedback SET resolved = %s, updated_at = now() "
                 f"WHERE message_id = %s RETURNING {_COLUMNS}",
                 (resolved, message_id),
             )
-            row = await cur.fetchone()
-        await conn.commit()
+            row = await cursor.fetchone()
+        await connection.commit()
     finally:
-        await conn.close()
+        await connection.close()
     return FeedbackRecord(*row) if row else None

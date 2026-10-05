@@ -31,9 +31,9 @@ export const STATUS_LABELS: Record<string, string> = {
 // bracket completely unmatched, so the raw UUID marker leaked into the
 // rendered answer verbatim. Matches one-or-more comma-separated refs inside
 // one bracket so every shape the model actually produces gets stripped.
-const _CITATION_REF = "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}#\\d+";
+const _CITATION_REFERENCE = "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}#\\d+";
 const _CITATION_DISPLAY_PATTERN = new RegExp(
-  `\\s?\\[${_CITATION_REF}(?:\\s*,\\s*${_CITATION_REF})*\\]`,
+  `\\s?\\[${_CITATION_REFERENCE}(?:\\s*,\\s*${_CITATION_REFERENCE})*\\]`,
   "g"
 );
 
@@ -45,6 +45,6 @@ export function stripCitationMarkers(content: string): string {
 // chips (filename only) -- a rep can't tell "the dosing table" apart from
 // "the contraindications section" of the same PDF without clicking both.
 // Falls back to the chunk's position when it has no heading of its own.
-export function citationLabel(c: ChatCitation): string {
-  return c.section_title ? `${c.filename} — ${c.section_title}` : `${c.filename} (#${c.chunk_index + 1})`;
+export function citationLabel(citation: ChatCitation): string {
+  return citation.section_title ? `${citation.filename} — ${citation.section_title}` : `${citation.filename} (#${citation.chunk_index + 1})`;
 }

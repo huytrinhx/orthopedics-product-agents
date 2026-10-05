@@ -108,9 +108,9 @@ async def extract_entities(
                     "explanation": diff.explanation,
                 }
             )
-    for req in result.procedure_requirements:
-        if req.tray in known_tray_set:
+    for requirement in result.procedure_requirements:
+        if requirement.tray in known_tray_set:
             extracted.append(
-                {"type": "procedure_requirement", "procedure": req.procedure, "tray": req.tray}
+                {"type": "procedure_requirement", "procedure": requirement.procedure, "tray": requirement.tray}
             )
     return extracted

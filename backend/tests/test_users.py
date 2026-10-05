@@ -18,20 +18,20 @@ def _unique_email() -> str:
 def _admin(monkeypatch) -> dict:
     email = _unique_email()
     monkeypatch.setenv("ADMIN_EMAILS", email)
-    res = client.post("/auth/signup", json={"email": email, "password": "correct horse battery"})
-    return res.json()
+    response = client.post("/auth/signup", json={"email": email, "password": "correct horse battery"})
+    return response.json()
 
 
 def _user(monkeypatch) -> dict:
     email = _unique_email()
-    res = client.post("/auth/signup", json={"email": email, "password": "correct horse battery"})
-    return res.json()
+    response = client.post("/auth/signup", json={"email": email, "password": "correct horse battery"})
+    return response.json()
 
 
 def test_list_users_requires_admin(monkeypatch):
     token = _user(monkeypatch)["access_token"]
-    res = client.get("/users/", headers={"Authorization": f"Bearer {token}"})
-    assert res.status_code == 403
+    response = client.get("/users/", headers={"Authorization": f"Bearer {token}"})
+    assert response.status_code == 403
 
 
 def test_list_users_includes_admins_and_pending_users(monkeypatch):
@@ -39,9 +39,9 @@ def test_list_users_includes_admins_and_pending_users(monkeypatch):
     pending = _user(monkeypatch)
     admin_headers = {"Authorization": f"Bearer {admin['access_token']}"}
 
-    res = client.get("/users/", headers=admin_headers)
-    assert res.status_code == 200
-    by_id = {u["id"]: u for u in res.json()}
+    response = client.get("/users/", headers=admin_headers)
+    assert response.status_code == 200
+    by_id = {listed_user["id"]: listed_user for listed_user in response.json()}
 
     assert by_id[admin["user"]["id"]]["is_admin"] is True
     assert by_id[admin["user"]["id"]]["is_active"] is True
@@ -52,12 +52,12 @@ def test_list_users_includes_admins_and_pending_users(monkeypatch):
 def test_set_active_requires_admin(monkeypatch):
     actor = _user(monkeypatch)
     target = _user(monkeypatch)
-    res = client.patch(
+    response = client.patch(
         f"/users/{target['user']['id']}/active",
         headers={"Authorization": f"Bearer {actor['access_token']}"},
         json={"is_active": True},
     )
-    assert res.status_code == 403
+    assert response.status_code == 403
 
 
 def test_admin_can_enable_and_disable_a_user(monkeypatch):
@@ -80,12 +80,12 @@ def test_admin_can_enable_and_disable_a_user(monkeypatch):
 
 def test_set_active_on_unknown_user_404s(monkeypatch):
     admin = _admin(monkeypatch)
-    res = client.patch(
+    response = client.patch(
         f"/users/{uuid.uuid4()}/active",
         headers={"Authorization": f"Bearer {admin['access_token']}"},
         json={"is_active": True},
     )
-    assert res.status_code == 404
+    assert response.status_code == 404
 
 
 def test_admin_rows_cannot_be_disabled(monkeypatch):
@@ -101,9 +101,9 @@ def test_admin_rows_cannot_be_disabled(monkeypatch):
         "/auth/signup", json={"email": other_admin_email, "password": "correct horse battery"}
     ).json()
 
-    res = client.patch(
+    response = client.patch(
         f"/users/{other_admin['user']['id']}/active",
         headers={"Authorization": f"Bearer {admin['access_token']}"},
         json={"is_active": False},
     )
-    assert res.status_code == 400
+    assert response.status_code == 400

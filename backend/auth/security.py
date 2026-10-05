@@ -67,6 +67,6 @@ def verify_oauth_state(state: str) -> bool:
 
 def is_allowlisted_admin(email: str) -> bool:
     allowlist = {
-        e.strip().lower() for e in os.environ.get("ADMIN_EMAILS", "").split(",") if e.strip()
+        email.strip().lower() for email in os.environ.get("ADMIN_EMAILS", "").split(",") if email.strip()
     }
     return email.strip().lower() in allowlist
