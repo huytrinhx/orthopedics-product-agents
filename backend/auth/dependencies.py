@@ -6,11 +6,13 @@ that ticket 04+ add. require_chat_access builds on it too, for the one
 place a disabled (is_active=False) user is actually blocked -- see its
 docstring below.
 """
+from datetime import UTC, datetime
+
 import jwt
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-from auth.repository import UserRecord, get_user_by_id
+from auth.repository import LAST_SEEN_THROTTLE, UserRecord, get_user_by_id, touch_last_seen
 from auth.security import decode_access_token
 
 _bearer = HTTPBearer(auto_error=False)
@@ -29,6 +31,12 @@ async def get_current_user(
     user = await get_user_by_id(user_id)
     if user is None:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "User no longer exists")
+
+    # last_login_at doubles as "last seen": refresh it from token reuse too,
+    # not only from /auth/login. Checked here first so a fresh stamp costs no
+    # extra DB round-trip; touch_last_seen re-checks in SQL for concurrent requests.
+    if user.last_login_at is None or user.last_login_at < datetime.now(UTC) - LAST_SEEN_THROTTLE:
+        user = await touch_last_seen(user.id) or user
     return user
 
 

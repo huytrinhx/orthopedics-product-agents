@@ -97,7 +97,7 @@ export default function UsersPage() {
                 <th>Role</th>
                 <th>Status</th>
                 <th>Joined</th>
-                <th>Last logged in at</th>
+                <th>Last seen</th>
                 <th></th>
               </tr>
             </thead>

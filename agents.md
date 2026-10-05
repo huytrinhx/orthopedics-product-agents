@@ -92,7 +92,11 @@ picking this repo up cold, read this before making structural changes.
   blocked from chat (`auth.dependencies.require_chat_access`) until an admin
   enables them. Admins bypass the `is_active` check entirely, so an admin's
   row is read-only in the Users tab. The Users tab also shows `last_login_at`
-  per account (stamped on signup and every subsequent login/OAuth callback).
+  per account, which in practice means "last seen": it's stamped on signup,
+  every login/OAuth callback, *and* any authenticated request
+  (`auth.dependencies.get_current_user` → `repository.touch_last_seen`),
+  throttled to one write per 5 minutes (`LAST_SEEN_THROTTLE`). Without that,
+  a user reusing a 30-day token would never move it.
 - **Schema changes go through Alembic (`backend/migrations/`), not hand-run
   SQL.** `alembic upgrade head` reads `DATABASE_URL` (same env var as
   everything else) and applies pending migrations; it's a required step in

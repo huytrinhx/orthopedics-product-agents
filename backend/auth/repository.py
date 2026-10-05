@@ -3,11 +3,15 @@ No ORM — consistent with how backend/retrieval/vector_store.py talks to Postgr
 """
 import uuid
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from config.db import get_connection
 
 _COLUMNS = "id, email, hashed_password, is_admin, is_active, created_at, last_login_at"
+
+# Minimum gap between activity stamps from touch_last_seen, so every
+# authenticated request doesn't turn into a users-table write.
+LAST_SEEN_THROTTLE = timedelta(minutes=5)
 
 
 @dataclass
@@ -122,6 +126,29 @@ async def touch_last_login(user_id: uuid.UUID) -> UserRecord | None:
             await cur.execute(
                 f"UPDATE users SET last_login_at = NOW() WHERE id = %s RETURNING {_COLUMNS}",
                 (user_id,),
+            )
+            row = await cur.fetchone()
+        await conn.commit()
+        return UserRecord(*row) if row else None
+    finally:
+        await conn.close()
+
+
+async def touch_last_seen(user_id: uuid.UUID) -> UserRecord | None:
+    """Stamps last_login_at from an authenticated request (not just an explicit
+    login), so the column reads as "last seen" -- a user who keeps reusing a
+    30-day token would otherwise never move it. Throttled in the WHERE clause
+    to one write per LAST_SEEN_THROTTLE window; returns None when the stamp
+    was still fresh (or the row is gone) and nothing was written.
+    """
+    conn = await get_connection()
+    try:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                "UPDATE users SET last_login_at = NOW() "
+                "WHERE id = %s AND (last_login_at IS NULL OR last_login_at < NOW() - %s) "
+                f"RETURNING {_COLUMNS}",
+                (user_id, LAST_SEEN_THROTTLE),
             )
             row = await cur.fetchone()
         await conn.commit()
