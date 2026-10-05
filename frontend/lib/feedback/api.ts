@@ -28,14 +28,14 @@ export async function listReruns(messageId: string): Promise<Rerun[]> {
 // (raw fetch, not request()/unwrap(), since unwrap always calls res.json()
 // and a 204 response has no body to parse).
 export async function deleteFlaggedFeedback(messageId: string): Promise<void> {
-  const res = await fetch(`${API_BASE}/feedback/${messageId}`, {
+  const response = await fetch(`${API_BASE}/feedback/${messageId}`, {
     method: "DELETE",
     headers: authHeaders(),
   });
-  if (!res.ok) {
-    handleUnauthorized(res);
-    const body = await res.json().catch(() => ({}));
-    throw new Error(body.detail ?? `request failed: ${res.status}`);
+  if (!response.ok) {
+    handleUnauthorized(response);
+    const body = await response.json().catch(() => ({}));
+    throw new Error(body.detail ?? `request failed: ${response.status}`);
   }
 }
 
@@ -49,7 +49,7 @@ export async function* rerunChat(
   originalMessageId: string,
   workflowName: string
 ): AsyncGenerator<ChatStreamEvent> {
-  const res = await fetch(`${API_BASE}/chat/rerun`, {
+  const response = await fetch(`${API_BASE}/chat/rerun`, {
     method: "POST",
     headers: { "Content-Type": "application/json", ...authHeaders() },
     body: JSON.stringify({
@@ -58,7 +58,7 @@ export async function* rerunChat(
       workflow_name: workflowName,
     }),
   });
-  yield* parseSseStream(res);
+  yield* parseSseStream(response);
 }
 
 // A rerun can pause on the exact same clarification interrupt a real chat
@@ -72,10 +72,10 @@ export async function* resumeRerunChat(
   workflowName: string,
   humanInput: string
 ): AsyncGenerator<ChatStreamEvent> {
-  const res = await fetch(`${API_BASE}/chat/${workflowName}/resume`, {
+  const response = await fetch(`${API_BASE}/chat/${workflowName}/resume`, {
     method: "POST",
     headers: { "Content-Type": "application/json", ...authHeaders() },
     body: JSON.stringify({ thread_id: threadId, human_input: humanInput }),
   });
-  yield* parseSseStream(res);
+  yield* parseSseStream(response);
 }

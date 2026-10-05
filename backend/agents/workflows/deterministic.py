@@ -214,7 +214,7 @@ def _match_option(answer: str, options: list[str]) -> str | None:
 
 async def _classify_intent(query: str, system_names: list[str]) -> _IntentClassification:
     model = get_chat_model().with_structured_output(_IntentClassification)
-    question_type_listing = "\n".join(f"- {qt.name}: {qt.description}" for qt in QUESTION_TYPES)
+    question_type_listing = "\n".join(f"- {question_type.name}: {question_type.description}" for question_type in QUESTION_TYPES)
     return await model.ainvoke(
         [
             SystemMessage(
@@ -273,7 +273,7 @@ async def detect_intent(state: DeterministicState) -> dict:
     enforced directly by _IntentClassification's Literal-typed field.
     """
     systems = await list_systems()
-    system_names = [s.name for s in systems]
+    system_names = [system.name for system in systems]
     if not system_names:
         # list_systems() only returns tags currently attached to at least
         # one document (tags/repository.py's _list_tags) -- an empty result
@@ -306,7 +306,7 @@ async def detect_intent(state: DeterministicState) -> dict:
         )
         result.system = _match_option(answer, system_names)
 
-    system_id = next((s.id for s in systems if s.name == result.system), None)
+    system_id = next((system.id for system in systems if system.name == result.system), None)
     return {
         "resolved_system": result.system,
         "resolved_system_id": str(system_id) if system_id else None,
@@ -443,7 +443,7 @@ def _allowed_document_type_ids(
     if not have_rule:
         return None
     return [
-        str(dt.id) for dt in document_types if any(name in dt.name.lower() for name in allowed_names)
+        str(document_type.id) for document_type in document_types if any(name in document_type.name.lower() for name in allowed_names)
     ]
 
 
@@ -512,26 +512,26 @@ def _bm25_scores(query_terms: list[str], documents: list[str]) -> list[float]:
     re-ranking only ever needs *relative* ordering among these candidates
     anyway, which a local IDF still gives correctly).
     """
-    tokenized_docs = [_tokenize(doc) for doc in documents]
-    doc_lengths = [len(doc) for doc in tokenized_docs]
-    avg_len = sum(doc_lengths) / len(doc_lengths) if doc_lengths else 0.0
-    n_docs = len(tokenized_docs)
+    tokenized_documents = [_tokenize(document) for document in documents]
+    document_lengths = [len(document) for document in tokenized_documents]
+    average_length = sum(document_lengths) / len(document_lengths) if document_lengths else 0.0
+    document_count = len(tokenized_documents)
 
     query_tokens = list(dict.fromkeys(_tokenize(" ".join(query_terms))))
-    doc_freq = {token: sum(1 for doc in tokenized_docs if token in doc) for token in query_tokens}
+    document_frequency = {token: sum(1 for document in tokenized_documents if token in document) for token in query_tokens}
 
     scores = []
-    for doc, length in zip(tokenized_docs, doc_lengths):
+    for document, length in zip(tokenized_documents, document_lengths):
         score = 0.0
         for token in query_tokens:
-            n_t = doc_freq[token]
-            if n_t == 0:
+            documents_with_term = document_frequency[token]
+            if documents_with_term == 0:
                 continue
-            idf = math.log((n_docs - n_t + 0.5) / (n_t + 0.5) + 1)
-            tf = doc.count(token)
-            norm_len = length / avg_len if avg_len else 0.0
-            denom = tf + _BM25_K1 * (1 - _BM25_B + _BM25_B * norm_len)
-            score += idf * (tf * (_BM25_K1 + 1)) / denom if denom else 0.0
+            idf = math.log((document_count - documents_with_term + 0.5) / (documents_with_term + 0.5) + 1)
+            term_frequency = document.count(token)
+            normalized_length = length / average_length if average_length else 0.0
+            denom = term_frequency + _BM25_K1 * (1 - _BM25_B + _BM25_B * normalized_length)
+            score += idf * (term_frequency * (_BM25_K1 + 1)) / denom if denom else 0.0
         scores.append(score)
     return scores
 
@@ -539,14 +539,14 @@ def _bm25_scores(query_terms: list[str], documents: list[str]) -> list[float]:
 def _normalize_to_unit_range(scores: list[float]) -> list[float]:
     if not scores:
         return scores
-    lo, hi = min(scores), max(scores)
-    if hi == lo:
+    lowest, highest = min(scores), max(scores)
+    if highest == lowest:
         # Every candidate scored identically (including all-zero, the
         # common case for a query with no term overlap at all) -- leave
         # the doctype bonus as the sole differentiator rather than
         # dividing by zero.
         return [0.0 for _ in scores]
-    return [(s - lo) / (hi - lo) for s in scores]
+    return [(score - lowest) / (highest - lowest) for score in scores]
 
 
 async def rerank(state: DeterministicState) -> dict:

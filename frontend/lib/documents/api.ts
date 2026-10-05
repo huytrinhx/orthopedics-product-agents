@@ -9,12 +9,12 @@ export async function uploadDocument(
   form.append("file", file);
   if (tags?.systemId) form.append("system_id", tags.systemId);
   if (tags?.documentTypeId) form.append("document_type_id", tags.documentTypeId);
-  const res = await fetch(`${API_BASE}/documents/upload`, {
+  const response = await fetch(`${API_BASE}/documents/upload`, {
     method: "POST",
     headers: authHeaders(), // no Content-Type: fetch sets the multipart boundary itself
     body: form,
   });
-  return unwrap<DocumentRecord>(res);
+  return unwrap<DocumentRecord>(response);
 }
 
 export async function listDocuments(): Promise<DocumentRecord[]> {
@@ -50,12 +50,12 @@ export async function reuploadDocumentFile(
 ): Promise<DocumentRecord> {
   const form = new FormData();
   form.append("file", file);
-  const res = await fetch(`${API_BASE}/documents/${documentId}/file`, {
+  const response = await fetch(`${API_BASE}/documents/${documentId}/file`, {
     method: "POST",
     headers: authHeaders(), // no Content-Type: fetch sets the multipart boundary itself
     body: form,
   });
-  return unwrap<DocumentRecord>(res);
+  return unwrap<DocumentRecord>(response);
 }
 
 export async function getDocumentChunks(documentId: string): Promise<DocumentChunk[]> {
@@ -66,14 +66,14 @@ export async function getDocumentChunks(documentId: string): Promise<DocumentChu
 // <iframe src>/react-pdf `file={url}` can't attach -- fetched as a Blob and
 // handed to react-pdf's `file` prop instead (ticket 26).
 export async function getDocumentFile(documentId: string): Promise<Blob> {
-  const res = await fetch(`${API_BASE}/documents/${documentId}/file`, {
+  const response = await fetch(`${API_BASE}/documents/${documentId}/file`, {
     headers: authHeaders(),
   });
-  if (!res.ok) {
-    handleUnauthorized(res);
-    throw new Error(`request failed: ${res.status}`);
+  if (!response.ok) {
+    handleUnauthorized(response);
+    throw new Error(`request failed: ${response.status}`);
   }
-  return res.blob();
+  return response.blob();
 }
 
 // Download button: reuses getDocumentFile's authenticated blob fetch (the
@@ -94,13 +94,13 @@ export async function downloadDocumentFile(documentId: string, filename: string)
 }
 
 export async function deleteDocument(documentId: string): Promise<void> {
-  const res = await fetch(`${API_BASE}/documents/${documentId}`, {
+  const response = await fetch(`${API_BASE}/documents/${documentId}`, {
     method: "DELETE",
     headers: authHeaders(),
   });
-  if (!res.ok) {
-    handleUnauthorized(res);
-    const body = await res.json().catch(() => ({}));
-    throw new Error(body.detail ?? `request failed: ${res.status}`);
+  if (!response.ok) {
+    handleUnauthorized(response);
+    const body = await response.json().catch(() => ({}));
+    throw new Error(body.detail ?? `request failed: ${response.status}`);
   }
 }

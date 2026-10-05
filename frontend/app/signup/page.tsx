@@ -14,15 +14,15 @@ export default function SignupPage() {
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
-  async function handleSubmit(e: FormEvent) {
-    e.preventDefault();
+  async function handleSubmit(event: FormEvent) {
+    event.preventDefault();
     setSubmitting(true);
     setError(null);
     try {
       await signup(email, password);
       router.push("/");
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "signup failed");
+    } catch (caughtError) {
+      setError(caughtError instanceof Error ? caughtError.message : "signup failed");
     } finally {
       setSubmitting(false);
     }
@@ -38,7 +38,7 @@ export default function SignupPage() {
             <input
               type="email"
               value={email}
-              onChange={(e) => setEmail(e.target.value)}
+              onChange={(event) => setEmail(event.target.value)}
               required
               autoFocus
             />
@@ -48,7 +48,7 @@ export default function SignupPage() {
             <input
               type="password"
               value={password}
-              onChange={(e) => setPassword(e.target.value)}
+              onChange={(event) => setPassword(event.target.value)}
               required
               minLength={8}
             />

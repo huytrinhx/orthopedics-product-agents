@@ -38,8 +38,8 @@ def parse_synonyms_map(path: Path) -> tuple[list[tuple[str, str]], list[tuple[li
     synonym_clusters: list of (terms, notes) — terms has 2+ entries, the
     first is canonical.
     """
-    with path.open(newline="", encoding="utf-8") as f:
-        rows = list(csv.reader(f))
+    with path.open(newline="", encoding="utf-8") as file:
+        rows = list(csv.reader(file))
 
     abbreviations = []
     for row in rows[1:]:

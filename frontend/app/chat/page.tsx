@@ -33,7 +33,7 @@ function isPdfFilename(filename: string): boolean {
   return filename.toLowerCase().endsWith(".pdf");
 }
 
-function uid(): string {
+function uniqueId(): string {
   return Math.random().toString(36).slice(2);
 }
 
@@ -65,17 +65,17 @@ export default function ChatPage() {
   const [pendingClarification, setPendingClarification] = useState<string | null>(null);
 
   const [openCitation, setOpenCitation] = useState<ChatCitation | null>(null);
-  const [docChunks, setDocChunks] = useState<DocumentChunk[] | null>(null);
-  const [docPaneLoading, setDocPaneLoading] = useState(false);
-  const [docPaneError, setDocPaneError] = useState<string | null>(null);
+  const [documentChunks, setDocumentChunks] = useState<DocumentChunk[] | null>(null);
+  const [documentPaneLoading, setDocumentPaneLoading] = useState(false);
+  const [documentPaneError, setDocumentPaneError] = useState<string | null>(null);
   const loadedDocumentIdRef = useRef<string | null>(null);
   const activeChunkRef = useRef<HTMLDivElement>(null);
 
   // Ticket 26: the PDF file itself, fetched separately from its chunks
   // (an authenticated Blob fetch, not a bare <iframe src> -- see
   // lib/documents/api.ts's getDocumentFile) and only for .pdf citations.
-  const [docFileData, setDocFileData] = useState<{ data: Uint8Array } | null>(null);
-  const [docFileError, setDocFileError] = useState<string | null>(null);
+  const [documentFileData, setDocumentFileData] = useState<{ data: Uint8Array } | null>(null);
+  const [documentFileError, setDocumentFileError] = useState<string | null>(null);
   const loadedFileDocumentIdRef = useRef<string | null>(null);
 
   const threadIdRef = useRef<string | undefined>(undefined);
@@ -94,7 +94,7 @@ export default function ChatPage() {
 
   useEffect(() => {
     activeChunkRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
-  }, [openCitation, docChunks]);
+  }, [openCitation, documentChunks]);
 
   function startNewConversation() {
     if (sending) return;
@@ -118,17 +118,17 @@ export default function ChatPage() {
       threadIdRef.current = threadId;
       setActiveThreadId(threadId);
       setMessages(
-        transcript.messages.map((m) => ({
-          id: uid(),
-          role: m.role,
-          content: m.content,
-          citations: m.citations,
-          messageId: m.message_id,
-          feedback: m.feedback,
+        transcript.messages.map((message) => ({
+          id: uniqueId(),
+          role: message.role,
+          content: message.content,
+          citations: message.citations,
+          messageId: message.message_id,
+          feedback: message.feedback,
         }))
       );
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Couldn't load that conversation");
+    } catch (caughtError) {
+      setError(caughtError instanceof Error ? caughtError.message : "Couldn't load that conversation");
     } finally {
       setThreadLoading(false);
     }
@@ -136,11 +136,11 @@ export default function ChatPage() {
 
   function closeCitation() {
     setOpenCitation(null);
-    setDocChunks(null);
-    setDocPaneError(null);
+    setDocumentChunks(null);
+    setDocumentPaneError(null);
     loadedDocumentIdRef.current = null;
-    setDocFileData(null);
-    setDocFileError(null);
+    setDocumentFileData(null);
+    setDocumentFileError(null);
     loadedFileDocumentIdRef.current = null;
   }
 
@@ -151,12 +151,12 @@ export default function ChatPage() {
       isPdfFilename(citation.filename) && loadedFileDocumentIdRef.current !== citation.document_id;
 
     if (!chunksAlreadyLoaded) {
-      setDocPaneLoading(true);
-      setDocPaneError(null);
+      setDocumentPaneLoading(true);
+      setDocumentPaneError(null);
     }
     if (needsFile) {
-      setDocFileData(null);
-      setDocFileError(null);
+      setDocumentFileData(null);
+      setDocumentFileError(null);
     }
 
     const chunksPromise = chunksAlreadyLoaded
@@ -164,23 +164,23 @@ export default function ChatPage() {
       : getDocumentChunks(citation.document_id)
           .then((chunks) => {
             loadedDocumentIdRef.current = citation.document_id;
-            setDocChunks(chunks);
+            setDocumentChunks(chunks);
           })
-          .catch((err) => {
-            setDocChunks(null);
-            setDocPaneError(err instanceof Error ? err.message : "Couldn't load that document");
+          .catch((caughtError) => {
+            setDocumentChunks(null);
+            setDocumentPaneError(caughtError instanceof Error ? caughtError.message : "Couldn't load that document");
           })
-          .finally(() => setDocPaneLoading(false));
+          .finally(() => setDocumentPaneLoading(false));
 
     const filePromise = needsFile
       ? getDocumentFile(citation.document_id)
           .then((blob) => blob.arrayBuffer())
           .then((buffer) => {
             loadedFileDocumentIdRef.current = citation.document_id;
-            setDocFileData({ data: new Uint8Array(buffer) });
+            setDocumentFileData({ data: new Uint8Array(buffer) });
           })
-          .catch((err) => {
-            setDocFileError(err instanceof Error ? err.message : "Couldn't load the PDF");
+          .catch((caughtError) => {
+            setDocumentFileError(caughtError instanceof Error ? caughtError.message : "Couldn't load the PDF");
           })
       : Promise.resolve(null);
 
@@ -188,7 +188,7 @@ export default function ChatPage() {
   }
 
   function updateMessage(id: string, patch: Partial<ChatMessage>) {
-    setMessages((prev) => prev.map((m) => (m.id === id ? { ...m, ...patch } : m)));
+    setMessages((previous) => previous.map((message) => (message.id === id ? { ...message, ...patch } : message)));
   }
 
   // Shared by a fresh turn (streamChat) and a clarification answer
@@ -197,7 +197,7 @@ export default function ChatPage() {
   // token/done/error handling only needs writing once. "clarification" is
   // the one event type only a fresh turn's detect_intent can produce (a
   // resume answer either resolves it or the graph runs straight to "done").
-  async function consumeStream(gen: AsyncGenerator<ChatStreamEvent>, assistantId: string) {
+  async function consumeStream(eventStream: AsyncGenerator<ChatStreamEvent>, assistantId: string) {
     // deterministic's retry loop (generate -> self_eval -> reformulate ->
     // ... -> generate again) means "generate" can run more than once in a
     // turn, each one streaming full draft text -- react_agent's tool-
@@ -212,61 +212,61 @@ export default function ChatPage() {
     // revealed only once "done" (or "clarification") arrives.
     let sawSelfEval = false;
     let suppressTokens = false;
-    for await (const evt of gen) {
-      if (evt.event === "thread") {
-        threadIdRef.current = evt.data.thread_id;
-        setActiveThreadId(evt.data.thread_id);
-      } else if (evt.event === "status") {
-        if (evt.data.node === "self_eval") {
+    for await (const streamEvent of eventStream) {
+      if (streamEvent.event === "thread") {
+        threadIdRef.current = streamEvent.data.thread_id;
+        setActiveThreadId(streamEvent.data.thread_id);
+      } else if (streamEvent.event === "status") {
+        if (streamEvent.data.node === "self_eval") {
           sawSelfEval = true;
         }
-        const isRetriedDraft = evt.data.node === "generate" && sawSelfEval;
-        suppressTokens = evt.data.node === "generate";
+        const isRetriedDraft = streamEvent.data.node === "generate" && sawSelfEval;
+        suppressTokens = streamEvent.data.node === "generate";
         updateMessage(assistantId, {
-          status: isRetriedDraft ? "Refining the answer…" : STATUS_LABELS[evt.data.node] ?? evt.data.node,
-          ...(evt.data.node === "generate" ? { content: "" } : {}),
+          status: isRetriedDraft ? "Refining the answer…" : STATUS_LABELS[streamEvent.data.node] ?? streamEvent.data.node,
+          ...(streamEvent.data.node === "generate" ? { content: "" } : {}),
         });
-      } else if (evt.event === "token") {
+      } else if (streamEvent.event === "token") {
         if (suppressTokens) continue;
-        setMessages((prev) =>
-          prev.map((m) =>
-            m.id === assistantId
-              ? { ...m, content: m.content + evt.data.content, status: undefined }
-              : m
+        setMessages((previous) =>
+          previous.map((message) =>
+            message.id === assistantId
+              ? { ...message, content: message.content + streamEvent.data.content, status: undefined }
+              : message
           )
         );
-      } else if (evt.event === "clarification") {
-        setPendingClarification(evt.data.thread_id);
+      } else if (streamEvent.event === "clarification") {
+        setPendingClarification(streamEvent.data.thread_id);
         updateMessage(assistantId, {
-          content: evt.data.question,
-          clarification: { question: evt.data.question, options: evt.data.options },
+          content: streamEvent.data.question,
+          clarification: { question: streamEvent.data.question, options: streamEvent.data.options },
           status: undefined,
           pending: false,
         });
-      } else if (evt.event === "done") {
+      } else if (streamEvent.event === "done") {
         setPendingClarification(null);
         updateMessage(assistantId, {
-          content: evt.data.answer,
-          citations: evt.data.citations,
+          content: streamEvent.data.answer,
+          citations: streamEvent.data.citations,
           status: undefined,
           pending: false,
-          messageId: evt.data.message_id,
+          messageId: streamEvent.data.message_id,
         });
-      } else if (evt.event === "error") {
+      } else if (streamEvent.event === "error") {
         updateMessage(assistantId, { pending: false, status: undefined });
-        setError(evt.data.message);
+        setError(streamEvent.data.message);
       }
     }
   }
 
-  async function runTurn(gen: AsyncGenerator<ChatStreamEvent>, assistantId: string) {
+  async function runTurn(eventStream: AsyncGenerator<ChatStreamEvent>, assistantId: string) {
     setSending(true);
     setError(null);
     try {
-      await consumeStream(gen, assistantId);
-    } catch (err) {
+      await consumeStream(eventStream, assistantId);
+    } catch (caughtError) {
       updateMessage(assistantId, { pending: false, status: undefined });
-      setError(err instanceof Error ? err.message : "Something went wrong");
+      setError(caughtError instanceof Error ? caughtError.message : "Something went wrong");
     } finally {
       setSending(false);
       // Picks up the new/renamed/reordered thread this turn just created or
@@ -277,8 +277,8 @@ export default function ChatPage() {
     }
   }
 
-  async function handleSubmit(e: FormEvent) {
-    e.preventDefault();
+  async function handleSubmit(event: FormEvent) {
+    event.preventDefault();
     const text = input.trim();
     if (!text || sending) return;
     setInput("");
@@ -288,10 +288,10 @@ export default function ChatPage() {
       return;
     }
 
-    const userMessage: ChatMessage = { id: uid(), role: "user", content: text };
-    const assistantId = uid();
-    setMessages((prev) => [
-      ...prev,
+    const userMessage: ChatMessage = { id: uniqueId(), role: "user", content: text };
+    const assistantId = uniqueId();
+    setMessages((previous) => [
+      ...previous,
       userMessage,
       { id: assistantId, role: "assistant", content: "", pending: true, status: "Thinking…" },
     ]);
@@ -309,10 +309,10 @@ export default function ChatPage() {
     if (!threadId) return;
     setPendingClarification(null);
 
-    const userMessage: ChatMessage = { id: uid(), role: "user", content: answer };
-    const assistantId = uid();
-    setMessages((prev) => [
-      ...prev,
+    const userMessage: ChatMessage = { id: uniqueId(), role: "user", content: answer };
+    const assistantId = uniqueId();
+    setMessages((previous) => [
+      ...previous,
       userMessage,
       { id: assistantId, role: "assistant", content: "", pending: true, status: "Thinking…" },
     ]);
@@ -367,18 +367,18 @@ export default function ChatPage() {
             {threads.length === 0 && (
               <div className="chat-thread-list-empty">No past conversations yet.</div>
             )}
-            {threads.map((t) => (
+            {threads.map((thread) => (
               <button
-                key={t.thread_id}
+                key={thread.thread_id}
                 type="button"
                 className={`chat-thread-item${
-                  t.thread_id === activeThreadId ? " chat-thread-item-active" : ""
+                  thread.thread_id === activeThreadId ? " chat-thread-item-active" : ""
                 }`}
-                onClick={() => selectThread(t.thread_id)}
+                onClick={() => selectThread(thread.thread_id)}
                 disabled={sending}
               >
-                <span className="chat-thread-item-title">{t.title}</span>
-                <span className="chat-thread-item-date">{formatThreadDate(t.updated_at)}</span>
+                <span className="chat-thread-item-title">{thread.title}</span>
+                <span className="chat-thread-item-date">{formatThreadDate(thread.updated_at)}</span>
               </button>
             ))}
           </div>
@@ -391,19 +391,19 @@ export default function ChatPage() {
               <div className="empty-state">Ask a question about a product system to get started.</div>
             )}
             {!threadLoading &&
-              messages.map((m) => (
-                <div key={m.id} className={`chat-bubble chat-bubble-${m.role}`}>
-                  {m.content && (
+              messages.map((message) => (
+                <div key={message.id} className={`chat-bubble chat-bubble-${message.role}`}>
+                  {message.content && (
                     <div className="chat-bubble-text">
-                      <ReactMarkdown>{stripCitationMarkers(m.content)}</ReactMarkdown>
+                      <ReactMarkdown>{stripCitationMarkers(message.content)}</ReactMarkdown>
                     </div>
                   )}
-                  {m.status && <div className="chat-status">{m.status}</div>}
-                  {m.clarification && (
+                  {message.status && <div className="chat-status">{message.status}</div>}
+                  {message.clarification && (
                     <div className="chat-clarification">
-                      {m.clarification.options.length > 0 && (
+                      {message.clarification.options.length > 0 && (
                         <div className="chat-clarification-options">
-                          {m.clarification.options.map((option) => (
+                          {message.clarification.options.map((option) => (
                             <button
                               key={option}
                               type="button"
@@ -419,33 +419,33 @@ export default function ChatPage() {
                       <div className="chat-clarification-hint">Or type your answer below.</div>
                     </div>
                   )}
-                  {m.citations && m.citations.length > 0 && (
+                  {message.citations && message.citations.length > 0 && (
                     <div className="chat-citations">
-                      {m.citations.map((c, i) => (
+                      {message.citations.map((citation, index) => (
                         <button
-                          key={`${c.document_id}#${c.chunk_index}-${i}`}
+                          key={`${citation.document_id}#${citation.chunk_index}-${index}`}
                           type="button"
                           className={`chat-citation${
-                            openCitation?.document_id === c.document_id &&
-                            openCitation?.chunk_index === c.chunk_index
+                            openCitation?.document_id === citation.document_id &&
+                            openCitation?.chunk_index === citation.chunk_index
                               ? " chat-citation-active"
                               : ""
                           }`}
-                          onClick={() => openCitationPane(c)}
-                          title={citationLabel(c)}
+                          onClick={() => openCitationPane(citation)}
+                          title={citationLabel(citation)}
                         >
-                          {citationLabel(c)}
+                          {citationLabel(citation)}
                         </button>
                       ))}
                     </div>
                   )}
-                  {m.role === "assistant" && m.messageId && activeThreadId && (
+                  {message.role === "assistant" && message.messageId && activeThreadId && (
                     <MessageFeedback
-                      key={m.messageId}
+                      key={message.messageId}
                       threadId={activeThreadId}
-                      messageId={m.messageId}
-                      initialFeedback={m.feedback}
-                      onSubmitted={(feedback) => updateMessage(m.id, { feedback })}
+                      messageId={message.messageId}
+                      initialFeedback={message.feedback}
+                      onSubmitted={(feedback) => updateMessage(message.id, { feedback })}
                     />
                   )}
                 </div>
@@ -458,7 +458,7 @@ export default function ChatPage() {
           <form onSubmit={handleSubmit} className="chat-input-row">
             <input
               value={input}
-              onChange={(e) => setInput(e.target.value)}
+              onChange={(event) => setInput(event.target.value)}
               placeholder={pendingClarification ? "Type your answer…" : "Ask a question…"}
               disabled={sending}
               autoFocus
@@ -482,33 +482,33 @@ export default function ChatPage() {
                 ×
               </button>
             </div>
-            {docPaneLoading && <div className="empty-state">Loading document…</div>}
-            {docPaneError && <p className="alert" role="alert">{docPaneError}</p>}
-            {docChunks && isPdfFilename(openCitation.filename) && (
+            {documentPaneLoading && <div className="empty-state">Loading document…</div>}
+            {documentPaneError && <p className="alert" role="alert">{documentPaneError}</p>}
+            {documentChunks && isPdfFilename(openCitation.filename) && (
               <>
-                {docFileError && <p className="alert" role="alert">{docFileError}</p>}
-                {!docFileError && docFileData && (
+                {documentFileError && <p className="alert" role="alert">{documentFileError}</p>}
+                {!documentFileError && documentFileData && (
                   <PdfCitationViewer
-                    file={docFileData}
+                    file={documentFileData}
                     pageNumber={
-                      docChunks.find((c) => c.chunk_index === openCitation.chunk_index)
+                      documentChunks.find((chunk) => chunk.chunk_index === openCitation.chunk_index)
                         ?.page_number ?? 1
                     }
                     searchText={
-                      docChunks.find((c) => c.chunk_index === openCitation.chunk_index)
+                      documentChunks.find((chunk) => chunk.chunk_index === openCitation.chunk_index)
                         ?.content ?? ""
                     }
-                    onError={() => setDocFileError("This PDF couldn't be displayed.")}
+                    onError={() => setDocumentFileError("This PDF couldn't be displayed.")}
                   />
                 )}
-                {!docFileError && !docFileData && (
+                {!documentFileError && !documentFileData && (
                   <div className="empty-state">Loading PDF…</div>
                 )}
               </>
             )}
-            {docChunks && !isPdfFilename(openCitation.filename) && (
+            {documentChunks && !isPdfFilename(openCitation.filename) && (
               <div className="chat-doc-pane-body">
-                {docChunks.map((chunk) => {
+                {documentChunks.map((chunk) => {
                   const isActive = chunk.chunk_index === openCitation.chunk_index;
                   return (
                     <div

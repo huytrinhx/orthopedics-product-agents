@@ -63,7 +63,7 @@ from config.llm_clients import get_chat_model
 MAX_TOOL_CALLS = 8
 
 _TOOLS = [vector_search, part_lookup, graph_query, synonym_resolve]
-_TOOLS_BY_NAME = {t.name: t for t in _TOOLS}
+_TOOLS_BY_NAME = {tool.name: tool for tool in _TOOLS}
 
 _AGENT_SYSTEM_PROMPT = (
     "You are OrthoMate, a product-knowledge assistant for orthopedics sales "
@@ -187,8 +187,8 @@ async def call_tools(state: ReactAgentState) -> dict:
             return f"Unknown tool: {call['name']!r}"
         try:
             return await tool.ainvoke(call["args"])
-        except Exception as exc:  # noqa: BLE001 - report the failure to the model, don't crash the turn
-            return f"Tool call failed: {exc}"
+        except Exception as error:  # noqa: BLE001 - report the failure to the model, don't crash the turn
+            return f"Tool call failed: {error}"
 
     results = await asyncio.gather(*(run_one(call) for call in tool_calls))
     tool_messages = [
@@ -217,13 +217,13 @@ def _passages_from_scratchpad(scratchpad: list) -> list[dict]:
     (arbitrary tool results, unlike deterministic's bounded passage text).
     """
     passages = []
-    for i, msg in enumerate(scratchpad):
-        if isinstance(msg, ToolMessage):
+    for index, message in enumerate(scratchpad):
+        if isinstance(message, ToolMessage):
             passages.append(
                 {
-                    "chunk_id": f"tool-call-{i}",
+                    "chunk_id": f"tool-call-{index}",
                     "document_id": "tool-result",
-                    "text": str(msg.content)[:4000],
+                    "text": str(message.content)[:4000],
                     "score": 1.0,
                     "document_type": None,
                 }

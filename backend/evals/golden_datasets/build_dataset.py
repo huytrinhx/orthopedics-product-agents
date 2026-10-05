@@ -13,8 +13,8 @@ import re
 from collections import defaultdict
 from pathlib import Path
 
-DATASET_DIR = Path(__file__).parent
-CSV_PATH = DATASET_DIR / "feedback-notes.csv"
+DATASET_DIRECTORY = Path(__file__).parent
+CSV_PATH = DATASET_DIRECTORY / "feedback-notes.csv"
 
 COL_SYSTEM = 0
 COL_PROMPT = 1
@@ -35,8 +35,8 @@ def strip_asides(citation: str) -> str:
 
 
 def load_rows() -> list[list[str]]:
-    with open(CSV_PATH, newline="", encoding="utf-8") as f:
-        rows = list(csv.reader(f))
+    with open(CSV_PATH, newline="", encoding="utf-8") as file:
+        rows = list(csv.reader(file))
     # rows[0] is a "Table 1" title row, rows[1] is the header
     return rows[2:]
 
@@ -46,7 +46,7 @@ def build_qa_record(row: list[str]) -> dict:
         "query": row[COL_PROMPT].strip(),
         "expected_answer": row[COL_PREFERRED_ANSWER].strip(),
         "expected_citations": [
-            strip_asides(c) for c in split_lines(row[COL_CITATIONS])
+            strip_asides(citation) for citation in split_lines(row[COL_CITATIONS])
         ],
         "system": row[COL_SYSTEM].strip(),
         "question_type": split_lines(row[COL_QUESTION_TYPE]),
@@ -136,8 +136,8 @@ _PULL_RESOURCE_FIXTURES: list[dict] = [
 
 
 def write_jsonl(path: Path, records: list[dict]) -> None:
-    with open(path, "w", encoding="utf-8") as f:
-        f.writelines(json.dumps(record, ensure_ascii=False) + "\n" for record in records)
+    with open(path, "w", encoding="utf-8") as file:
+        file.writelines(json.dumps(record, ensure_ascii=False) + "\n" for record in records)
 
 
 def main() -> None:
@@ -151,13 +151,13 @@ def main() -> None:
         intent_records.append(build_intent_record(row))
 
     for system, records in by_system.items():
-        out_path = DATASET_DIR / f"{system.lower()}.jsonl"
+        out_path = DATASET_DIRECTORY / f"{system.lower()}.jsonl"
         write_jsonl(out_path, records)
         print(f"wrote {len(records)} examples to {out_path.name}")
 
     intent_records.extend(_AMBIGUOUS_FIXTURES)
     intent_records.extend(_PULL_RESOURCE_FIXTURES)
-    intent_path = DATASET_DIR / "intent_detection.jsonl"
+    intent_path = DATASET_DIRECTORY / "intent_detection.jsonl"
     write_jsonl(intent_path, intent_records)
     print(f"wrote {len(intent_records)} examples to {intent_path.name}")
 

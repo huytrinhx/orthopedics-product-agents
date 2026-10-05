@@ -126,7 +126,7 @@ async def test_clarification_pauses_then_resumes_and_only_commits_the_accepted_a
     result = await graph.ainvoke(_initial_state(thread_id, "hi"), config)
 
     assert self_eval_calls == 2  # scored low once, clarified, scored high on retry
-    ai_messages = [m for m in result["messages"] if isinstance(m, AIMessage)]
+    ai_messages = [message for message in result["messages"] if isinstance(message, AIMessage)]
     # Only the accepted (post-clarification) answer should be permanent
     # history -- the discarded first draft ("draft for 'hi'") must not also
     # appear.

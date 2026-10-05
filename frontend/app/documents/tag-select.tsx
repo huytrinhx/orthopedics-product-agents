@@ -35,8 +35,8 @@ export function TagSelect({
     onChange(id);
   }
 
-  async function handleCreate(e: FormEvent) {
-    e.preventDefault();
+  async function handleCreate(event: FormEvent) {
+    event.preventDefault();
     const name = newName.trim();
     if (!name) return;
     setCreating(true);
@@ -46,8 +46,8 @@ export function TagSelect({
       onChange(tag.id);
       setAdding(false);
       setNewName("");
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "failed to create tag");
+    } catch (caughtError) {
+      setError(caughtError instanceof Error ? caughtError.message : "failed to create tag");
     } finally {
       setCreating(false);
     }
@@ -58,7 +58,7 @@ export function TagSelect({
       <form onSubmit={handleCreate} className="tag-add-row">
         <input
           value={newName}
-          onChange={(e) => setNewName(e.target.value)}
+          onChange={(event) => setNewName(event.target.value)}
           placeholder={`New ${label.toLowerCase()}`}
           autoFocus
         />
@@ -81,7 +81,7 @@ export function TagSelect({
   }
 
   return (
-    <select value={value} onChange={(e) => handleSelect(e.target.value)} aria-label={label}>
+    <select value={value} onChange={(event) => handleSelect(event.target.value)} aria-label={label}>
       <option value="">{label}: none</option>
       {tags.map((tag) => (
         <option key={tag.id} value={tag.id}>
@@ -116,8 +116,8 @@ export function TagList({
     setError(null);
     try {
       await onDelete(tag);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : `failed to delete ${label.toLowerCase()}`);
+    } catch (caughtError) {
+      setError(caughtError instanceof Error ? caughtError.message : `failed to delete ${label.toLowerCase()}`);
     } finally {
       setDeletingId(null);
     }

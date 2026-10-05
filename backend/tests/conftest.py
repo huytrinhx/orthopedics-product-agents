@@ -51,24 +51,24 @@ async def _reset_postgres(database_url: str) -> None:
     """
     import psycopg
 
-    conn = await psycopg.AsyncConnection.connect(database_url)
+    connection = await psycopg.AsyncConnection.connect(database_url)
     try:
-        async with conn.cursor() as cur:
-            await cur.execute(
+        async with connection.cursor() as cursor:
+            await cursor.execute(
                 "SELECT tablename FROM pg_tables WHERE schemaname = 'public' "
                 "AND tablename != 'alembic_version'"
             )
-            tables = [row[0] for row in await cur.fetchall()]
+            tables = [row[0] for row in await cursor.fetchall()]
             if tables:
-                quoted = ", ".join(f'"{t}"' for t in tables)
-                await cur.execute(f"TRUNCATE TABLE {quoted} RESTART IDENTITY CASCADE")
+                quoted = ", ".join(f'"{table}"' for table in tables)
+                await cursor.execute(f"TRUNCATE TABLE {quoted} RESTART IDENTITY CASCADE")
             if "app_settings" in tables:
-                await cur.execute(
+                await cursor.execute(
                     "INSERT INTO app_settings (id, default_workflow) VALUES (1, 'deterministic')"
                 )
-        await conn.commit()
+        await connection.commit()
     finally:
-        await conn.close()
+        await connection.close()
 
 
 async def _reset_neo4j(uri: str, user: str, password: str) -> None:
@@ -103,8 +103,8 @@ def pytest_sessionstart(session):
     from alembic.config import Config
 
     backend_root = Path(__file__).resolve().parents[1]
-    alembic_cfg = Config(str(backend_root / "alembic.ini"))
-    command.upgrade(alembic_cfg, "head")
+    alembic_config = Config(str(backend_root / "alembic.ini"))
+    command.upgrade(alembic_config, "head")
 
     from retrieval.graph_client import GraphClient
 

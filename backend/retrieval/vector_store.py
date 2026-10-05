@@ -65,10 +65,10 @@ class VectorStoreClient:
         chunks than before) with no extra bookkeeping to track which rows
         are "current."
         """
-        async with self._connection.cursor() as cur:
-            await cur.execute("DELETE FROM chunks WHERE document_id = %s", (document_id,))
+        async with self._connection.cursor() as cursor:
+            await cursor.execute("DELETE FROM chunks WHERE document_id = %s", (document_id,))
             for chunk in chunks:
-                await cur.execute(
+                await cursor.execute(
                     """
                     INSERT INTO chunks
                         (document_id, chunk_index, content, section_title,
@@ -97,19 +97,19 @@ class VectorStoreClient:
     ) -> list[dict]:
         pool_size = top_k * _CANDIDATE_MULTIPLIER
         conditions: list[str] = []
-        condition_params: list[uuid.UUID] = []
+        condition_parameters: list[uuid.UUID] = []
         if filters and filters.system_id:
             conditions.append("c.system_id = %s")
-            condition_params.append(filters.system_id)
+            condition_parameters.append(filters.system_id)
         if filters and filters.document_type_id:
             conditions.append("c.document_type_id = %s")
-            condition_params.append(filters.document_type_id)
+            condition_parameters.append(filters.document_type_id)
         if filters and filters.document_type_ids:
             conditions.append("(c.document_type_id IS NULL OR c.document_type_id = ANY(%s))")
-            condition_params.append(list(filters.document_type_ids))
+            condition_parameters.append(list(filters.document_type_ids))
         filter_sql = f"AND {' AND '.join(conditions)}" if conditions else ""
 
-        async with self._connection.cursor(row_factory=dict_row) as cur:
+        async with self._connection.cursor(row_factory=dict_row) as cursor:
             # The explicit ::vector cast matters: psycopg sends a plain
             # Python list as a `double precision[]` parameter, and while
             # Postgres accepts that in an INSERT (an implicit assignment
@@ -123,7 +123,7 @@ class VectorStoreClient:
             # came from (doctype-hierarchy.csv's priority order), which
             # needs the name, not just the FK, and doing that join per-row
             # later would mean N extra queries instead of one JOIN here.
-            await cur.execute(
+            await cursor.execute(
                 f"""
                 SELECT c.id, c.document_id, c.chunk_index, c.content, c.section_title,
                        dt.name AS document_type
@@ -133,11 +133,11 @@ class VectorStoreClient:
                 ORDER BY c.embedding <=> %s::vector
                 LIMIT %s
                 """,
-                (*condition_params, vector, pool_size),
+                (*condition_parameters, vector, pool_size),
             )
-            vector_rows = await cur.fetchall()
+            vector_rows = await cursor.fetchall()
 
-            await cur.execute(
+            await cursor.execute(
                 f"""
                 SELECT c.id, c.document_id, c.chunk_index, c.content, c.section_title,
                        dt.name AS document_type
@@ -147,9 +147,9 @@ class VectorStoreClient:
                 ORDER BY ts_rank(c.tsv, plainto_tsquery('english', %s)) DESC
                 LIMIT %s
                 """,
-                (query, *condition_params, query, pool_size),
+                (query, *condition_parameters, query, pool_size),
             )
-            keyword_rows = await cur.fetchall()
+            keyword_rows = await cursor.fetchall()
 
         return _reciprocal_rank_fusion(vector_rows, keyword_rows, top_k)
 
@@ -182,11 +182,11 @@ def _reciprocal_rank_fusion(
 @asynccontextmanager
 async def get_vector_store() -> AsyncIterator[VectorStoreClient]:
     # prepare_threshold=0 -- see config/db.py's get_connection for why.
-    conn = await psycopg.AsyncConnection.connect(
+    connection = await psycopg.AsyncConnection.connect(
         os.environ["DATABASE_URL"], prepare_threshold=0
     )
-    await register_vector_async(conn)
+    await register_vector_async(connection)
     try:
-        yield VectorStoreClient(conn)
+        yield VectorStoreClient(connection)
     finally:
-        await conn.close()
+        await connection.close()

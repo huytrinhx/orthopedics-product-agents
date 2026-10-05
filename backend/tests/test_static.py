@@ -22,24 +22,24 @@ def _client(tmp_path) -> TestClient:
 
 
 def test_extensionless_path_resolves_to_matching_html_file(tmp_path):
-    res = _client(tmp_path).get("/users")
-    assert res.status_code == 200
-    assert "Users" in res.text
+    response = _client(tmp_path).get("/users")
+    assert response.status_code == 200
+    assert "Users" in response.text
 
 
 def test_root_still_serves_index(tmp_path):
-    res = _client(tmp_path).get("/")
-    assert res.status_code == 200
-    assert "Home" in res.text
+    response = _client(tmp_path).get("/")
+    assert response.status_code == 200
+    assert "Home" in response.text
 
 
 def test_path_with_no_matching_html_file_still_404s(tmp_path):
-    res = _client(tmp_path).get("/nonexistent")
-    assert res.status_code == 404
+    response = _client(tmp_path).get("/nonexistent")
+    assert response.status_code == 404
 
 
 def test_path_with_an_extension_is_not_mangled(tmp_path):
     (tmp_path / "logo.png").write_bytes(b"not-a-real-png")
-    res = _client(tmp_path).get("/logo.png")
-    assert res.status_code == 200
-    assert res.content == b"not-a-real-png"
+    response = _client(tmp_path).get("/logo.png")
+    assert response.status_code == 200
+    assert response.content == b"not-a-real-png"

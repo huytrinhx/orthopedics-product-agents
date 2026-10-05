@@ -37,8 +37,8 @@ def _unique_email() -> str:
 
 def _signup(client: TestClient) -> dict:
     email = _unique_email()
-    res = client.post("/auth/signup", json={"email": email, "password": "correct horse battery"})
-    return res.json()
+    response = client.post("/auth/signup", json={"email": email, "password": "correct horse battery"})
+    return response.json()
 
 
 def _sse_events(text: str) -> list[tuple[str, dict]]:
@@ -54,7 +54,7 @@ def _sse_events(text: str) -> list[tuple[str, dict]]:
 
 def test_submit_feedback_requires_auth():
     with TestClient(app) as client:
-        res = client.post(
+        response = client.post(
             "/feedback/",
             json={
                 "thread_id": f"anyone:{uuid.uuid4().hex}",
@@ -63,7 +63,7 @@ def test_submit_feedback_requires_auth():
                 "scores": {},
             },
         )
-    assert res.status_code == 401
+    assert response.status_code == 401
 
 
 def test_submit_feedback_someone_elses_thread_is_rejected():
@@ -75,7 +75,7 @@ def test_submit_feedback_someone_elses_thread_is_rejected():
         # from the thread_id prefix alone, before ever touching the DB, so no
         # chat_threads row is needed for this case.
         thread_id = f"{user_a['user']['id']}:{uuid.uuid4().hex}"
-        res = client.post(
+        response = client.post(
             "/feedback/",
             headers=headers_b,
             json={
@@ -85,7 +85,7 @@ def test_submit_feedback_someone_elses_thread_is_rejected():
                 "scores": {"faithfulness": 1.0},
             },
         )
-    assert res.status_code == 403
+    assert response.status_code == 403
 
 
 async def test_submit_feedback_writes_a_real_row_keyed_to_message_id():
@@ -97,7 +97,7 @@ async def test_submit_feedback_writes_a_real_row_keyed_to_message_id():
         message_id = str(uuid.uuid4())
         await create_thread(thread_id, user_id, "test thread")
 
-        res = client.post(
+        response = client.post(
             "/feedback/",
             headers=headers,
             json={
@@ -108,8 +108,8 @@ async def test_submit_feedback_writes_a_real_row_keyed_to_message_id():
                 "comment": "cites the wrong torque spec",
             },
         )
-    assert res.status_code == 200
-    body = res.json()
+    assert response.status_code == 200
+    body = response.json()
     assert body["message_id"] == message_id
     assert body["thread_id"] == thread_id
     assert body["flagged"] is True
@@ -173,7 +173,7 @@ async def test_submit_feedback_accepts_a_flag_or_comment_with_no_scores_at_all()
         message_id = str(uuid.uuid4())
         await create_thread(thread_id, user_id, "test thread")
 
-        res = client.post(
+        response = client.post(
             "/feedback/",
             headers=headers,
             json={
@@ -183,8 +183,8 @@ async def test_submit_feedback_accepts_a_flag_or_comment_with_no_scores_at_all()
                 "comment": "What can I do better? More citations please.",
             },
         )
-    assert res.status_code == 200
-    body = res.json()
+    assert response.status_code == 200
+    body = response.json()
     assert body["scores"] == {}
     assert body["comment"] == "What can I do better? More citations please."
 
@@ -192,19 +192,19 @@ async def test_submit_feedback_accepts_a_flag_or_comment_with_no_scores_at_all()
 def test_flagged_list_requires_admin():
     with TestClient(app) as client:
         token = _signup(client)["access_token"]
-        res = client.get("/feedback/flagged", headers={"Authorization": f"Bearer {token}"})
-    assert res.status_code == 403
+        response = client.get("/feedback/flagged", headers={"Authorization": f"Bearer {token}"})
+    assert response.status_code == 403
 
 
 def test_resolved_toggle_requires_admin():
     with TestClient(app) as client:
         token = _signup(client)["access_token"]
-        res = client.patch(
+        response = client.patch(
             f"/feedback/{uuid.uuid4()}/resolved",
             headers={"Authorization": f"Bearer {token}"},
             json={"resolved": True},
         )
-    assert res.status_code == 403
+    assert response.status_code == 403
 
 
 async def test_resolved_toggle_updates_the_row_and_survives_a_feedback_resubmit(monkeypatch):
@@ -276,7 +276,7 @@ def test_flagged_feedback_lists_the_actual_question_and_answer_text(monkeypatch)
 
         flagged = client.get("/feedback/flagged", headers=admin_headers).json()
 
-    row = next(r for r in flagged if r["message_id"] == message_id)
+    row = next(flagged_entry for flagged_entry in flagged if flagged_entry["message_id"] == message_id)
     assert row["question"] == question
     assert row["answer"] == answer
     assert row["flagged"] is True
@@ -286,10 +286,10 @@ def test_flagged_feedback_lists_the_actual_question_and_answer_text(monkeypatch)
 def test_delete_flagged_requires_admin():
     with TestClient(app) as client:
         token = _signup(client)["access_token"]
-        res = client.delete(
+        response = client.delete(
             f"/feedback/{uuid.uuid4()}", headers={"Authorization": f"Bearer {token}"}
         )
-    assert res.status_code == 403
+    assert response.status_code == 403
 
 
 def test_delete_missing_message_404s(monkeypatch):
@@ -299,10 +299,10 @@ def test_delete_missing_message_404s(monkeypatch):
         admin_token = client.post(
             "/auth/signup", json={"email": admin_email, "password": "correct horse battery"}
         ).json()["access_token"]
-        res = client.delete(
+        response = client.delete(
             f"/feedback/{uuid.uuid4()}", headers={"Authorization": f"Bearer {admin_token}"}
         )
-    assert res.status_code == 404
+    assert response.status_code == 404
 
 
 async def test_delete_removes_the_feedback_row(monkeypatch):
@@ -331,8 +331,8 @@ async def test_delete_removes_the_feedback_row(monkeypatch):
             json={"thread_id": thread_id, "message_id": message_id, "flagged": True, "scores": {}},
         )
 
-        delete_res = client.delete(f"/feedback/{message_id}", headers=admin_headers)
-        assert delete_res.status_code == 204
+        delete_response = client.delete(f"/feedback/{message_id}", headers=admin_headers)
+        assert delete_response.status_code == 204
 
         remaining = await get_feedback_for_thread(thread_id)
     assert message_id not in remaining
@@ -376,7 +376,7 @@ async def test_flagged_list_sorts_resolved_items_last():
     )
 
     records = await list_flagged_feedback()
-    ids = [r.message_id for r in records]
+    ids = [record.message_id for record in records]
     # Resolved sorts after unresolved regardless of recency, even though
     # older_resolved was created first.
     assert ids.index(newer_unresolved) < ids.index(older_resolved)

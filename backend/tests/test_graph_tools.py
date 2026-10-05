@@ -23,7 +23,7 @@ async def test_graph_query_returns_compatible_parts():
     await client.upsert_compatible_with(plate_sku, screw_sku)
 
     result = await graph_query.ainvoke({"entity": plate_sku, "relationship": "COMPATIBLE_WITH"})
-    assert any(r["related_entity"] == screw_sku for r in result)
+    assert any(related_entry["related_entity"] == screw_sku for related_entry in result)
 
 
 async def test_graph_query_unknown_entity_returns_empty():

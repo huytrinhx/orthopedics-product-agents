@@ -29,7 +29,7 @@ def _user_out(user: UserRecord) -> UserOut:
 
 @router.get("/", response_model=list[UserOut])
 async def list_all_users(admin: UserRecord = Depends(require_admin)) -> list[UserOut]:
-    return [_user_out(u) for u in await list_users()]
+    return [_user_out(user) for user in await list_users()]
 
 
 @router.patch("/{user_id}/active", response_model=UserOut)

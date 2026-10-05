@@ -34,8 +34,8 @@ def _signup_pending(client: TestClient) -> dict:
     default. This is the one helper that doesn't.
     """
     email = _unique_email()
-    res = client.post("/auth/signup", json={"email": email, "password": "correct horse battery"})
-    return res.json()
+    response = client.post("/auth/signup", json={"email": email, "password": "correct horse battery"})
+    return response.json()
 
 
 def _signup(client: TestClient) -> dict:
@@ -61,43 +61,43 @@ def _sse_events(text: str) -> list[tuple[str, dict]]:
 
 def test_stream_requires_auth():
     with TestClient(app) as client:
-        res = client.post("/chat/deterministic/stream", json={"message": "hi"})
-    assert res.status_code == 401
+        response = client.post("/chat/deterministic/stream", json={"message": "hi"})
+    assert response.status_code == 401
 
 
 def test_stream_unknown_workflow_404s():
     with TestClient(app) as client:
         token = _user_token(client)
-        res = client.post(
+        response = client.post(
             "/chat/not-a-real-workflow/stream",
             headers={"Authorization": f"Bearer {token}"},
             json={"message": "hi"},
         )
-    assert res.status_code == 404
+    assert response.status_code == 404
 
 
 def test_stream_default_requires_auth():
     with TestClient(app) as client:
-        res = client.post("/chat/stream", json={"message": "hi"})
-    assert res.status_code == 401
+        response = client.post("/chat/stream", json={"message": "hi"})
+    assert response.status_code == 401
 
 
 def test_stream_rejects_a_pending_not_yet_enabled_user():
     with TestClient(app) as client:
         token = _signup_pending(client)["access_token"]
-        res = client.post(
+        response = client.post(
             "/chat/deterministic/stream",
             headers={"Authorization": f"Bearer {token}"},
             json={"message": "hi"},
         )
-    assert res.status_code == 403
+    assert response.status_code == 403
 
 
 def test_threads_rejects_a_pending_not_yet_enabled_user():
     with TestClient(app) as client:
         token = _signup_pending(client)["access_token"]
-        res = client.get("/chat/threads", headers={"Authorization": f"Bearer {token}"})
-    assert res.status_code == 403
+        response = client.get("/chat/threads", headers={"Authorization": f"Bearer {token}"})
+    assert response.status_code == 403
 
 
 def test_chat_access_reopens_once_an_admin_enables_the_user():
@@ -107,8 +107,8 @@ def test_chat_access_reopens_once_an_admin_enables_the_user():
         assert client.get("/chat/threads", headers=headers).status_code == 403
 
         asyncio.run(set_user_active(uuid.UUID(user["user"]["id"]), True))
-        res = client.get("/chat/threads", headers=headers)
-    assert res.status_code == 200
+        response = client.get("/chat/threads", headers=headers)
+    assert response.status_code == 200
 
 
 def test_stream_default_resolves_the_admin_configured_workflow(monkeypatch):
@@ -130,10 +130,10 @@ def test_stream_default_resolves_the_admin_configured_workflow(monkeypatch):
     monkeypatch.setattr(chat_routes, "get_settings", _fake_get_settings)
     with TestClient(app) as client:
         token = _user_token(client)
-        res = client.post(
+        response = client.post(
             "/chat/stream", headers={"Authorization": f"Bearer {token}"}, json={"message": "hi"}
         )
-    assert res.status_code == 404
+    assert response.status_code == 404
 
 
 @needs_openai_key
@@ -178,26 +178,26 @@ def test_full_pipeline_answers_with_citations_from_a_real_indexed_document(monke
             headers=admin_headers,
             files={"file": ("torque-spec.txt", content, "text/plain")},
         )
-        doc_id = upload.json()["id"]
-        client.post(f"/documents/{doc_id}/index", headers=admin_headers)
+        document_id = upload.json()["id"]
+        client.post(f"/documents/{document_id}/index", headers=admin_headers)
         for _ in range(40):
-            if client.get(f"/documents/{doc_id}", headers=admin_headers).json()["status"] == "done":
+            if client.get(f"/documents/{document_id}", headers=admin_headers).json()["status"] == "done":
                 break
             time.sleep(0.25)
 
         user_token = _user_token(client)
-        res = client.post(
+        response = client.post(
             "/chat/deterministic/stream",
             headers={"Authorization": f"Bearer {user_token}"},
             json={"message": "How much torque should I use on the REFLEX HYBRID locking screw?"},
         )
-        done = dict(_sse_events(res.text))["done"]
+        done = dict(_sse_events(response.text))["done"]
 
-        client.delete(f"/documents/{doc_id}", headers=admin_headers)
+        client.delete(f"/documents/{document_id}", headers=admin_headers)
 
     assert "1.2" in done["answer"]
     assert done["citations"]
-    assert all(citation["document_id"] == doc_id for citation in done["citations"])
+    assert all(citation["document_id"] == document_id for citation in done["citations"])
     assert all(citation["filename"] == "torque-spec.txt" for citation in done["citations"])
     assert done["eval_scores"]["faithfulness"] > 0.5
     # Only asserted when Langfuse is actually configured (see
@@ -241,27 +241,27 @@ def test_citations_survive_a_thread_resume(monkeypatch, tmp_path):
             headers=admin_headers,
             files={"file": ("mira-apex-torque-spec.txt", content, "text/plain")},
         )
-        doc_id = upload.json()["id"]
-        client.post(f"/documents/{doc_id}/index", headers=admin_headers)
+        document_id = upload.json()["id"]
+        client.post(f"/documents/{document_id}/index", headers=admin_headers)
         for _ in range(40):
-            if client.get(f"/documents/{doc_id}", headers=admin_headers).json()["status"] == "done":
+            if client.get(f"/documents/{document_id}", headers=admin_headers).json()["status"] == "done":
                 break
             time.sleep(0.25)
 
         user_token = _user_token(client)
         user_headers = {"Authorization": f"Bearer {user_token}"}
-        stream_res = client.post(
+        stream_response = client.post(
             "/chat/deterministic/stream",
             headers=user_headers,
             json={"message": "How much torque should I use on the MIRA APEX compression screw?"},
         )
-        events = dict(_sse_events(stream_res.text))
+        events = dict(_sse_events(stream_response.text))
         thread_id = events["thread"]["thread_id"]
         live_citations = events["done"]["citations"]
 
         transcript = client.get(f"/chat/threads/{thread_id}", headers=user_headers).json()
 
-        client.delete(f"/documents/{doc_id}", headers=admin_headers)
+        client.delete(f"/documents/{document_id}", headers=admin_headers)
 
     assert live_citations
     assistant_message = transcript["messages"][1]
@@ -271,22 +271,22 @@ def test_citations_survive_a_thread_resume(monkeypatch, tmp_path):
 
 def test_list_threads_requires_auth():
     with TestClient(app) as client:
-        res = client.get("/chat/threads")
-    assert res.status_code == 401
+        response = client.get("/chat/threads")
+    assert response.status_code == 401
 
 
 def test_list_threads_empty_for_a_new_user():
     with TestClient(app) as client:
         token = _user_token(client)
-        res = client.get("/chat/threads", headers={"Authorization": f"Bearer {token}"})
-    assert res.status_code == 200
-    assert res.json() == []
+        response = client.get("/chat/threads", headers={"Authorization": f"Bearer {token}"})
+    assert response.status_code == 200
+    assert response.json() == []
 
 
 def test_get_thread_requires_auth():
     with TestClient(app) as client:
-        res = client.get(f"/chat/threads/anyone:{uuid.uuid4().hex}")
-    assert res.status_code == 401
+        response = client.get(f"/chat/threads/anyone:{uuid.uuid4().hex}")
+    assert response.status_code == 401
 
 
 def test_get_someone_elses_thread_id_is_rejected():
@@ -297,21 +297,21 @@ def test_get_someone_elses_thread_id_is_rejected():
         # ownership check must reject this before ever touching the
         # checkpointer, so no real thread (or OPENAI_API_KEY) is needed.
         thread_id = f"{user_a['user']['id']}:{uuid.uuid4().hex}"
-        res = client.get(
+        response = client.get(
             f"/chat/threads/{thread_id}", headers={"Authorization": f"Bearer {token_b}"}
         )
-    assert res.status_code == 403
+    assert response.status_code == 403
 
 
 def test_get_nonexistent_own_thread_404s():
     with TestClient(app) as client:
         user = _signup(client)
         thread_id = f"{user['user']['id']}:{uuid.uuid4().hex}"
-        res = client.get(
+        response = client.get(
             f"/chat/threads/{thread_id}",
             headers={"Authorization": f"Bearer {user['access_token']}"},
         )
-    assert res.status_code == 404
+    assert response.status_code == 404
 
 
 @needs_openai_key
@@ -356,7 +356,7 @@ def test_thread_appears_in_sidebar_and_transcript_round_trips_both_turns(monkeyp
         transcript = client.get(f"/chat/threads/{thread_id}", headers=headers).json()
 
     assert transcript["thread_id"] == thread_id
-    roles = [m["role"] for m in transcript["messages"]]
+    roles = [message["role"] for message in transcript["messages"]]
     assert roles == ["user", "assistant", "user", "assistant"]
     assert (
         transcript["messages"][0]["content"]
@@ -384,17 +384,17 @@ def test_done_event_message_id_round_trips_through_feedback_and_transcript(monke
         token = _user_token(client)
         headers = {"Authorization": f"Bearer {token}"}
 
-        res = client.post(
+        response = client.post(
             "/chat/deterministic/stream",
             headers=headers,
             json={"message": "What torque should I use on a REFLEX HYBRID locking screw?"},
         )
-        events = dict(_sse_events(res.text))
+        events = dict(_sse_events(response.text))
         thread_id = events["thread"]["thread_id"]
         message_id = events["done"]["message_id"]
         assert message_id
 
-        feedback_res = client.post(
+        feedback_response = client.post(
             "/feedback/",
             headers=headers,
             json={
@@ -405,17 +405,17 @@ def test_done_event_message_id_round_trips_through_feedback_and_transcript(monke
                 "comment": "close but missing the inch-pounds conversion",
             },
         )
-        assert feedback_res.status_code == 200
+        assert feedback_response.status_code == 200
 
         transcript = client.get(f"/chat/threads/{thread_id}", headers=headers).json()
 
-    assistant_message = next(m for m in transcript["messages"] if m["message_id"] == message_id)
+    assistant_message = next(message for message in transcript["messages"] if message["message_id"] == message_id)
     assert assistant_message["role"] == "assistant"
     assert assistant_message["feedback"]["flagged"] is True
     assert assistant_message["feedback"]["scores"]["faithfulness"] == 0.9
     assert assistant_message["feedback"]["comment"] == "close but missing the inch-pounds conversion"
     # The user's own turn never got feedback -- its embedded field stays null.
-    user_message = next(m for m in transcript["messages"] if m["role"] == "user")
+    user_message = next(message for message in transcript["messages"] if message["role"] == "user")
     assert user_message["feedback"] is None
 
 
@@ -462,7 +462,7 @@ def test_ambiguous_query_pauses_for_clarification_and_resume_completes_the_turn(
             data={"system_id": system_id},
             files={"file": ("clarify-doc.txt", b"placeholder content", "text/plain")},
         )
-        doc_id = upload.json()["id"]
+        document_id = upload.json()["id"]
 
         user_headers = {"Authorization": f"Bearer {_user_token(client)}"}
 
@@ -487,7 +487,7 @@ def test_ambiguous_query_pauses_for_clarification_and_resume_completes_the_turn(
         assert events2["thread"]["thread_id"] == thread_id
         assert "done" in events2
 
-        client.delete(f"/documents/{doc_id}", headers=admin_headers)
+        client.delete(f"/documents/{document_id}", headers=admin_headers)
 
 
 @needs_openai_key
@@ -539,7 +539,7 @@ def test_a_long_first_message_is_truncated_into_the_thread_title():
 def test_rerun_requires_admin():
     with TestClient(app) as client:
         token = _user_token(client)
-        res = client.post(
+        response = client.post(
             "/chat/rerun",
             headers={"Authorization": f"Bearer {token}"},
             json={
@@ -548,7 +548,7 @@ def test_rerun_requires_admin():
                 "workflow_name": "deterministic",
             },
         )
-    assert res.status_code == 403
+    assert response.status_code == 403
 
 
 def test_rerun_unknown_workflow_404s(monkeypatch):
@@ -558,7 +558,7 @@ def test_rerun_unknown_workflow_404s(monkeypatch):
         admin_token = client.post(
             "/auth/signup", json={"email": admin_email, "password": "correct horse battery"}
         ).json()["access_token"]
-        res = client.post(
+        response = client.post(
             "/chat/rerun",
             headers={"Authorization": f"Bearer {admin_token}"},
             json={
@@ -567,7 +567,7 @@ def test_rerun_unknown_workflow_404s(monkeypatch):
                 "workflow_name": "not-a-real-workflow",
             },
         )
-    assert res.status_code == 404
+    assert response.status_code == 404
 
 
 @needs_openai_key
@@ -589,7 +589,7 @@ def test_rerun_missing_flagged_message_404s(monkeypatch):
         )
         original_thread_id = dict(_sse_events(original.text))["thread"]["thread_id"]
 
-        res = client.post(
+        response = client.post(
             "/chat/rerun",
             headers=admin_headers,
             json={
@@ -598,7 +598,7 @@ def test_rerun_missing_flagged_message_404s(monkeypatch):
                 "workflow_name": "deterministic",
             },
         )
-    assert res.status_code == 404
+    assert response.status_code == 404
 
 
 @needs_openai_key
@@ -682,14 +682,14 @@ def test_rerun_replays_history_and_stays_out_of_the_admins_own_sidebar(monkeypat
     assert original_transcript["messages"][0]["content"] == first_message
     assert len(original_transcript["messages"]) == 4  # unchanged by the rerun
 
-    roles = [m["role"] for m in rerun_transcript["messages"]]
-    contents = [m["content"] for m in rerun_transcript["messages"]]
+    roles = [message["role"] for message in rerun_transcript["messages"]]
+    contents = [message["content"] for message in rerun_transcript["messages"]]
     # Replayed history (first turn) followed by a freshly generated answer
     # to the *second* turn's question -- not a blank-context rerun.
     assert roles[0] == "user" and contents[0] == first_message
     assert roles[-2] == "user" and contents[-2] == "And in inch-pounds?"
     assert roles[-1] == "assistant"
 
-    assert rerun_thread_id not in [t["thread_id"] for t in admin_sidebar]
-    assert [r["thread_id"] for r in reruns_for_message] == [rerun_thread_id]
+    assert rerun_thread_id not in [thread["thread_id"] for thread in admin_sidebar]
+    assert [rerun["thread_id"] for rerun in reruns_for_message] == [rerun_thread_id]
     assert reruns_for_message[0]["workflow_name"] == "deterministic"

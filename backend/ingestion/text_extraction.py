@@ -86,8 +86,8 @@ def _lines_with_font_size(page) -> list[tuple[str, float]]:
         rows.setdefault(round(word["top"]), []).append(word)
     lines: list[tuple[str, float]] = []
     for top in sorted(rows):
-        row = sorted(rows[top], key=lambda w: w["x0"])
-        text = " ".join(w["text"] for w in row)
-        size = statistics.median(w["size"] for w in row)
+        row = sorted(rows[top], key=lambda word: word["x0"])
+        text = " ".join(word["text"] for word in row)
+        size = statistics.median(word["size"] for word in row)
         lines.append((text, size))
     return lines

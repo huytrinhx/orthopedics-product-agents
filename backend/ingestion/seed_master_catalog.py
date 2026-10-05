@@ -124,8 +124,8 @@ def _infer_indication(tray: str, description: str) -> str | None:
 
 
 def parse_master_catalog(path: Path) -> list[CatalogRow]:
-    with path.open(newline="", encoding="latin-1") as f:
-        reader = csv.DictReader(f, delimiter="\t")
+    with path.open(newline="", encoding="latin-1") as file:
+        reader = csv.DictReader(file, delimiter="\t")
         rows = []
         for raw in reader:
             sku = _clean(raw.get("Item No."))
@@ -216,7 +216,7 @@ async def seed_master_catalog(client: GraphClient, path: Path = DEFAULT_PATH) ->
     for row in rows:
         tray_family.setdefault(row.tray, _infer_product_family(row.tray))
 
-    for family in sorted({f for f in tray_family.values() if f}):
+    for family in sorted({family for family in tray_family.values() if family}):
         await client.upsert_product_family(family)
     for tray, family in tray_family.items():
         await client.upsert_tray(tray, family)
@@ -269,7 +269,7 @@ async def seed_master_catalog(client: GraphClient, path: Path = DEFAULT_PATH) ->
 
     print(
         f"Seeded {len(rows)} parts across {len(tray_family)} trays "
-        f"({len([f for f in tray_family.values() if f])} mapped to a ProductFamily), "
+        f"({len([family for family in tray_family.values() if family])} mapped to a ProductFamily), "
         f"{compat_count} COMPATIBLE_WITH edges, {tool_count} REQUIRES_TOOL edges"
     )
 

@@ -83,7 +83,7 @@ def strip_page_markers(text: str) -> str:
     document's real content without this module's internal page-tracking
     annotation leaking into an LLM prompt.
     """
-    kept = [p for p in text.split("\n\n") if not PAGE_MARKER_PATTERN.match(p.strip())]
+    kept = [paragraph for paragraph in text.split("\n\n") if not PAGE_MARKER_PATTERN.match(paragraph.strip())]
     return "\n\n".join(kept)
 
 
@@ -159,7 +159,7 @@ def _pack_paragraphs(
 
     def flush() -> None:
         if current:
-            windows.append(("\n\n".join(p for p, _ in current), current[0][1]))
+            windows.append(("\n\n".join(paragraph for paragraph, _ in current), current[0][1]))
 
     for paragraph, page in paragraphs:
         tokens = _token_count(paragraph)
@@ -167,13 +167,13 @@ def _pack_paragraphs(
         if tokens > chunk_size:
             flush()
             current, current_tokens = [], 0
-            windows.extend((w, page) for w in _token_windows(paragraph, chunk_size, overlap))
+            windows.extend((window, page) for window in _token_windows(paragraph, chunk_size, overlap))
             continue
 
         if current and current_tokens + tokens > chunk_size:
             flush()
             current = _overlap_tail(current, overlap)
-            current_tokens = sum(_token_count(p) for p, _ in current)
+            current_tokens = sum(_token_count(paragraph) for paragraph, _ in current)
 
         current.append((paragraph, page))
         current_tokens += tokens

@@ -26,7 +26,7 @@ async def test_upsert_part_creates_tray_and_family_chain():
     await client.upsert_part(sku, tray, description="test part", thread="Full")
 
     related = await client.query_related_entities(sku)
-    trays = [r for r in related if r["relationship"] == "BELONGS_TO_TRAY"]
+    trays = [related_entry for related_entry in related if related_entry["relationship"] == "BELONGS_TO_TRAY"]
     assert trays and trays[0]["related_entity"] == tray
 
 
@@ -43,8 +43,8 @@ async def test_compatible_with_is_bidirectionally_queryable():
 
     from_plate = await client.query_related_entities(plate_sku, "COMPATIBLE_WITH")
     from_screw = await client.query_related_entities(screw_sku, "COMPATIBLE_WITH")
-    assert any(r["related_entity"] == screw_sku for r in from_plate)
-    assert any(r["related_entity"] == plate_sku for r in from_screw)
+    assert any(related_entry["related_entity"] == screw_sku for related_entry in from_plate)
+    assert any(related_entry["related_entity"] == plate_sku for related_entry in from_screw)
 
 
 async def test_differentiation_noops_when_a_sku_is_unknown():
@@ -52,14 +52,14 @@ async def test_differentiation_noops_when_a_sku_is_unknown():
     tray = _unique("TRAY")
     known_sku = _unique("KNOWN")
     unknown_sku = _unique("UNKNOWN")
-    doc_id = _unique("DOC")
+    document_id = _unique("DOC")
 
-    await client.upsert_document(doc_id, "brochure.pdf", doc_type="Brochure", system="MIS")
+    await client.upsert_document(document_id, "brochure.pdf", doc_type="Brochure", system="MIS")
     await client.upsert_tray(tray, "MIS")
     await client.upsert_part(known_sku, tray)
     # unknown_sku is never upserted as a Part -- a hallucinated/unresolved
     # SKU from prose extraction must not mint a new node.
-    attached = await client.attach_differentiation(known_sku, unknown_sku, "explanation text", doc_id)
+    attached = await client.attach_differentiation(known_sku, unknown_sku, "explanation text", document_id)
     related = await client.query_related_entities(known_sku, "DIFFERENTIATES_FROM")
 
     assert attached is False
@@ -71,13 +71,13 @@ async def test_differentiation_attaches_and_is_queryable_both_directions():
     tray = _unique("TRAY")
     sku_a = _unique("A")
     sku_b = _unique("B")
-    doc_id = _unique("DOC")
+    document_id = _unique("DOC")
 
-    await client.upsert_document(doc_id, "brochure.pdf", doc_type="Brochure", system="MIS")
+    await client.upsert_document(document_id, "brochure.pdf", doc_type="Brochure", system="MIS")
     await client.upsert_tray(tray, "MIS")
     await client.upsert_part(sku_a, tray)
     await client.upsert_part(sku_b, tray)
-    attached = await client.attach_differentiation(sku_a, sku_b, "A is shorter than B", doc_id)
+    attached = await client.attach_differentiation(sku_a, sku_b, "A is shorter than B", document_id)
     related = await client.query_related_entities(sku_a, "DIFFERENTIATES_FROM")
 
     assert attached is True
@@ -87,12 +87,12 @@ async def test_differentiation_attaches_and_is_queryable_both_directions():
 
 async def test_procedure_requires_tray_noops_for_unknown_tray():
     client = get_graph_client()
-    doc_id = _unique("DOC")
+    document_id = _unique("DOC")
     procedure = _unique("PROCEDURE")
     unknown_tray = _unique("UNKNOWN-TRAY")
 
-    await client.upsert_document(doc_id, "guide.pdf", doc_type="Surgical Technique", system="MIS")
-    assert await client.attach_procedure(procedure, unknown_tray, doc_id) is False
+    await client.upsert_document(document_id, "guide.pdf", doc_type="Surgical Technique", system="MIS")
+    assert await client.attach_procedure(procedure, unknown_tray, document_id) is False
 
 
 async def test_synonym_groups_include_canonical_and_both_edge_types():
@@ -105,6 +105,6 @@ async def test_synonym_groups_include_canonical_and_both_edge_types():
     await client.upsert_abbreviation(canonical, abbreviation)
     groups = await client.get_synonym_groups()
 
-    group = next(g for g in groups if g[0] == canonical)
+    group = next(candidate_group for candidate_group in groups if candidate_group[0] == canonical)
     assert alias in group
     assert abbreviation in group

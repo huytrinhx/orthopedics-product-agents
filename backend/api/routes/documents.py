@@ -52,19 +52,19 @@ def _ingest_data_dir() -> Path:
     return path
 
 
-def _document_out(doc) -> DocumentOut:
+def _document_out(document) -> DocumentOut:
     return DocumentOut(
-        id=doc.id,
-        filename=doc.filename,
-        status=doc.status,
-        error=doc.error,
-        uploaded_by=doc.uploaded_by,
-        created_at=doc.created_at,
-        updated_at=doc.updated_at,
-        system=TagOut(id=doc.system_id, name=doc.system_name) if doc.system_id else None,
+        id=document.id,
+        filename=document.filename,
+        status=document.status,
+        error=document.error,
+        uploaded_by=document.uploaded_by,
+        created_at=document.created_at,
+        updated_at=document.updated_at,
+        system=TagOut(id=document.system_id, name=document.system_name) if document.system_id else None,
         document_type=(
-            TagOut(id=doc.document_type_id, name=doc.document_type_name)
-            if doc.document_type_id
+            TagOut(id=document.document_type_id, name=document.document_type_name)
+            if document.document_type_id
             else None
         ),
     )
@@ -95,7 +95,7 @@ async def upload_document(
     storage_path = await _save_upload(file)
 
     try:
-        doc = await create_document(
+        document = await create_document(
             filename=file.filename,
             storage_path=str(storage_path),
             uploaded_by=admin.id,
@@ -106,30 +106,30 @@ async def upload_document(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Unknown system or document type")
     # Stays "pending" (the row's default) until an admin explicitly indexes
     # it -- see index_document below.
-    return _document_out(doc)
+    return _document_out(document)
 
 
 @router.get("/", response_model=list[DocumentOut])
 async def list_all_documents(admin: UserRecord = Depends(require_admin)) -> list[DocumentOut]:
-    return [_document_out(doc) for doc in await list_documents()]
+    return [_document_out(document) for document in await list_documents()]
 
 
 async def _check_volume() -> ComponentHealth:
     try:
-        count = sum(1 for p in _ingest_data_dir().iterdir() if p.is_file())
-    except OSError as exc:
-        return ComponentHealth(ok=False, detail=str(exc))
+        count = sum(1 for path in _ingest_data_dir().iterdir() if path.is_file())
+    except OSError as error:
+        return ComponentHealth(ok=False, detail=str(error))
     return ComponentHealth(ok=True, detail=f"{count} file{'s' if count != 1 else ''}")
 
 
 async def _check_graph_db() -> ComponentHealth:
     try:
         await get_graph_client().ping()
-    except neo4j.exceptions.GqlError as exc:
+    except neo4j.exceptions.GqlError as error:
         # Common ancestor of both the driver's own errors (connection
         # refused, DNS failure) and Neo4jError (auth, query) -- see
         # neo4j.exceptions' hierarchy.
-        return ComponentHealth(ok=False, detail=str(exc))
+        return ComponentHealth(ok=False, detail=str(error))
     return ComponentHealth(ok=True, detail="connected")
 
 
@@ -137,8 +137,8 @@ async def _check_vector_db() -> ComponentHealth:
     try:
         async with get_vector_store():
             pass
-    except psycopg.Error as exc:
-        return ComponentHealth(ok=False, detail=str(exc))
+    except psycopg.Error as error:
+        return ComponentHealth(ok=False, detail=str(error))
     return ComponentHealth(ok=True, detail="connected")
 
 
@@ -162,10 +162,10 @@ async def check_system_health(admin: UserRecord = Depends(require_admin)) -> Sys
 async def get_one_document(
     document_id: uuid.UUID, admin: UserRecord = Depends(require_admin)
 ) -> DocumentOut:
-    doc = await get_document(document_id)
-    if doc is None:
+    document = await get_document(document_id)
+    if document is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Document not found")
-    return _document_out(doc)
+    return _document_out(document)
 
 
 @router.get("/{document_id}/chunks", response_model=list[ChunkOut])
@@ -178,12 +178,12 @@ async def get_document_chunks(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Document not found")
     return [
         ChunkOut(
-            chunk_index=c.chunk_index,
-            content=c.content,
-            section_title=c.section_title,
-            page_number=c.page_number,
+            chunk_index=chunk.chunk_index,
+            content=chunk.content,
+            section_title=chunk.section_title,
+            page_number=chunk.page_number,
         )
-        for c in await list_chunks(document_id)
+        for chunk in await list_chunks(document_id)
     ]
 
 
@@ -197,14 +197,14 @@ async def get_document_file(
     read this document's extracted text via chat/citations, so reading the
     original file it came from isn't a new exposure.
     """
-    doc = await get_document(document_id)
-    if doc is None:
+    document = await get_document(document_id)
+    if document is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Document not found")
-    path = Path(doc.storage_path)
+    path = Path(document.storage_path)
     if not path.exists():
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Document file not found")
-    media_type = mimetypes.guess_type(doc.filename)[0] or "application/octet-stream"
-    return FileResponse(path, media_type=media_type, filename=doc.filename)
+    media_type = mimetypes.guess_type(document.filename)[0] or "application/octet-stream"
+    return FileResponse(path, media_type=media_type, filename=document.filename)
 
 
 @router.post("/{document_id}/file", response_model=DocumentOut)
@@ -222,26 +222,26 @@ async def reupload_document_file(
     re-indexes against the new file, upserting this document_id's chunks/
     graph entities in place rather than duplicating them.
     """
-    doc = await get_document(document_id)
-    if doc is None:
+    document = await get_document(document_id)
+    if document is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Document not found")
     if not file.filename:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Uploaded file has no filename")
 
     storage_path = await _save_upload(file)
-    old_storage_path = doc.storage_path
-    doc = await replace_file(document_id, file.filename, str(storage_path))
-    assert doc is not None
+    old_storage_path = document.storage_path
+    document = await replace_file(document_id, file.filename, str(storage_path))
+    assert document is not None
     # Best-effort, same as delete_one_document below: the DB row (now
     # pointing at the new file) is the source of truth, so a missing/
     # already-gone old file shouldn't turn a reupload into a 500.
     Path(old_storage_path).unlink(missing_ok=True)
 
     await set_status(document_id, "queued")
-    background_tasks.add_task(process_document, doc.id, doc.storage_path)
-    doc = await get_document(document_id)
-    assert doc is not None
-    return _document_out(doc)
+    background_tasks.add_task(process_document, document.id, document.storage_path)
+    document = await get_document(document_id)
+    assert document is not None
+    return _document_out(document)
 
 
 @router.post("/{document_id}/index", response_model=DocumentOut)
@@ -254,14 +254,14 @@ async def index_document(
     same (currently stubbed, see documents/service.py) pipeline seam as a
     re-tag, on demand rather than only as a side effect of tagging.
     """
-    doc = await get_document(document_id)
-    if doc is None:
+    document = await get_document(document_id)
+    if document is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Document not found")
     await set_status(document_id, "queued")
-    background_tasks.add_task(process_document, doc.id, doc.storage_path)
-    doc = await get_document(document_id)
-    assert doc is not None
-    return _document_out(doc)
+    background_tasks.add_task(process_document, document.id, document.storage_path)
+    document = await get_document(document_id)
+    assert document is not None
+    return _document_out(document)
 
 
 @router.patch("/{document_id}/tags", response_model=DocumentOut)
@@ -274,31 +274,31 @@ async def set_document_tags(
     if await get_document(document_id) is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Document not found")
     try:
-        doc = await set_tags(document_id, body.system_id, body.document_type_id)
+        document = await set_tags(document_id, body.system_id, body.document_type_id)
     except psycopg.errors.ForeignKeyViolation:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Unknown system or document type")
-    assert doc is not None
+    assert document is not None
 
     # System/document-type feed the retrieval filters and (once tickets
     # 06/07 land) the chunk/entity metadata written alongside a document's
     # vectors and graph nodes -- a re-tag has to re-run the same pipeline
     # seam as upload so that metadata stays in sync.
     await set_status(document_id, "queued")
-    background_tasks.add_task(process_document, doc.id, doc.storage_path)
-    doc = await get_document(document_id)
-    assert doc is not None
-    return _document_out(doc)
+    background_tasks.add_task(process_document, document.id, document.storage_path)
+    document = await get_document(document_id)
+    assert document is not None
+    return _document_out(document)
 
 
 @router.delete("/{document_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_one_document(
     document_id: uuid.UUID, admin: UserRecord = Depends(require_admin)
 ) -> None:
-    doc = await delete_document(document_id)
-    if doc is None:
+    document = await delete_document(document_id)
+    if document is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Document not found")
     # Best-effort: the DB row is the source of truth for the UI, so a
     # missing/already-gone file on disk shouldn't turn a delete into a 500.
-    Path(doc.storage_path).unlink(missing_ok=True)
+    Path(document.storage_path).unlink(missing_ok=True)
     # Tickets 06/07 land real vector/graph indexing keyed by document_id --
     # once they do, this also needs to purge that document's chunks/entities.
