@@ -8,10 +8,11 @@ internals by hand.
 import os
 import uuid
 
+import psycopg
 from langgraph.graph import END, StateGraph
 from typing_extensions import TypedDict
 
-from memory.checkpointer import get_checkpointer
+from memory.checkpointer import APPLICATION_NAME, get_checkpointer
 
 
 class _CounterState(TypedDict):
@@ -66,3 +67,28 @@ async def test_different_threads_do_not_share_state():
         result_b = await compiled.ainvoke({"count": 0}, {"configurable": {"thread_id": thread_b}})
 
     assert result_b["count"] == 1
+
+
+async def test_recovers_after_server_drops_its_connections():
+    # Regression: get_checkpointer used to hold one connection for the
+    # process lifetime, so once Postgres/Supabase dropped it (idle timeout,
+    # pooler restart) every later call raised "the connection is closed".
+    thread_id = f"test-{uuid.uuid4().hex[:10]}"
+    config = {"configurable": {"thread_id": thread_id}}
+
+    async with get_checkpointer(os.environ["DATABASE_URL"]) as checkpointer:
+        compiled = _build_counter_graph(checkpointer)
+        await compiled.ainvoke({"count": 0}, config)
+
+        async with await psycopg.AsyncConnection.connect(
+            os.environ["DATABASE_URL"], autocommit=True
+        ) as admin_connection:
+            cursor = await admin_connection.execute(
+                "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+                "WHERE application_name = %s AND pid <> pg_backend_pid()",
+                (APPLICATION_NAME,),
+            )
+            assert len(await cursor.fetchall()) >= 1
+
+        checkpoint_tuple = await checkpointer.aget_tuple(config)
+        assert checkpoint_tuple.checkpoint["channel_values"]["count"] == 1

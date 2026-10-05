@@ -42,7 +42,7 @@ async def lifespan(app: FastAPI):
     configure_langfuse()
     # One checkpointer for the process's whole lifetime, matching
     # backend/retrieval/graph_client.py's Neo4j-driver singleton pattern --
-    # AsyncPostgresSaver's connection pool is scoped to this `async with`
+    # the checkpointer's connection pool is scoped to this `async with`
     # block (see backend/memory/checkpointer.py), so it can't be built fresh
     # per request without paying for a new pool every chat turn.
     async with get_checkpointer(os.environ["DATABASE_URL"]) as checkpointer:
