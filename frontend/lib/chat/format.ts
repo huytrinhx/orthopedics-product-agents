@@ -12,7 +12,7 @@ export const STATUS_LABELS: Record<string, string> = {
   resolve_skus: "Matching part numbers…",
   aggregate_facts: "Gathering catalog facts…",
   generate: "Writing answer…",
-  self_eval: "Checking answer quality…",
+  self_eval: "Checking facts…",
   request_clarification: "Preparing a follow-up question…",
   finalize: "Finishing up…",
 };

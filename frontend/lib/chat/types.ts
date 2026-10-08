@@ -56,7 +56,6 @@ export type ChatStreamEvent =
         message_id: string;
         answer: string;
         citations: ChatCitation[];
-        eval_scores: EvalScores | null;
       };
     }
   | { event: "error"; data: { message: string } };

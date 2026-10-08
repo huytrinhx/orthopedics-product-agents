@@ -12,6 +12,9 @@ from typing_extensions import (
 )
 
 
+# The four-axis rubric shared by agents/judge.py and human feedback
+# (feedback/models.py). No longer part of a chat turn's own state -- inline
+# self-eval checks facts deterministically now (agents/fact_check.py).
 class EvalScores(TypedDict, total=False):
     faithfulness: float
     relevance: float
@@ -35,6 +38,10 @@ class BaseAgentState(TypedDict):
     messages: Annotated[list, add_messages]
     query: str
     retrieved: list[RetrievedPassage]
-    eval_scores: EvalScores
+    # Set by every workflow's self_eval (agents/fact_check.py): what's
+    # wrong with the final draft, empty when it passed. Reset per turn by
+    # the API layer, since workflows read it to decide whether the next
+    # generate is a correction pass.
+    fact_check_issues: list[str]
     user_id: str
     thread_id: str

@@ -9,39 +9,49 @@ from unittest.mock import MagicMock, patch
 from observability.langfuse_setup import get_trace_url, new_callback_handler, score_trace
 
 
-def test_score_trace_writes_one_score_per_eval_axis_plus_loop_count():
+def test_score_trace_writes_the_fact_check_issue_count_plus_loop_count():
     with patch("observability.langfuse_setup.get_client") as get_client:
         client = MagicMock()
         get_client.return_value = client
 
         score_trace(
             "trace-123",
-            eval_scores={"faithfulness": 0.9, "relevance": 0.8},
+            fact_check_issues=["MSK42020 is Full Thread (FT) in the catalog", "Cited [x#0]"],
             loop_count=1,
         )
 
-    assert client.create_score.call_count == 3
+    assert client.create_score.call_count == 2
     calls_by_name = {call.kwargs["name"]: call.kwargs["value"] for call in client.create_score.call_args_list}
-    assert calls_by_name == {"faithfulness": 0.9, "relevance": 0.8, "loop_count": 1}
+    assert calls_by_name == {"fact_check_issues": 2, "loop_count": 1}
     for call in client.create_score.call_args_list:
         assert call.kwargs["trace_id"] == "trace-123"
         assert call.kwargs["data_type"] == "NUMERIC"
 
 
-def test_score_trace_omits_loop_count_score_when_none():
+def test_score_trace_records_a_clean_fact_check_as_zero():
     with patch("observability.langfuse_setup.get_client") as get_client:
         client = MagicMock()
         get_client.return_value = client
 
-        score_trace("trace-123", eval_scores={"faithfulness": 0.9}, loop_count=None)
+        score_trace("trace-123", fact_check_issues=[], loop_count=None)
 
-    names = {call.kwargs["name"] for call in client.create_score.call_args_list}
-    assert names == {"faithfulness"}
+    calls_by_name = {call.kwargs["name"]: call.kwargs["value"] for call in client.create_score.call_args_list}
+    assert calls_by_name == {"fact_check_issues": 0}
+
+
+def test_score_trace_omits_scores_it_has_no_value_for():
+    with patch("observability.langfuse_setup.get_client") as get_client:
+        client = MagicMock()
+        get_client.return_value = client
+
+        score_trace("trace-123", fact_check_issues=None, loop_count=None)
+
+    client.create_score.assert_not_called()
 
 
 def test_score_trace_noops_without_a_trace_id():
     with patch("observability.langfuse_setup.get_client") as get_client:
-        score_trace(None, eval_scores={"faithfulness": 0.9}, loop_count=2)
+        score_trace(None, fact_check_issues=[], loop_count=2)
     get_client.assert_not_called()
 
 

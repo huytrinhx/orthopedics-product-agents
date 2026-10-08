@@ -1,5 +1,5 @@
 """LLM/agent-specific tracing via Langfuse Cloud: prompts, token usage,
-per-node graph execution, and judge scores, all tied to one trace per chat
+per-node graph execution, and fact-check results, all tied to one trace per chat
 turn. Kept separate from otel_setup.py because it captures LLM content, not
 just service metrics -- otel_setup.py covers generic service health
 (request latency, error rates, dependency calls); this covers "what
@@ -25,8 +25,6 @@ import logging
 
 from langfuse import get_client
 from langfuse.langchain import CallbackHandler
-
-from agents.state import EvalScores
 
 logger = logging.getLogger(__name__)
 
@@ -64,24 +62,26 @@ def new_callback_handler(
     return handler, config_fragment
 
 
-def score_trace(trace_id: str | None, *, eval_scores: EvalScores | None, loop_count: int | None) -> None:
-    """Attaches the final answer's judge scores plus the workflow's loop
-    count to one trace, as separate NUMERIC scores so each is independently
-    filterable/sortable in Langfuse's UI (e.g. "traces where citation < 0.6").
+def score_trace(trace_id: str | None, *, fact_check_issues: list[str] | None, loop_count: int | None) -> None:
+    """Attaches the final answer's fact-check result (agents/fact_check.py)
+    plus the workflow's loop count to one trace, as separate NUMERIC scores
+    so each is independently filterable/sortable in Langfuse's UI (e.g.
+    "traces where fact_check_issues > 0" -- answers that shipped with a
+    problem still standing after their correction pass).
 
     Call this exactly once per trace, after the graph run finishes, with the
-    *final delivered* answer's scores -- not once per internal retry. A
-    workflow's own internal self-eval calls (e.g. deterministic.py's retry
-    loop) still show up automatically as their own generation spans via the
-    callback handler; this is the trace-level judgment, separate from that
-    detail.
+    *final delivered* answer's result -- not once per correction pass.
+    `fact_check_issues=None` (the graph never reached self_eval) records no
+    fact-check score at all, rather than a misleading 0.
     """
     if not trace_id:
         return
     try:
         client = get_client()
-        for axis, value in (eval_scores or {}).items():
-            client.create_score(trace_id=trace_id, name=axis, value=value, data_type="NUMERIC")
+        if fact_check_issues is not None:
+            client.create_score(
+                trace_id=trace_id, name="fact_check_issues", value=len(fact_check_issues), data_type="NUMERIC"
+            )
         if loop_count is not None:
             client.create_score(trace_id=trace_id, name="loop_count", value=loop_count, data_type="NUMERIC")
     except Exception:

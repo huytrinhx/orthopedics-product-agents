@@ -5,9 +5,9 @@ query -> detect_intent -> resolve_synonyms
            request_clarification, then back to resolve_synonyms)
        -> hybrid_retrieve -> rerank -> resolve_skus -> aggregate_facts
        -> generate -> self_eval
-       -> (if faithfulness/relevance score low and no clarification asked
-           yet this turn: request_clarification, then back to
-           resolve_synonyms)
+       -> (if the fact check found problems and no correction pass has
+           run yet this turn: generate again with the problems listed,
+           then self_eval again)
        -> finalize
 
 This is the baseline workflow every other architecture is compared against.
@@ -33,11 +33,11 @@ resolved_canonical_terms (resolve_synonyms' output), not the rep's raw
 wording alone -- see resolve_synonyms' own docstring for why canonical
 terms specifically.
 
-Three judgment-call exceptions to "no judgment calls," all using the same
+Two judgment-call exceptions to "no judgment calls," both using the same
 interrupt()/resume suspend pattern (ticket 09) so the rep answers directly
-rather than the graph silently guessing -- all three route through the
-same request_clarification node and share one clarification_rounds budget
-per turn (see its own docstring):
+rather than the graph silently guessing -- both share one
+clarification_rounds budget per turn (see request_clarification's own
+docstring):
 - detect_intent classifies which product system the query is about and,
   when it can't tell confidently, calls interrupt() to ask rather than
   letting hybrid_retrieve search unfiltered across every system's
@@ -47,11 +47,14 @@ per turn (see its own docstring):
   rep's own word is ambiguous, not just "the query mentions several
   things"), the graph asks which one they mean before ever running
   retrieval on a guess.
-- self_eval/_should_clarify (redesigned 2026-09-04, replacing an earlier
-  silent reformulate-and-retry loop): when the draft answer scores low on
-  faithfulness/relevance, the graph pauses and asks the rep a specific
-  clarifying question instead of having an LLM guess a better search query
-  with no new information.
+
+self_eval used to be a third: an LLM judge scored every draft, and a low
+faithfulness/relevance score paused the turn to ask the rep a clarifying
+question. It's now a deterministic fact check (agents/fact_check.py) with
+no model call -- a failed check means the model misstated something the
+sources already settle (a wrong thread type, an invented SKU, a citation
+to a passage it never saw), which the rep can't clarify, so it earns one
+correction pass with the specific problems listed instead of a question.
 
 hybrid_retrieve also hard-filters its retrieval pool by document type
 (2026-09-04) based on the classified question type (_DOCTYPE_PRIORITY,
@@ -82,7 +85,7 @@ from langgraph.types import interrupt
 from pydantic import BaseModel, Field
 
 from agents.citations import extract_citations
-from agents.judge import judge_answer
+from agents.fact_check import check_answer, format_issues_for_correction
 from agents.question_types import QUESTION_TYPE_NAMES, QUESTION_TYPES
 from agents.registry import register
 from agents.state import BaseAgentState, RetrievedPassage
@@ -100,10 +103,11 @@ MAX_TERMS_PER_TURN = 40
 
 logger = logging.getLogger(__name__)
 
-# Below this on faithfulness or relevance, the answer is worth pausing to
-# ask the rep a clarifying question rather than shipping as-is -- see
-# request_clarification/_should_clarify below.
-CLARIFICATION_SCORE_THRESHOLD = 0.6
+# How many times per turn a draft that failed self_eval's fact check gets
+# regenerated with its problems listed -- see _should_correct. One pass
+# fixes what it can; a draft still failing after that ships as-is rather
+# than looping.
+MAX_CORRECTION_ROUNDS = 1
 # hybrid_retrieve pulls a wider candidate pool than actually goes to
 # generation -- rerank (a BM25 keyword-relevance pass over that pool, plus
 # a doctype-priority bonus -- no LLM call, see rerank's own docstring) is
@@ -120,8 +124,7 @@ _BM25_B = 0.75
 
 class DeterministicState(BaseAgentState, total=False):
     # `query` (from BaseAgentState) is always the user's actual question,
-    # verbatim -- self_eval judges relevance against it and generate echoes
-    # it back, so nothing past detect_intent may touch it. `search_query` is
+    # verbatim -- generate echoes it back, so nothing past detect_intent may touch it. `search_query` is
     # what retrieval actually uses; it starts equal to `query` and is the
     # only thing request_clarification rewrites (appending the rep's reply).
     # Both search_query and the clarification fields below are reset per
@@ -148,13 +151,17 @@ class DeterministicState(BaseAgentState, total=False):
     aggregated_facts: str
     answer: str
     citations: list[str]
-    # Set by request_clarification (2026-09-04) when self_eval scores the
-    # draft answer low -- clarification_reply is the rep's answer to the
-    # question it asked (folded into generate's prompt so the model can
-    # actually use it, not just into search_query for retrieval);
-    # clarification_rounds caps this to once per turn -- see _should_clarify.
+    # Set by request_clarification when resolve_synonyms finds an ambiguous
+    # term -- clarification_reply is the rep's answer to the question it
+    # asked (folded into generate's prompt so the model can actually use
+    # it, not just into search_query for retrieval); clarification_rounds
+    # caps this to once per turn -- see _should_clarify_synonyms.
     clarification_reply: str | None
     clarification_rounds: int
+    # How many fact-check correction passes generate has run this turn --
+    # see _should_correct. Reset per turn by the API layer like the
+    # clarification fields above.
+    correction_rounds: int
     # Set by detect_intent, the graph's entry node. resolved_system_id is
     # what hybrid_retrieve actually filters on; resolved_system is kept
     # alongside it (rather than looked up again) for the done/eval payload
@@ -770,9 +777,10 @@ async def generate(state: DeterministicState) -> dict:
     # version so the model sees the retrieved passages, while keeping every
     # earlier turn as real conversational history. This is a *draft*: on a
     # clarification round, generate runs again with an enriched search
-    # (see request_clarification), and only the version self_eval accepts
-    # should become permanent conversation history -- see finalize below,
-    # not this node, for the actual `messages` append.
+    # (see request_clarification), and on a correction pass it runs again
+    # with self_eval's fact-check issues -- only the final version should
+    # become permanent conversation history -- see finalize below, not
+    # this node, for the actual `messages` append.
     history = state["messages"][:-1]
     clarification_reply = state.get("clarification_reply")
     clarification_note = (
@@ -788,75 +796,46 @@ async def generate(state: DeterministicState) -> dict:
     system_prompt = _GENERATE_SYSTEM_PROMPT
     if "technique_procedural" in (state.get("resolved_question_type") or []):
         system_prompt += _PROCEDURAL_FORMAT_ADDENDUM
-    response = await model.ainvoke(
-        [SystemMessage(content=system_prompt), *history, augmented_question]
-    )
+    prompt = [SystemMessage(content=system_prompt), *history, augmented_question]
+    # A correction pass (routed here by _should_correct): show the model
+    # its own failed draft and exactly what the fact check found, rather
+    # than re-asking from scratch and hoping it lands differently.
+    issues = state.get("fact_check_issues") or []
+    update: dict = {}
+    if issues:
+        prompt += [AIMessage(content=state["answer"]), HumanMessage(content=format_issues_for_correction(issues))]
+        update["correction_rounds"] = state.get("correction_rounds", 0) + 1
+    response = await model.ainvoke(prompt)
     answer = response.content
-    return {"answer": answer, "citations": extract_citations(answer)}
+    return {**update, "answer": answer, "citations": extract_citations(answer)}
 
 
 async def self_eval(state: DeterministicState) -> dict:
-    """Judges the draft answer against everything generate was actually
-    allowed to use -- the reranked passages *and* the aggregated catalog
-    facts. Omitting the latter was a real bug caught in the ticket 20/21/22
-    eval run: a claim correctly grounded in aggregated_facts but absent
-    from (or contradicting) a vector passage -- exactly the graph-grounding
-    ticket 20 exists for -- read as "unfaithful" to a judge that only ever
-    saw the passages, penalizing the fix it was meant to verify.
+    """Fact-checks the draft (agents/fact_check.py) against everything
+    generate was actually allowed to use -- the reranked passages *and* the
+    resolved catalog Part records. Both matter for the same reason they
+    did when this was an LLM judge (ticket 20/21/22's eval run): a claim
+    correctly grounded in the catalog but absent from every passage is the
+    graph-grounding ticket 20 exists for, not an unsupported claim.
     """
-    passages = list(state.get("reranked") or [])
-    aggregated_facts = state.get("aggregated_facts")
-    if aggregated_facts:
-        passages.append(
-            {
-                "chunk_id": "catalog-facts",
-                "document_id": "catalog",
-                "text": aggregated_facts,
-                "score": 1.0,
-                "document_type": None,
-            }
-        )
-    scores = await judge_answer(state["query"], passages, state["answer"])
-    return {"eval_scores": scores}
-
-
-class _ClarifyingQuestion(BaseModel):
-    question: str = Field(
-        description=(
-            "One short, specific question to ask the sales rep that would "
-            "supply whatever information is missing or ambiguous."
-        )
+    passages = state.get("reranked") or []
+    issues = check_answer(
+        state["answer"],
+        citation_ids={passage["chunk_id"] for passage in passages},
+        source_text="\n".join(
+            [*(passage["text"] for passage in passages), state.get("aggregated_facts") or ""]
+        ),
+        parts=state.get("resolved_parts") or [],
     )
-
-
-async def _generate_clarifying_question(query: str, draft_answer: str) -> str:
-    model = get_chat_model().with_structured_output(_ClarifyingQuestion)
-    result = await model.ainvoke(
-        [
-            SystemMessage(
-                content=(
-                    "The draft answer below wasn't well-supported by the "
-                    "available product documentation/catalog data. Write one "
-                    "short, specific question to ask the sales rep that would "
-                    "supply whatever's missing or ambiguous -- e.g. naming a "
-                    "system, procedure, or part detail the original question "
-                    "left unclear. Don't mention scoring, confidence, or "
-                    "documentation; just ask the question directly, the way "
-                    "a knowledgeable colleague would."
-                )
-            ),
-            {"role": "user", "content": f"Rep's question: {query}\n\nDraft answer: {draft_answer}"},
-        ]
-    )
-    return result.question
+    return {"fact_check_issues": issues}
 
 
 def _synonym_ambiguity_question(ambiguity: dict[str, list[str]]) -> str:
     """Builds the clarifying question directly from what resolve_synonyms
-    already found -- no LLM call needed, unlike the self_eval-triggered
-    path below: we already know exactly which word is ambiguous and
-    exactly what it could mean, so asking a model to guess a question would
-    only add latency and a chance of asking something vaguer than this.
+    already found -- no LLM call needed: we already know exactly which word
+    is ambiguous and exactly what it could mean, so asking a model to guess
+    a question would only add latency and a chance of asking something
+    vaguer than this.
     """
     # No .capitalize() -- it lowercases everything *after* the first
     # letter too, which would mangle a canonical term with real uppercase
@@ -867,43 +846,27 @@ def _synonym_ambiguity_question(ambiguity: dict[str, list[str]]) -> str:
 
 
 async def request_clarification(state: DeterministicState) -> dict:
-    """Replaces an earlier silent reformulate-and-retry loop (removed
-    2026-09-04): a weak self_eval score used to trigger an LLM-guessed
-    query rewrite with no new information, which could still miss and ship
-    a low-confidence answer as though it were settled -- and, per the
-    2026-09-03/04 eval reflections, the extra pass-per-retry pushed a full
-    2-retry run's node count past LangGraph's default recursion_limit.
+    """Pauses via the same interrupt()/resume mechanic detect_intent uses
+    (ticket 09) to ask the rep which meaning of an ambiguous term they
+    meant, exactly once per turn (clarification_rounds caps it -- see
+    _should_clarify_synonyms) rather than the graph guessing: their reply
+    is real new information, not a model's guess, and it's threaded into
+    both search_query (so retrieval can use it) and clarification_reply (so
+    generate's prompt can reason over it directly, not just hope better
+    retrieval surfaces it).
 
-    Now the graph pauses via the same interrupt()/resume mechanic
-    detect_intent uses (ticket 09) and asks the rep directly, exactly once
-    per turn (clarification_rounds caps it -- see _should_clarify /
-    _should_clarify_synonyms, both routing here) rather than the graph
-    guessing: their reply is real new information, not a model's guess,
-    and it's threaded into both search_query (so the retry's retrieval can
-    use it) and clarification_reply (so generate's prompt can reason over
-    it directly, not just hope better retrieval surfaces it).
-
-    Two distinct callers, two distinct question sources (2026-09-05):
-    resolve_synonyms/_should_clarify_synonyms routes here BEFORE retrieval
-    or generate have run at all (synonym_ambiguity is set, state has no
-    answer yet) -- self_eval/_should_clarify routes here AFTER a full pass
-    produced a weak draft answer (synonym_ambiguity is absent, state.answer
-    is the thing to react to). Checking which is set is what picks the
-    right question source below; a state carrying neither at once would be
-    a graph-wiring bug, not a real turn shape.
+    resolve_synonyms/_should_clarify_synonyms is the only caller, and it
+    routes here BEFORE retrieval or generate have run at all. (self_eval
+    also routed here until it became a deterministic fact check -- see the
+    module docstring for why a failed check now earns a correction pass
+    instead of a question.)
 
     Like detect_intent's own interrupt() call, everything above the
     interrupt() line below re-runs on resume (LangGraph's interrupt/resume
-    contract replays the node from its start) -- an extra clarifying-
-    question LLM call on resume for the self_eval path, same acceptable
-    cost detect_intent already pays for its own classification call (the
-    synonym-ambiguity path has no LLM call to repeat either way).
+    contract replays the node from its start) -- harmless here, since
+    building the question is a pure string format.
     """
-    ambiguity = state.get("synonym_ambiguity")
-    if ambiguity:
-        question = _synonym_ambiguity_question(ambiguity)
-    else:
-        question = await _generate_clarifying_question(state["query"], state.get("answer", ""))
+    question = _synonym_ambiguity_question(state.get("synonym_ambiguity") or {})
     reply = interrupt({"question": question, "options": []})
     search_query = f"{state.get('search_query') or state['query']} {reply}"
     return {
@@ -917,8 +880,9 @@ async def request_clarification(state: DeterministicState) -> dict:
 async def finalize(state: DeterministicState) -> dict:
     """Commits the accepted answer to permanent conversation history. A
     kept-separate step (not done in generate) so a discarded draft from an
-    earlier retry attempt never ends up alongside the accepted one -- only
-    the answer self_eval actually accepted should shape future turns.
+    earlier attempt (a pre-clarification or pre-correction draft) never
+    ends up alongside the final one -- only the answer actually shipped
+    should shape future turns.
 
     Citations ride along in additional_kwargs (a standard AIMessage field,
     checkpointed like any other) rather than a separate state channel or
@@ -938,15 +902,9 @@ async def finalize(state: DeterministicState) -> dict:
     }
 
 
-def _should_clarify(state: DeterministicState) -> Literal["request_clarification", "finalize"]:
-    scores = state.get("eval_scores") or {}
-    rounds = state.get("clarification_rounds", 0)
-    scored_low = (
-        scores.get("faithfulness", 1.0) < CLARIFICATION_SCORE_THRESHOLD
-        or scores.get("relevance", 1.0) < CLARIFICATION_SCORE_THRESHOLD
-    )
-    if scored_low and rounds < 1:
-        return "request_clarification"
+def _should_correct(state: DeterministicState) -> Literal["generate", "finalize"]:
+    if state.get("fact_check_issues") and state.get("correction_rounds", 0) < MAX_CORRECTION_ROUNDS:
+        return "generate"
     return "finalize"
 
 
@@ -971,7 +929,7 @@ def build_graph(checkpointer):
     graph.add_edge("resolve_skus", "aggregate_facts")
     graph.add_edge("aggregate_facts", "generate")
     graph.add_edge("generate", "self_eval")
-    graph.add_conditional_edges("self_eval", _should_clarify)
+    graph.add_conditional_edges("self_eval", _should_correct)
     graph.add_edge("request_clarification", "resolve_synonyms")
     graph.add_edge("finalize", END)
 

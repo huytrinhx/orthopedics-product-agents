@@ -18,11 +18,14 @@ Agentic retrieval over an orthopedics product/clinical knowledge base
    similarity; the keyword leg is Postgres full-text search (`tsvector`) —
    both live in `backend/retrieval/vector_store.py`, combined every
    workflow.
-4. **Self-eval & feedback share one rubric.** `backend/agents/judge.py`
-   scores faithfulness/relevance/style/citation and is used by (a) an inline
-   self-eval node driving retry loops, (b) the offline eval harness against
-   golden datasets, and (c) — via the same schema — the human feedback UI, so
-   human and automated scores are directly comparable.
+4. **Offline evals & feedback share one rubric; inline self-eval checks
+   facts.** `backend/agents/judge.py` scores faithfulness/relevance/style/
+   citation for (a) the offline eval harness against golden datasets and
+   (b) — via the same schema — the human feedback UI, so human and automated
+   scores are directly comparable. Each chat turn's own self-eval node runs
+   `backend/agents/fact_check.py` instead: deterministic citation/SKU/
+   thread-type checks against the turn's sources, with one correction pass
+   on failure and no extra model call on success.
 5. **Workflow registry.** Each agent architecture (deterministic pipeline,
    ReAct agent, supervisor/multi-agent) is a separate LangGraph graph
    registered in `backend/agents/registry.py` under a shared state schema
@@ -66,7 +69,8 @@ backend/            FastAPI + LangGraph service (Python)
     workflows/       one module per agent architecture, self-registers via agents/registry.py
     tools/           retrieval tools shared across workflows
     state.py          shared LangGraph state schema
-    judge.py          shared 4-axis LLM-judge
+    judge.py          shared 4-axis LLM-judge (offline evals + feedback)
+    fact_check.py     deterministic per-turn answer checks (self_eval)
     registry.py        workflow name -> compiled graph
   config/             OpenAI chat/embedding client factories
   retrieval/          Postgres/pgvector + Neo4j/AuraDB clients

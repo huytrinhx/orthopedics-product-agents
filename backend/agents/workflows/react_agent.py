@@ -1,8 +1,11 @@
 """ReAct-style agentic workflow: the model chooses which retrieval tools to
-call (vector_search, part_lookup, graph_query, synonym_resolve) and when to
-stop, looping until it answers directly or a step budget is hit.
+call (vector_search, document_lookup, part_lookup, graph_query,
+synonym_resolve) and when to stop, looping until it answers directly or a
+step budget is hit.
 
-query -> detect_intent -> generate <-> tools -> self_eval -> finalize
+query -> detect_intent -> generate <-> tools -> self_eval
+      -> (fact check failed, no correction pass yet: back to generate)
+      -> finalize
 
 Ticket 23, built 2026-09-03 after the grilling session that redirected the
 original "build react_agent" ask into evolving `deterministic` instead
@@ -36,6 +39,14 @@ GET /chat/threads/{id} (chat.py) renders every message in `messages` as a
 chat bubble; dumping raw tool output or an empty tool-calling turn in there
 would visibly break the transcript. finalize below is the only place that
 appends to the real `messages`, matching deterministic.py's own convention.
+
+self_eval is the same deterministic fact check deterministic.py runs
+(agents/fact_check.py) -- no LLM judge call per turn. Its sources are this
+turn's tool results: every Part record (anything carrying a `sku`) and
+every passage citation id any tool returned. A failed check appends the
+problems to the scratchpad as a correction request and routes back to
+generate once, where the model can fix the draft directly or call more
+tools if budget remains.
 """
 import asyncio
 import json
@@ -46,9 +57,10 @@ from langgraph.graph import END, StateGraph
 from langgraph.graph.message import add_messages
 
 from agents.citations import extract_citations
-from agents.judge import judge_answer
+from agents.fact_check import check_answer, format_issues_for_correction
 from agents.registry import register
 from agents.state import BaseAgentState
+from agents.tools.document_lookup import document_lookup
 from agents.tools.graph_query import graph_query
 from agents.tools.part_lookup import part_lookup
 from agents.tools.synonym_resolve import synonym_resolve
@@ -61,8 +73,10 @@ from config.llm_clients import get_chat_model
 # to find the capability ceiling, not ship a cost-optimized default. Counts
 # individual tool calls, not reasoning rounds (a round can request several).
 MAX_TOOL_CALLS = 8
+# Same bound and meaning as deterministic.py's -- see its _should_correct.
+MAX_CORRECTION_ROUNDS = 1
 
-_TOOLS = [vector_search, part_lookup, graph_query, synonym_resolve]
+_TOOLS = [vector_search, document_lookup, part_lookup, graph_query, synonym_resolve]
 _TOOLS_BY_NAME = {tool.name: tool for tool in _TOOLS}
 
 _AGENT_SYSTEM_PROMPT = (
@@ -71,14 +85,22 @@ _AGENT_SYSTEM_PROMPT = (
     "you have enough to answer -- you are not required to call every tool, "
     "or any tool at all, if the question doesn't need one.\n\n"
     "TOOLS\n"
-    "- vector_search(query, top_k): full-text/semantic search over ingested "
+    "- vector_search(query, top_k, document_ids): full-text/semantic search over ingested "
     "product documents (brochures, surgical technique guides, inventory "
     "forms). Good for prose, procedure narrative and step order, and "
     "anything you don't already have a specific SKU or term for -- but not "
     "a substitute for part_lookup on specific part facts (thread type, "
     "material, exact SKU) even within a procedural question. A passage "
     "mentioning a screw size is not confirmation of that screw's thread "
-    "type; look that up.\n"
+    "type; look that up. Pass document_ids to search inside specific "
+    "documents only.\n"
+    "- document_lookup(name): finds documents by their name or title (e.g. "
+    "\"MIS Inventory Control Form\", \"REFLEX surgical technique\") -- fast "
+    "word matching on filenames and tags, no content search. Use it first "
+    "whenever the rep names or asks for a specific document; it returns each "
+    "match's document_id and opening chunks with citation ids. To answer "
+    "from inside that document, call vector_search with its document_id in "
+    "document_ids.\n"
     "- part_lookup(term, product_family): resolves a SKU or a word from a "
     "part's description directly to real catalog Part records (sku, "
     "description, thread, guidewire_spec, driver_spec, head_style, "
@@ -145,6 +167,7 @@ class ReactAgentState(BaseAgentState, total=False):
     # except by finalize appending exactly one clean AIMessage.
     scratchpad: Annotated[list, add_messages]
     tool_calls_made: int
+    correction_rounds: int
     answer: str
     citations: list[str]
 
@@ -169,12 +192,22 @@ async def generate(state: ReactAgentState) -> dict:
             HumanMessage(content=state["query"]),
         ]
 
+    # A correction pass (routed here by _should_correct): the scratchpad
+    # ends in the draft self_eval rejected, so hand the model what the fact
+    # check found as the next message in the same exchange.
+    issues = state.get("fact_check_issues") or []
+    correction: list = []
+    update: dict = {}
+    if issues and existing and isinstance(existing[-1], AIMessage) and not existing[-1].tool_calls:
+        correction = [HumanMessage(content=format_issues_for_correction(issues))]
+        update["correction_rounds"] = state.get("correction_rounds", 0) + 1
+
     model = get_chat_model()
     budget_left = state.get("tool_calls_made", 0) < MAX_TOOL_CALLS
     bound = model.bind_tools(_TOOLS) if budget_left else model
-    response = await bound.ainvoke(existing + seed)
+    response = await bound.ainvoke(existing + seed + correction)
 
-    return {"scratchpad": [*seed, response]}
+    return {**update, "scratchpad": [*seed, *correction, response]}
 
 
 async def call_tools(state: ReactAgentState) -> dict:
@@ -192,7 +225,7 @@ async def call_tools(state: ReactAgentState) -> dict:
 
     results = await asyncio.gather(*(run_one(call) for call in tool_calls))
     tool_messages = [
-        ToolMessage(content=json.dumps(result, default=str), tool_call_id=call["id"])
+        ToolMessage(content=json.dumps(result, default=str), tool_call_id=call["id"], name=call["name"])
         for call, result in zip(tool_calls, results)
     ]
     return {
@@ -208,34 +241,48 @@ def _should_call_tools(state: ReactAgentState) -> Literal["tools", "self_eval"]:
     return "self_eval"
 
 
-def _passages_from_scratchpad(scratchpad: list) -> list[dict]:
-    """Synthesizes RetrievedPassage-shaped dicts from this turn's tool
-    results so self_eval has something concrete to judge faithfulness
-    against -- deterministic.py's judge_answer call expects that shape, and
-    a ReAct loop's "context" is whatever its tool calls actually returned,
-    not a fixed `reranked` list. Tool output is truncated defensively
-    (arbitrary tool results, unlike deterministic's bounded passage text).
+def _collect_sources(value, parts: list[dict], citation_ids: set[str]) -> None:
+    """Walks one decoded tool result for anything the fact check can verify
+    against: a dict with a `sku` is a catalog Part record (part_lookup's
+    results, graph_query's related_properties), and a `citation` is a
+    passage id the model was allowed to cite (vector_search's results,
+    document_lookup's opening_chunks). Walking the shape generically keeps
+    this from needing a per-tool case as tools are added.
     """
-    passages = []
-    for index, message in enumerate(scratchpad):
-        if isinstance(message, ToolMessage):
-            passages.append(
-                {
-                    "chunk_id": f"tool-call-{index}",
-                    "document_id": "tool-result",
-                    "text": str(message.content)[:4000],
-                    "score": 1.0,
-                    "document_type": None,
-                }
-            )
-    return passages
+    if isinstance(value, dict):
+        if value.get("sku"):
+            parts.append(value)
+        if isinstance(value.get("citation"), str):
+            citation_ids.add(value["citation"])
+        for nested in value.values():
+            _collect_sources(nested, parts, citation_ids)
+    elif isinstance(value, list):
+        for nested in value:
+            _collect_sources(nested, parts, citation_ids)
 
 
 async def self_eval(state: ReactAgentState) -> dict:
-    passages = _passages_from_scratchpad(state.get("scratchpad") or [])
-    answer = state["scratchpad"][-1].content
-    scores = await judge_answer(state["query"], passages, answer)
-    return {"eval_scores": scores}
+    tool_messages = [message for message in state.get("scratchpad") or [] if isinstance(message, ToolMessage)]
+    parts: list[dict] = []
+    citation_ids: set[str] = set()
+    for message in tool_messages:
+        try:
+            _collect_sources(json.loads(message.content), parts, citation_ids)
+        except (TypeError, ValueError):
+            continue
+    issues = check_answer(
+        state["scratchpad"][-1].content,
+        citation_ids=citation_ids,
+        source_text="\n".join(str(message.content) for message in tool_messages),
+        parts=parts,
+    )
+    return {"fact_check_issues": issues}
+
+
+def _should_correct(state: ReactAgentState) -> Literal["generate", "finalize"]:
+    if state.get("fact_check_issues") and state.get("correction_rounds", 0) < MAX_CORRECTION_ROUNDS:
+        return "generate"
+    return "finalize"
 
 
 async def finalize(state: ReactAgentState) -> dict:
@@ -265,7 +312,7 @@ def build_graph(checkpointer):
     graph.add_edge("detect_intent", "generate")
     graph.add_conditional_edges("generate", _should_call_tools)
     graph.add_edge("tools", "generate")
-    graph.add_edge("self_eval", "finalize")
+    graph.add_conditional_edges("self_eval", _should_correct)
     graph.add_edge("finalize", END)
 
     return graph.compile(checkpointer=checkpointer)

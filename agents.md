@@ -38,11 +38,21 @@ picking this repo up cold, read this before making structural changes.
 - **Neo4j is AuraDB in production, Docker locally** — this is independent
   of the Railway/AKS decision above; AuraDB is Neo4j's own managed control
   plane either way, not something provisioned through app infra.
-- **Judge rubric is shared across three call sites.** `backend/agents/judge.py`
-  scores faithfulness/relevance/style/citation and is used by the inline
-  self-eval retry loop, the offline eval harness (`backend/evals/harness.py`),
-  and the human feedback UI — on the same schema, so human and automated
-  scores stay directly comparable. Don't fork the rubric per call site.
+- **Judge rubric is shared between offline evals and human feedback.**
+  `backend/agents/judge.py` scores faithfulness/relevance/style/citation for
+  the offline eval harness (`backend/evals/harness.py`) and the human
+  feedback UI — on the same schema, so human and automated scores stay
+  directly comparable. Don't fork the rubric per call site.
+- **Inline self-eval is a deterministic fact check, not the judge.** Every
+  workflow's `self_eval` node runs `backend/agents/fact_check.py` — citation
+  ids, SKUs, and thread types checked against the turn's own retrieved
+  passages and catalog Part records, no model call — and a failed check
+  earns one correction pass (`MAX_CORRECTION_ROUNDS`) with the specific
+  problems listed. This replaced a per-turn LLM-judge call: it costs nothing
+  on a clean answer and says exactly what's wrong on a bad one. It's a
+  separate signal from the judge rubric, not a fork of it; extend it with
+  new checks that can be proven from the sources, and keep anything that
+  needs judgment (style, relevance) in the judge.
 - **Workflow registry pattern.** Each agent architecture is its own
   LangGraph graph registered in `backend/agents/registry.py` under a shared
   state schema (`agents/state.py`) — the API and eval harness select by
