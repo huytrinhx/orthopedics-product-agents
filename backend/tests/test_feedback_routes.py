@@ -21,7 +21,7 @@ from api.main import app
 from chat_threads.repository import create_thread
 from feedback.repository import (
     get_feedback_for_thread,
-    list_flagged_feedback,
+    list_all_feedback,
     set_resolved,
     upsert_feedback,
 )
@@ -189,10 +189,10 @@ async def test_submit_feedback_accepts_a_flag_or_comment_with_no_scores_at_all()
     assert body["comment"] == "What can I do better? More citations please."
 
 
-def test_flagged_list_requires_admin():
+def test_feedback_list_requires_admin():
     with TestClient(app) as client:
         token = _signup(client)["access_token"]
-        response = client.get("/feedback/flagged", headers={"Authorization": f"Bearer {token}"})
+        response = client.get("/feedback/", headers={"Authorization": f"Bearer {token}"})
     assert response.status_code == 403
 
 
@@ -247,7 +247,7 @@ async def test_resolved_toggle_updates_the_row_and_survives_a_feedback_resubmit(
 
 
 @needs_openai_key
-def test_flagged_feedback_lists_the_actual_question_and_answer_text(monkeypatch):
+def test_feedback_list_includes_question_answer_and_submitter_email(monkeypatch):
     with TestClient(app) as client:
         admin_email = _unique_email()
         monkeypatch.setenv("ADMIN_EMAILS", admin_email)
@@ -256,8 +256,8 @@ def test_flagged_feedback_lists_the_actual_question_and_answer_text(monkeypatch)
         ).json()["access_token"]
         admin_headers = {"Authorization": f"Bearer {admin_token}"}
 
-        rep_token = _signup(client)["access_token"]
-        rep_headers = {"Authorization": f"Bearer {rep_token}"}
+        rep = _signup(client)
+        rep_headers = {"Authorization": f"Bearer {rep['access_token']}"}
 
         question = "What torque should I use on a REFLEX HYBRID locking screw?"
         stream = client.post(
@@ -274,16 +274,17 @@ def test_flagged_feedback_lists_the_actual_question_and_answer_text(monkeypatch)
             json={"thread_id": thread_id, "message_id": message_id, "flagged": True, "scores": {}},
         )
 
-        flagged = client.get("/feedback/flagged", headers=admin_headers).json()
+        listing = client.get("/feedback/", headers=admin_headers).json()
 
-    row = next(flagged_entry for flagged_entry in flagged if flagged_entry["message_id"] == message_id)
+    row = next(entry for entry in listing if entry["message_id"] == message_id)
     assert row["question"] == question
     assert row["answer"] == answer
     assert row["flagged"] is True
     assert row["resolved"] is False
+    assert row["submitted_by_email"] == rep["user"]["email"]
 
 
-def test_delete_flagged_requires_admin():
+def test_delete_feedback_requires_admin():
     with TestClient(app) as client:
         token = _signup(client)["access_token"]
         response = client.delete(
@@ -338,45 +339,68 @@ async def test_delete_removes_the_feedback_row(monkeypatch):
     assert message_id not in remaining
 
 
-async def test_flagged_list_sorts_resolved_items_last():
+async def _feedback(message_id: str, thread_id: str, user_id: uuid.UUID, flagged: bool) -> None:
+    await upsert_feedback(
+        message_id=message_id,
+        thread_id=thread_id,
+        flagged=flagged,
+        faithfulness=None,
+        relevance=None,
+        style=None,
+        citation=None,
+        comment=None,
+        submitted_by=user_id,
+    )
+
+
+async def test_feedback_list_includes_unflagged_rows_newest_first_regardless_of_resolved():
     """Repository-level, not through the route (which needs a real
     checkpointer-backed thread to resolve question/answer text) --
-    list_flagged_feedback's ORDER BY is what implements "resolved sinks to
-    the bottom," so that's what this actually needs to exercise."""
+    list_all_feedback's query is what implements "every row, flagged or
+    not, plain newest-first," so that's what this actually needs to
+    exercise. An older resolved row must not be pushed to the bottom any
+    more, and the submitter's email comes back alongside each record."""
     with TestClient(app) as client:
         user = _signup(client)
     user_id = uuid.UUID(user["user"]["id"])
     thread_id = f"{user_id}:{uuid.uuid4().hex}"
     await create_thread(thread_id, user_id, "test thread")
 
-    older_resolved = str(uuid.uuid4())
-    newer_unresolved = str(uuid.uuid4())
-    await upsert_feedback(
-        message_id=older_resolved,
-        thread_id=thread_id,
-        flagged=True,
-        faithfulness=None,
-        relevance=None,
-        style=None,
-        citation=None,
-        comment=None,
-        submitted_by=user_id,
-    )
-    await set_resolved(older_resolved, True)
-    await upsert_feedback(
-        message_id=newer_unresolved,
-        thread_id=thread_id,
-        flagged=True,
-        faithfulness=None,
-        relevance=None,
-        style=None,
-        citation=None,
-        comment=None,
-        submitted_by=user_id,
-    )
+    oldest_unflagged = str(uuid.uuid4())
+    middle_unresolved = str(uuid.uuid4())
+    newest_resolved = str(uuid.uuid4())
+    await _feedback(oldest_unflagged, thread_id, user_id, flagged=False)
+    await _feedback(middle_unresolved, thread_id, user_id, flagged=True)
+    await _feedback(newest_resolved, thread_id, user_id, flagged=True)
+    await set_resolved(newest_resolved, True)
 
-    records = await list_flagged_feedback()
-    ids = [record.message_id for record in records]
-    # Resolved sorts after unresolved regardless of recency, even though
-    # older_resolved was created first.
-    assert ids.index(newer_unresolved) < ids.index(older_resolved)
+    listing = await list_all_feedback()
+    ids = [record.message_id for record, _ in listing]
+    assert ids.index(newest_resolved) < ids.index(middle_unresolved) < ids.index(oldest_unflagged)
+    emails = {record.message_id: email for record, email in listing}
+    assert emails[oldest_unflagged] == user["user"]["email"]
+
+
+async def test_resolving_an_unflagged_row_is_rejected(monkeypatch):
+    """"Resolved" means "the flagged issue was confirmed fixed" -- a plain
+    score/comment row has nothing to resolve, so the toggle 404s rather
+    than silently setting a flag the UI never shows."""
+    with TestClient(app) as client:
+        user = _signup(client)
+        user_id = uuid.UUID(user["user"]["id"])
+        thread_id = f"{user_id}:{uuid.uuid4().hex}"
+        message_id = str(uuid.uuid4())
+        await create_thread(thread_id, user_id, "test thread")
+        await _feedback(message_id, thread_id, user_id, flagged=False)
+
+        admin_email = _unique_email()
+        monkeypatch.setenv("ADMIN_EMAILS", admin_email)
+        admin_token = client.post(
+            "/auth/signup", json={"email": admin_email, "password": "correct horse battery"}
+        ).json()["access_token"]
+        response = client.patch(
+            f"/feedback/{message_id}/resolved",
+            headers={"Authorization": f"Bearer {admin_token}"},
+            json={"resolved": True},
+        )
+    assert response.status_code == 404

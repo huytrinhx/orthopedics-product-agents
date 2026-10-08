@@ -1148,135 +1148,83 @@ tr:last-child td {
 
 /* ---------------- Eval tab (ticket 15) ---------------- */
 
-.flagged-list {
+.eval-filter {
   display: flex;
-  flex-direction: column;
-  gap: 20px;
-}
-
-.flagged-item {
-  border: 1px solid var(--steel-line);
-  border-radius: 4px;
-  padding: 20px;
-  background: var(--surface);
-}
-
-.flagged-item-resolved {
-  opacity: 0.65;
-}
-
-.flagged-item-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  gap: 16px;
-}
-
-.flagged-item-qa {
-  flex: 1;
-  min-width: 0;
-}
-
-.flagged-item-question {
-  font-weight: 600;
-  margin: 0 0 6px;
-}
-
-.flagged-item-answer {
-  color: var(--ink-soft);
-  margin: 0;
-  font-size: 0.92rem;
-  white-space: pre-wrap;
-}
-
-.flagged-item-head-actions {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  flex: 0 0 auto;
-}
-
-.flagged-resolved-toggle {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 0.85rem;
-  color: var(--ink-soft);
-  white-space: nowrap;
-}
-
-.flagged-delete {
-  color: var(--danger);
-  white-space: nowrap;
-}
-
-.flagged-delete-confirm {
-  display: flex;
-  align-items: center;
   gap: 8px;
-  font-size: 0.82rem;
-  color: var(--ink-soft);
+  margin-bottom: 20px;
+}
+
+.eval-row {
+  cursor: pointer;
+}
+
+.eval-row:hover td,
+.eval-row-expanded td {
+  background: var(--diffuser-dim);
+}
+
+.eval-row-resolved td {
+  color: var(--steel);
+}
+
+.eval-cell-nowrap {
   white-space: nowrap;
 }
 
-.flagged-item-meta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 14px;
-  margin-top: 14px;
-  font-family: var(--font-mono);
-  font-size: 0.78rem;
-  color: var(--steel);
+.eval-cell-question {
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.flagged-item-comment {
-  font-family: var(--font-body);
+.eval-cell-score {
+  font-family: var(--font-mono);
+  text-align: right;
+}
+
+.eval-cell-comment {
+  max-width: 260px;
   font-style: italic;
+  color: var(--ink-soft);
 }
 
-.flagged-item-actions {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-top: 16px;
+.eval-cell-actions {
+  white-space: nowrap;
 }
 
-.flagged-workflow-select {
-  font-family: var(--font-mono);
-  font-size: 0.82rem;
-  padding: 6px 10px;
-  border: 1px solid var(--steel-line);
-  border-radius: 3px;
+.eval-cell-actions .btn-text + .btn-text,
+.eval-cell-actions .btn-text + .eval-delete-confirm {
+  margin-left: 12px;
+}
+
+.eval-delete {
+  color: var(--danger);
+}
+
+.eval-delete-confirm .btn-text + .btn-text {
+  margin-left: 8px;
+}
+
+.eval-detail td {
   background: var(--surface);
+  padding: 16px 20px 20px;
 }
 
-.rerun-attempt {
-  margin-top: 14px;
-  padding-top: 14px;
-  border-top: 1px dashed var(--steel-line);
-}
-
-.rerun-attempt-label {
-  display: block;
+.eval-detail-label {
   font-family: var(--font-mono);
-  font-size: 0.78rem;
+  font-size: 0.7rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
   color: var(--steel);
-  margin-bottom: 10px;
+  margin: 12px 0 4px;
 }
 
-.rerun-history {
-  display: flex;
-  flex-direction: column;
+.eval-detail-label:first-child {
+  margin-top: 0;
 }
 
-.rerun-conversation {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.rerun-reply-row.chat-input-row {
-  position: static;
-  bottom: auto;
-  margin-top: 8px;
+.eval-detail-text {
+  margin: 0;
+  white-space: pre-wrap;
 }
