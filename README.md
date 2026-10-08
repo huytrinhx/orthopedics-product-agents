@@ -219,9 +219,15 @@ re-run whenever they apply:
    railway run .venv/bin/python -m ingestion.seed_synonyms
    ```
 
+   (On Windows the venv interpreter is `.venv/Scripts/python`.)
+
    Uploaded documents produce zero graph facts until `seed_master_catalog`
    has run at least once — prose extraction only *attaches* facts to parts
-   this seed already created. Both are pure Neo4j `MERGE`s, so they're
+   this seed already created. `seed_master_catalog` also reconciles tray
+   membership — a tray renamed or moved in the CSV drops the old
+   `BELONGS_TO_TRAY` edges and deletes the emptied tray (unless a document's
+   Procedure still references it; those are printed as "kept"), so there's
+   no hand-run Cypher after a rename. Both are otherwise `MERGE`s, so they're
    idempotent — safe to rerun (e.g. after fixing a bad row in a CSV)
    without duplicating anything.
 3. **A new environment variable was added to the app.** Set its value in
