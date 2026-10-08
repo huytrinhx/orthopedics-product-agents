@@ -25,6 +25,17 @@ picking this repo up cold, read this before making structural changes.
   the enterprise service-principal auth pattern (`AZURE_TENANT_ID`/
   `CLIENT_ID`/`CLIENT_SECRET`) was removed along with Azure AI Search. See
   `docs/adr/0003-openai-direct-llm-provider.md`.
+  - **The chat model goes through the Responses API**
+    (`use_responses_api=True` in `get_chat_model()`), not Chat
+    Completions. Production runs a GPT-5.x reasoning model, and OpenAI
+    rejects function tools alongside reasoning on `/v1/chat/completions`,
+    which broke every `react_agent` turn. Turning reasoning off
+    (`reasoning_effort="none"`) was the other way out, but `react_agent`'s
+    tool-bound `generate` call is where the model decides which tool to call
+    and when to stop, so that's exactly where reasoning earns its cost.
+    Responses-API messages carry `content` as a list of blocks: read model
+    output with `.text`, never `.content`. Moving to OpenRouter as a model
+    gateway is tracked in GitHub issue #8.
   - **Kyma (kymaapi.com) is a live option for the chat model on deployment,
     not yet wired up.** There's deliberately no provider-switch abstraction
     in the code for this — it would be speculative complexity for a model

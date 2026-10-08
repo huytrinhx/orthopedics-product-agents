@@ -295,7 +295,7 @@ async def _stream_graph(
             if event["event"] == "on_chain_start" and event.get("name") == node:
                 yield _sse("status", {"node": node})
             elif event["event"] == "on_chat_model_stream" and node in _STREAMED_NODES:
-                chunk_content = event["data"]["chunk"].content
+                chunk_content = event["data"]["chunk"].text
                 if chunk_content:
                     yield _sse("token", {"content": chunk_content})
             elif event["event"] == "on_chain_stream" and event.get("name") == "LangGraph":

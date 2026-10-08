@@ -271,7 +271,7 @@ async def self_eval(state: ReactAgentState) -> dict:
         except (TypeError, ValueError):
             continue
     issues = check_answer(
-        state["scratchpad"][-1].content,
+        state["scratchpad"][-1].text,
         citation_ids=citation_ids,
         source_text="\n".join(str(message.content) for message in tool_messages),
         parts=parts,
@@ -291,7 +291,7 @@ async def finalize(state: ReactAgentState) -> dict:
     format, same additional_kwargs convention) so ticket 10's transcript
     read and ticket 11's per-message feedback both work unchanged here.
     """
-    answer = state["scratchpad"][-1].content
+    answer = state["scratchpad"][-1].text
     citations = extract_citations(answer)
     return {
         "answer": answer,
