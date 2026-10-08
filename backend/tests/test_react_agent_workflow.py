@@ -78,6 +78,28 @@ async def test_a_clean_answer_ships_without_a_correction(monkeypatch):
     assert result["answer"] == "- MSK42020: 4.0 x 20mm FT screw"
 
 
+async def test_a_responses_api_answer_is_read_as_plain_text(monkeypatch):
+    # The Responses API (config/llm_clients.py) returns content as a list of
+    # blocks, reasoning included -- the answer must be just the text.
+    _patch(
+        monkeypatch,
+        [
+            _LOOKUP_CALL,
+            AIMessage(
+                content=[
+                    {"type": "reasoning", "summary": [{"type": "summary_text", "text": "Check the thread."}]},
+                    {"type": "text", "text": "- MSK42020: 4.0 x 20mm FT screw", "annotations": []},
+                ]
+            ),
+        ],
+    )
+
+    result = await _run("which 4.0 chamfer screw?")
+
+    assert result["fact_check_issues"] == []
+    assert result["answer"] == "- MSK42020: 4.0 x 20mm FT screw"
+
+
 async def test_failed_fact_check_gets_one_correction_against_the_tool_results(monkeypatch):
     model = _patch(
         monkeypatch,

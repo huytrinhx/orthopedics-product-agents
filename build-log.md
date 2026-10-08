@@ -448,3 +448,20 @@ feedback-promotion workflow), worked one at a time in dependency order.
   second turn on, `generate` skips seeding the new question and inherits a
   partly spent tool budget. Belongs with a thread-memory ticket (carry
   forward prior turns' evidence deliberately instead).
+- **Chat model moved to the Responses API (2026-10-08).** Production had
+  switched `OPENAI_CHAT_MODEL` to `gpt-5.6-luna`, and every tool-calling turn
+  started failing with a 400: OpenAI rejects function tools alongside
+  reasoning on `/v1/chat/completions`. langchain-openai only routes a few
+  hardcoded `*-pro` models to `/v1/responses` on its own, so
+  `get_chat_model()` now sets `use_responses_api=True`. Turning reasoning
+  off (`reasoning_effort="none"`) was rejected: `react_agent`'s tool-bound
+  `generate` call is where the model chooses tools and decides when to stop.
+  Responses-API replies carry `content` as a list of blocks (reasoning
+  included), so model output is read with `.text` everywhere it's consumed
+  (both workflows' answers, `react_agent.self_eval`, SSE token streaming).
+  `.env.example` now shows `gpt-5.6-luna` instead of the stale `gpt-4o`.
+- **LangChain bumped** to the newest releases at least a week old:
+  langchain-openai 1.6.7, langchain-core 1.6.6 (now pinned directly),
+  langchain 1.4.3, langgraph 1.2.12.
+- **Next:** route the chat model through OpenRouter so trying a model is a
+  config change, not a code change (GitHub issue #8).

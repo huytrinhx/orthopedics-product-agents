@@ -13,8 +13,11 @@ requires-python = ">=3.11,<3.12"
 # real venv, not guessed). Bump a version here only when explicitly asked;
 # see agents.md/feedback memory on not upgrading dependencies unprompted.
 dependencies = [
-    "langgraph==1.2.11",
-    "langchain-openai==1.6.0",
+    "langgraph==1.2.12",
+    "langchain-openai==1.6.7",
+    # Pinned directly (not left to langchain-openai's floor) so a re-lock
+    # can't drift to a just-released core.
+    "langchain-core==1.6.6",
     "langgraph-checkpoint-postgres==3.1.2",
     "fastapi==0.141.1",
     "python-multipart==0.0.32",
@@ -39,7 +42,7 @@ dependencies = [
     # Only langchain-core/langchain-openai were needed until now --
     # langfuse.langchain.CallbackHandler (backend/observability/langfuse_setup.py)
     # requires the full langchain meta-package at import time.
-    "langchain==1.4.0",
+    "langchain==1.4.3",
 ]
 
 [project.optional-dependencies]

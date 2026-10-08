@@ -806,7 +806,7 @@ async def generate(state: DeterministicState) -> dict:
         prompt += [AIMessage(content=state["answer"]), HumanMessage(content=format_issues_for_correction(issues))]
         update["correction_rounds"] = state.get("correction_rounds", 0) + 1
     response = await model.ainvoke(prompt)
-    answer = response.content
+    answer = response.text
     return {**update, "answer": answer, "citations": extract_citations(answer)}
 
 
