@@ -140,10 +140,50 @@ solely to provide the `railway` npm package (`railway-ts-sdk`) that
 `package.json`.
 
 Database migrations and graph seeding are **not** part of the automated
-deploy — both are run by hand, on your own machine, via `railway run`
-(which executes locally but injects the linked service's real production
-env vars). See "Subsequent deployments" below for why migrations aren't
-automatic.
+deploy — both are run by hand via `railway ssh`, which executes inside the
+running production container (its code, its CSVs, its env vars) rather
+than on your machine. That means they always run against what's actually
+deployed: merge and wait for the deploy to go live before running them.
+See "Subsequent deployments" below for why migrations aren't automatic.
+
+### Railway CLI setup (once per machine)
+
+1. **Install the CLI** — `scoop install railway` (Windows) or
+   `npm i -g @railway/cli` (any OS, Node 16+), or see Railway's CLI docs for
+   Homebrew/shell-script installs. Note the CLI package is
+   `@railway/cli` — the root `package.json`'s `railway` dependency is the
+   unrelated `railway-ts-sdk` used by `.railway/railway.ts`.
+2. **Log in and link** — from the repo root:
+
+   ```bash
+   railway login
+   railway link    # pick this project, the production environment, and the app service
+   ```
+
+   The link is stored per directory and applies to subdirectories too.
+3. **Create an SSH key in your home directory** (skip if you already have
+   one in `~/.ssh`). `railway ssh` only looks in your SSH agent and your
+   *home* `~/.ssh` (`C:\Users\<you>\.ssh` on Windows) — a key kept inside
+   this repo isn't found, and a private key doesn't belong in a project
+   folder anyway. Works as-is in bash and PowerShell:
+
+   ```bash
+   ssh-keygen -t ed25519 -f $HOME/.ssh/id_ed25519 -C "railway"
+   ```
+
+   (Keeping a key elsewhere instead? Pass it on every call with
+   `railway ssh -i <path-to-private-key> ...`.)
+4. **Register the key with Railway** — `railway ssh keys add` and pick it
+   from the list (the first `railway ssh` also offers to do this).
+   `railway ssh keys` lists what's registered.
+5. **Check it works:**
+
+   ```bash
+   railway ssh -- python --version
+   ```
+
+   Plain `railway ssh` (no command) opens an interactive shell in the
+   container instead.
 
 ### First deployment
 
@@ -186,8 +226,9 @@ automatic.
    application bug. Files lost to a redeploy before the volume existed
    don't come back once the volume is added; affected documents need
    re-uploading.
-6. **Run the first migration by hand**, once the service has deployed —
-   see "Subsequent deployments" below for the command; it's the same one.
+6. **Run the first migration by hand**, once the service has deployed and
+   the CLI is set up (see "Railway CLI setup" above) — see "Subsequent
+   deployments" below for the command; it's the same one.
 7. **Seed the knowledge graph** — see "Subsequent deployments" below;
    it's the same commands, just run for the first time here.
 8. **Set "Restart Policy" to On Failure** in the Railway dashboard's
@@ -201,25 +242,26 @@ Pushing to `main` is enough for most changes — Railway builds and deploys
 automatically. These steps are **not** automatic and need a manual
 re-run whenever they apply:
 
-1. **A new migration was added.** From `backend/`:
+1. **A new migration was added.** Once the deploy carrying it is live:
 
    ```bash
-   railway run .venv/bin/alembic upgrade head
+   railway ssh -- alembic -c /app/backend/alembic.ini upgrade head
    ```
 
-   Idempotent — safe to run even when there's nothing new to apply.
+   Idempotent — safe to run even when there's nothing new to apply. Run it
+   promptly: until it does, the new code is serving against the old schema.
    `.railway/railway.ts` intentionally has no pre-deploy command: Railway
    fails an entire deploy with no retry if a pre-deploy command exits
    non-zero, so running migrations that way would permanently block every
    future deploy the moment one migration failed for any reason.
-2. **The master-catalog or synonym source CSVs changed.** From `backend/`:
+2. **The master-catalog or synonym source CSVs changed.** Once the deploy
+   carrying the new CSV is live (the seed reads the copy baked into the
+   image at `/app/backend/evals/`, not your local file):
 
    ```bash
-   railway run .venv/bin/python -m ingestion.seed_master_catalog
-   railway run .venv/bin/python -m ingestion.seed_synonyms
+   railway ssh -- python -m ingestion.seed_master_catalog
+   railway ssh -- python -m ingestion.seed_synonyms
    ```
-
-   (On Windows the venv interpreter is `.venv/Scripts/python`.)
 
    Uploaded documents produce zero graph facts until `seed_master_catalog`
    has run at least once — prose extraction only *attaches* facts to parts

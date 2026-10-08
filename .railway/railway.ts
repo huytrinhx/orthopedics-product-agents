@@ -35,8 +35,8 @@ export default defineRailway(() => {
     // will not be retried and the deployment will not proceed" -- with the
     // pre-deploy step broken (see README's "Deploying to Railway"), leaving
     // it set means NO future deploy can ever succeed. Migrations are run by
-    // hand instead (`railway run .venv/bin/alembic upgrade head` from
-    // backend/) after any deploy that adds one.
+    // hand instead (`railway ssh -- alembic -c /app/backend/alembic.ini
+    // upgrade head`) after any deploy that adds one.
     deploy: {
       restartPolicyType: "ON_FAILURE",
     },
