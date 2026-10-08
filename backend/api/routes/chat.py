@@ -244,14 +244,17 @@ async def _stream_chat(
         "query": body.message,
         "user_id": str(user.id),
         "thread_id": thread_id,
-        # search_query/clarification_rounds/clarification_reply have no
-        # reducer, so an earlier turn's checkpointed value would otherwise
-        # silently carry over (e.g. a prior turn's already-spent
-        # clarification round, or its reply) -- explicitly reset all three
+        # search_query/clarification_*/correction_rounds/fact_check_issues
+        # have no reducer, so an earlier turn's checkpointed value would
+        # otherwise silently carry over (e.g. a prior turn's already-spent
+        # clarification round, or its fact-check issues turning this turn's
+        # first generate into a "correction") -- explicitly reset them all
         # for every new turn.
         "search_query": body.message,
         "clarification_rounds": 0,
         "clarification_reply": None,
+        "correction_rounds": 0,
+        "fact_check_issues": [],
     }
 
     return StreamingResponse(
@@ -316,7 +319,7 @@ async def _stream_graph(
                 loop_count = output.get(loop_count_field) if loop_count_field else None
                 score_trace(
                     handler.last_trace_id,
-                    eval_scores=output.get("eval_scores"),
+                    fact_check_issues=output.get("fact_check_issues"),
                     loop_count=loop_count,
                 )
                 citations = await _resolve_citations(output.get("citations") or [])
@@ -335,7 +338,6 @@ async def _stream_graph(
                         "message_id": message_id,
                         "answer": output.get("answer"),
                         "citations": [citation.model_dump(mode="json") for citation in citations],
-                        "eval_scores": output.get("eval_scores"),
                         "trace_url": get_trace_url(handler.last_trace_id),
                     },
                 )

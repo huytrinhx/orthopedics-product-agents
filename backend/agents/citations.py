@@ -37,3 +37,11 @@ def extract_citations(answer: str) -> list[str]:
         for single_match in _SINGLE_CITATION_PATTERN.finditer(group_match.group(1)):
             seen.setdefault(single_match.group(0), None)
     return list(seen)
+
+
+def strip_citations(answer: str) -> str:
+    """`answer` with every citation bracket removed -- for checks that scan
+    the answer's own prose (agents/fact_check.py's SKU scan) and shouldn't
+    trip over the hex fragments inside a document UUID.
+    """
+    return _CITATION_GROUP_PATTERN.sub("", answer)

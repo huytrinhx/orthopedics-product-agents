@@ -420,3 +420,31 @@ feedback-promotion workflow), worked one at a time in dependency order.
     / `workflow_name` and existing rerun threads were left in place (no
     destructive migration); nothing writes them anymore, and the sidebar
     still filters legacy rerun threads out.
+
+## Phase 3 — Deterministic fact check and document lookup
+
+- **Inline self-eval: LLM judge -> deterministic fact check (2026-10-07).**
+  Both workflows' `self_eval` nodes now run `backend/agents/fact_check.py`
+  instead of `judge_answer`: every `[doc#n]` citation must be a passage
+  retrieved this turn, every SKU-shaped token must appear in the turn's
+  catalog records or passage text, and a SKU's FT/PT claim must match its
+  catalog `thread`. Saves a model call on every turn. A failure routes back
+  to `generate` once (`MAX_CORRECTION_ROUNDS = 1`) with the failed draft and
+  the issues listed; a draft still failing after that ships, with the issue
+  count recorded in Langfuse (`fact_check_issues` score, replacing the four
+  judge axes). `deterministic`'s self_eval-triggered clarification pause
+  went with the judge -- a misstated fact isn't something the rep can
+  clarify -- so `request_clarification` now only serves synonym ambiguity.
+  The `done` SSE event no longer carries `eval_scores`. `judge.py` itself
+  stays for the offline harness and human-feedback comparisons.
+- **`document_lookup` tool for react_agent.** Finds documents by name with
+  plain word matching over filename + system/doctype tags (no embedding
+  call), returning document ids and citable opening chunks;
+  `vector_search` gained a `document_ids` filter to search inside a match.
+  Before this, a rep naming a document only worked if its title happened to
+  be repeated in its own chunk text.
+- **Found, not fixed here:** react_agent's `scratchpad`/`tool_calls_made`
+  are checkpointed per thread but never reset per turn, so from a thread's
+  second turn on, `generate` skips seeding the new question and inherits a
+  partly spent tool budget. Belongs with a thread-memory ticket (carry
+  forward prior turns' evidence deliberately instead).

@@ -51,6 +51,10 @@ class RetrievalFilters:
     # re-ranked afterward -- rerank's existing doctype-priority bonus still
     # ranks an allowed-type chunk above an untagged one within that pool.
     document_type_ids: list[uuid.UUID] | None = None
+    # Restricts the search to these documents only -- react_agent's
+    # document_lookup -> vector_search path, searching inside a document the
+    # rep named rather than across the whole corpus.
+    document_ids: list[uuid.UUID] | None = None
 
 
 class VectorStoreClient:
@@ -107,6 +111,9 @@ class VectorStoreClient:
         if filters and filters.document_type_ids:
             conditions.append("(c.document_type_id IS NULL OR c.document_type_id = ANY(%s))")
             condition_parameters.append(list(filters.document_type_ids))
+        if filters and filters.document_ids:
+            conditions.append("c.document_id = ANY(%s)")
+            condition_parameters.append(list(filters.document_ids))
         filter_sql = f"AND {' AND '.join(conditions)}" if conditions else ""
 
         async with self._connection.cursor(row_factory=dict_row) as cursor:

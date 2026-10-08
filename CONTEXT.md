@@ -42,8 +42,12 @@ Single-context repo — see `docs/agents/domain.md` for how this file and
   and by the eval harness — not the same concept as "system."
 - **Judge** — the shared LLM-based scorer (`backend/agents/judge.py`)
   producing four axis scores: faithfulness, relevance, style, citation. Used
-  identically by the inline self-eval retry loop, the offline eval harness,
-  and the human feedback UI.
+  identically by the offline eval harness and the human feedback UI.
+- **Fact check** — the deterministic per-turn check (`backend/agents/
+  fact_check.py`) every workflow's `self_eval` node runs on a draft answer:
+  cited passage ids, SKUs, and thread types verified against that turn's
+  own sources. A failed check triggers one **correction pass** — the draft
+  regenerated with the specific problems listed.
 - **Synonym resolution** — expanding a query against the canonical
   entity/synonym graph in Neo4j/AuraDB before retrieval (e.g. "ACL repair"
   -> also matches variant phrasings within the same system). Distinct from

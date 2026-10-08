@@ -160,3 +160,30 @@ async def test_hybrid_search_respects_system_filter():
         assert non_matching == []
     finally:
         await delete_document(document_id)
+
+
+async def test_hybrid_search_respects_document_ids_filter():
+    """react_agent's document_lookup -> vector_search path: searching inside
+    one named document must never return another document's chunks, even
+    an exact vector match.
+    """
+    wanted_document_id = await _create_document()
+    other_document_id = await _create_document()
+    query_vector = _unit_vector(30)
+    try:
+        async with get_vector_store() as store:
+            for document_id in (wanted_document_id, other_document_id):
+                await store.upsert_chunks(
+                    document_id,
+                    [{"chunk_index": 0, "content": "torque limiting driver", "embedding": query_vector}],
+                )
+
+            results = await store.hybrid_search(
+                "torque limiting driver", query_vector, top_k=5,
+                filters=RetrievalFilters(document_ids=[wanted_document_id]),
+            )
+
+        assert [result["document_id"] for result in results] == [str(wanted_document_id)]
+    finally:
+        await delete_document(wanted_document_id)
+        await delete_document(other_document_id)
