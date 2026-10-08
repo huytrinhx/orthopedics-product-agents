@@ -108,6 +108,54 @@ class GraphClient:
                 properties=cleaned_properties,
             )
 
+    async def prune_stale_tray_memberships(
+        self, trays_by_sku: dict[str, list[str]]
+    ) -> tuple[int, list[str], list[str]]:
+        """Makes each given Part's BELONGS_TO_TRAY edges match `trays_by_sku`
+        exactly — `upsert_part` only ever MERGEs, so without this a tray
+        renamed in the master file leaves every part attached to both the
+        old and new Tray. Scoped to the SKUs passed in (never a global
+        sweep), so seeding one file can't touch parts it doesn't list.
+
+        A Tray this emptied is deleted only if nothing but its
+        BELONGS_TO_FAMILY edge still points at it — a Procedure REQUIRES
+        edge from document prose extraction is a fact worth keeping, so
+        that Tray is left in place and reported instead.
+
+        Returns (edges removed, trays deleted, emptied trays kept).
+        """
+        memberships = [{"sku": sku, "trays": trays} for sku, trays in trays_by_sku.items()]
+        async with self._driver.session() as session:
+            result = await session.run(
+                """
+                UNWIND $memberships AS membership
+                MATCH (:Part {sku: membership.sku})-[r:BELONGS_TO_TRAY]->(t:Tray)
+                WHERE NOT t.name IN membership.trays
+                WITH r, t.name AS tray
+                DELETE r
+                RETURN tray, count(*) AS removed
+                """,
+                memberships=memberships,
+            )
+            removed_by_tray = {record["tray"]: record["removed"] async for record in result}
+            if not removed_by_tray:
+                return 0, [], []
+
+            result = await session.run(
+                """
+                MATCH (t:Tray) WHERE t.name IN $trays
+                  AND NOT EXISTS { MATCH (t)-[r]-() WHERE type(r) <> 'BELONGS_TO_FAMILY' }
+                WITH t, t.name AS tray
+                DETACH DELETE t
+                RETURN tray
+                """,
+                trays=list(removed_by_tray),
+            )
+            deleted_trays = [record["tray"] async for record in result]
+
+        kept_trays = sorted(set(removed_by_tray) - set(deleted_trays))
+        return sum(removed_by_tray.values()), sorted(deleted_trays), kept_trays
+
     async def upsert_compatible_with(self, sku_a: str, sku_b: str) -> None:
         async with self._driver.session() as session:
             await session.run(

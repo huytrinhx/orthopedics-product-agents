@@ -108,3 +108,81 @@ async def test_seed_master_catalog_writes_parts_family_and_compatibility(tmp_pat
 
     compat = await client.query_related_entities(plate_sku, "COMPATIBLE_WITH")
     assert any(related_entry["related_entity"] == screw_sku for related_entry in compat)
+
+
+_MINI_HEADER = [
+    "System", "Item Type", "Item No.", "Description", "Qty per Set", "Head Style",
+    "Construct", "Thread", "Color", "Guidewire", "Pre-Drill Diameter", "Driver",
+]
+
+
+def _write_mini_master(path: Path, tray_and_sku_pairs: list[tuple[str, str]]) -> Path:
+    with path.open("w", newline="", encoding="latin-1") as file:
+        writer = csv.writer(file, delimiter="\t")
+        writer.writerow(_MINI_HEADER)
+        for tray, sku in tray_and_sku_pairs:
+            writer.writerow([tray, "Implant", sku, "TEST PART", "1", "", "", "", "", "", "", ""])
+    return path
+
+
+async def _tray_names_for(client, sku: str) -> set[str]:
+    related = await client.query_related_entities(sku, "BELONGS_TO_TRAY")
+    return {related_entry["related_entity"] for related_entry in related}
+
+
+async def _tray_exists(client, tray: str) -> bool:
+    async with client._driver.session() as session:
+        result = await session.run("MATCH (t:Tray {name: $name}) RETURN t.name AS name", name=tray)
+        return await result.single() is not None
+
+
+async def test_reseed_after_tray_rename_moves_parts_and_deletes_emptied_tray(tmp_path):
+    suffix = uuid.uuid4().hex[:8]
+    old_tray, new_tray, other_tray = (f"Old Tray {suffix}", f"New Tray {suffix}", f"Other Tray {suffix}")
+    renamed_sku, shared_sku, untouched_sku = (f"REN-{suffix}", f"SHR-{suffix}", f"UNT-{suffix}")
+    client = get_graph_client()
+    await client.ensure_constraints()
+
+    # A SKU outside the seeded file must survive the reconcile untouched.
+    await client.upsert_part(untouched_sku, old_tray)
+    await seed_master_catalog(
+        client,
+        _write_mini_master(
+            tmp_path / "before.csv",
+            [(old_tray, renamed_sku), (old_tray, shared_sku), (other_tray, shared_sku)],
+        ),
+    )
+    await seed_master_catalog(
+        client,
+        _write_mini_master(
+            tmp_path / "after.csv",
+            [(new_tray, renamed_sku), (new_tray, shared_sku), (other_tray, shared_sku)],
+        ),
+    )
+
+    assert await _tray_names_for(client, renamed_sku) == {new_tray}
+    assert await _tray_names_for(client, shared_sku) == {new_tray, other_tray}
+    assert await _tray_names_for(client, untouched_sku) == {old_tray}
+    assert await _tray_exists(client, old_tray)  # still holds untouched_sku
+
+    await seed_master_catalog(
+        client, _write_mini_master(tmp_path / "again.csv", [(new_tray, untouched_sku)])
+    )
+    assert not await _tray_exists(client, old_tray)
+
+
+async def test_emptied_tray_still_referenced_by_a_procedure_is_kept(tmp_path):
+    suffix = uuid.uuid4().hex[:8]
+    old_tray, new_tray = f"Old Tray {suffix}", f"New Tray {suffix}"
+    sku, document_id = f"PRC-{suffix}", f"DOC-{suffix}"
+    client = get_graph_client()
+    await client.ensure_constraints()
+
+    await seed_master_catalog(client, _write_mini_master(tmp_path / "before.csv", [(old_tray, sku)]))
+    await client.upsert_document(document_id, "test.pdf", None, None)
+    assert await client.attach_procedure(f"Procedure {suffix}", old_tray, document_id)
+
+    await seed_master_catalog(client, _write_mini_master(tmp_path / "after.csv", [(new_tray, sku)]))
+
+    assert await _tray_names_for(client, sku) == {new_tray}
+    assert await _tray_exists(client, old_tray)

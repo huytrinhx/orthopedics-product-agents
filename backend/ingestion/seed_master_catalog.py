@@ -28,6 +28,14 @@ extraction path, which only merges by exact SKU):
     positives, and only written when exactly one candidate matches —
     ambiguous cases are left as the flat spec property on the Part instead
     of guessed into an edge.
+
+Tray membership is reconciled, not just merged: after upserting, every
+listed Part's BELONGS_TO_TRAY edges are trimmed to exactly the trays this
+file gives it, and a Tray left empty is deleted unless something else (a
+Procedure from document extraction) still points at it — so renaming or
+moving a tray in the master file needs no hand-run Cypher cleanup. Parts
+dropped from the file entirely are left alone; deleting them would also
+delete facts other ingestion paths attached to them.
 """
 import asyncio
 import csv
@@ -238,6 +246,13 @@ async def seed_master_catalog(client: GraphClient, path: Path = DEFAULT_PATH) ->
             indication=row.indication,
         )
 
+    trays_by_sku: dict[str, set[str]] = defaultdict(set)
+    for row in rows:
+        trays_by_sku[row.sku].add(row.tray)
+    pruned_edges, deleted_trays, kept_trays = await client.prune_stale_tray_memberships(
+        {sku: sorted(trays) for sku, trays in trays_by_sku.items()}
+    )
+
     all_skus = [row.sku for row in rows]
     compat_count = 0
     for row in rows:
@@ -270,8 +285,13 @@ async def seed_master_catalog(client: GraphClient, path: Path = DEFAULT_PATH) ->
     print(
         f"Seeded {len(rows)} parts across {len(tray_family)} trays "
         f"({len([family for family in tray_family.values() if family])} mapped to a ProductFamily), "
-        f"{compat_count} COMPATIBLE_WITH edges, {tool_count} REQUIRES_TOOL edges"
+        f"{compat_count} COMPATIBLE_WITH edges, {tool_count} REQUIRES_TOOL edges; "
+        f"removed {pruned_edges} stale BELONGS_TO_TRAY edges"
     )
+    for tray in deleted_trays:
+        print(f"  deleted emptied tray: {tray}")
+    for tray in kept_trays:
+        print(f"  kept emptied tray (still referenced, e.g. by a Procedure): {tray}")
 
 
 async def main() -> None:
