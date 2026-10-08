@@ -128,33 +128,34 @@ async def get_feedback_for_thread(thread_id: str) -> dict[str, FeedbackRecord]:
         await connection.close()
 
 
-async def list_flagged_feedback() -> list[FeedbackRecord]:
-    """Every flagged feedback item -- the Eval tab's (ticket 15) main list.
-    Unfiltered by `resolved` on purpose: the admin toggles that in the UI,
-    not by hiding rows here, so a resolved item stays visible (and its
-    rerun history intact) rather than disappearing -- it just sorts to the
-    bottom (`resolved ASC` puts false before true), newest-first within
-    each group, so what's still outstanding stays at the top. Uses the
-    partial `feedback_flagged_idx` index (migration 5d95b6897886), created
-    ahead of this exact need.
+async def list_all_feedback() -> list[tuple[FeedbackRecord, str | None]]:
+    """Every feedback row, flagged or not, newest first, paired with the
+    submitter's email -- the Eval tab's table. No `resolved` filtering here:
+    the Unresolved/All filter is applied client-side, and `resolved` only
+    means anything on a flagged row (the UI shows no toggle otherwise).
+    LEFT JOIN rather than JOIN so a row whose submitter was since removed
+    still lists, with no email, instead of silently disappearing.
     """
+    prefixed_columns = ", ".join(f"feedback.{column.strip()}" for column in _COLUMNS.split(","))
     connection = await get_connection()
     try:
         async with connection.cursor() as cursor:
             await cursor.execute(
-                f"SELECT {_COLUMNS} FROM feedback WHERE flagged ORDER BY resolved ASC, created_at DESC"
+                f"SELECT {prefixed_columns}, users.email FROM feedback "
+                "LEFT JOIN users ON users.id = feedback.submitted_by "
+                "ORDER BY feedback.created_at DESC"
             )
             rows = await cursor.fetchall()
-            return [FeedbackRecord(*row) for row in rows]
+            return [(FeedbackRecord(*row[:-1]), row[-1]) for row in rows]
     finally:
         await connection.close()
 
 
 async def delete_feedback(message_id: str) -> bool:
-    """Ticket 15 follow-up: an admin can remove a flagged item outright
+    """Ticket 15 follow-up: an admin can remove a feedback item outright
     (e.g. a duplicate, a misclick, or one confirmed fixed and no longer
     worth keeping around) rather than only ever resolving it. Cascades to
-    that item's rerun chat_threads rows (migration e2f039991c90) -- see
+    any legacy rerun chat_threads rows (migration e2f039991c90) -- see
     that migration's own comment for why. Returns whether a row actually
     existed to delete, so the route can 404 rather than silently no-op.
     """
@@ -170,12 +171,15 @@ async def delete_feedback(message_id: str) -> bool:
 
 
 async def set_resolved(message_id: str, resolved: bool) -> FeedbackRecord | None:
+    """Only a flagged row can be resolved -- "resolved" means "the flagged
+    issue was confirmed fixed", which has no meaning for a plain score or
+    comment. None if there's no flagged row with that message_id."""
     connection = await get_connection()
     try:
         async with connection.cursor() as cursor:
             await cursor.execute(
                 f"UPDATE feedback SET resolved = %s, updated_at = now() "
-                f"WHERE message_id = %s RETURNING {_COLUMNS}",
+                f"WHERE message_id = %s AND flagged RETURNING {_COLUMNS}",
                 (resolved, message_id),
             )
             row = await cursor.fetchone()

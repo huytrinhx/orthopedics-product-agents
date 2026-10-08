@@ -391,3 +391,32 @@ feedback-promotion workflow), worked one at a time in dependency order.
     `:5432`/`:7687` at all. Does **not** cover a running dev server
     (`uvicorn` on `:8000`, e.g. for a Playwright check) -- that still reads
     `.env` directly and hits dev Postgres/Neo4j for real.
+- **Eval tab: all-feedback table, rerun via the chat tab (2026-10-07).**
+  The Eval tab (ticket 15) listed only *flagged* items as cards, each with
+  an inline, history-replaying rerun (`POST /chat/rerun`) and a per-item
+  rerun history (`GET /feedback/{id}/reruns`). Reworked after a grilling
+  session:
+  - `GET /feedback/` (replacing `GET /feedback/flagged`) returns every
+    feedback row, flagged or not, plain `created_at DESC` (no more
+    resolved-sinks-to-bottom), joined to `users` for `submitted_by_email`.
+    The frontend renders it as a table -- date, submitter email, question,
+    the four scores, comment, flagged, resolved -- and clicking a row
+    expands the full question/answer.
+  - Filter is client-side: **Unresolved** (flagged and not resolved; the
+    default) or **All**.
+  - Only a flagged row can be resolved: the UI shows no checkbox otherwise,
+    and `feedback.repository.set_resolved` now matches `AND flagged`, so the
+    PATCH 404s on an unflagged row.
+  - Rerun is now just `/chat?ask=<question>`: the chat page sends that
+    question as the first turn of a fresh, ordinary conversation on the
+    current default workflow, with **no history replay**. That matches
+    `react_agent`, which never sent earlier turns to the model; for
+    `deterministic`, which does, a context-dependent follow-up may answer
+    differently -- accepted, since the admin sees it in the chat tab and can
+    add the context by hand.
+  - Removed: `POST /chat/rerun`, `GET /feedback/{id}/reruns`,
+    `chat_threads.repository.list_reruns`, `RerunOut`, the workflow picker,
+    and `RerunConversation`/`FlaggedItem`. `chat_threads.rerun_of_message_id`
+    / `workflow_name` and existing rerun threads were left in place (no
+    destructive migration); nothing writes them anymore, and the sidebar
+    still filters legacy rerun threads out.

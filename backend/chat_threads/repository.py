@@ -30,9 +30,11 @@ class ChatThreadRecord:
     title: str
     created_at: datetime
     updated_at: datetime
-    # Both None for an ordinary thread. Set together only for a ticket 15
-    # rerun thread -- see this table's migration (0bb3fb27c761) for why a
-    # rerun is a real chat_threads row rather than a separate table.
+    # Both None for an ordinary thread. Set together only on legacy ticket
+    # 15 rerun threads (migration 0bb3fb27c761) -- nothing writes them
+    # anymore since the Eval tab's inline rerun was removed 2026-10-07 (a
+    # rerun is now just an ordinary new chat turn), but existing rows keep
+    # them, so they're still read.
     rerun_of_message_id: str | None
     workflow_name: str | None
 
@@ -44,18 +46,15 @@ async def create_thread(
     thread_id: str,
     user_id: uuid.UUID,
     title: str,
-    *,
-    rerun_of_message_id: str | None = None,
-    workflow_name: str | None = None,
 ) -> ChatThreadRecord:
     connection = await get_connection()
     try:
         async with connection.cursor() as cursor:
             await cursor.execute(
-                "INSERT INTO chat_threads (thread_id, user_id, title, rerun_of_message_id, workflow_name) "
-                "VALUES (%s, %s, %s, %s, %s) "
+                "INSERT INTO chat_threads (thread_id, user_id, title) "
+                "VALUES (%s, %s, %s) "
                 f"RETURNING {_COLUMNS}",
-                (thread_id, user_id, title, rerun_of_message_id, workflow_name),
+                (thread_id, user_id, title),
             )
             row = await cursor.fetchone()
         await connection.commit()
@@ -78,10 +77,10 @@ async def touch_thread(thread_id: str) -> None:
 
 
 async def list_threads(user_id: uuid.UUID) -> list[ChatThreadRecord]:
-    """A user's own threads for the sidebar -- excludes rerun threads
-    (ticket 15), which would otherwise clutter a rep/admin's own
-    conversation history with threads nobody actually typed into. See
-    list_reruns below for how a rerun thread is found instead."""
+    """A user's own threads for the sidebar -- excludes legacy ticket 15
+    rerun threads (see ChatThreadRecord), which were created by the old
+    inline Eval-tab rerun rather than typed by anyone, and no longer have
+    any other UI that lists them."""
     connection = await get_connection()
     try:
         async with connection.cursor() as cursor:
@@ -107,24 +106,5 @@ async def get_thread(thread_id: str) -> ChatThreadRecord | None:
             )
             row = await cursor.fetchone()
             return ChatThreadRecord(*row) if row else None
-    finally:
-        await connection.close()
-
-
-async def list_reruns(message_id: str) -> list[ChatThreadRecord]:
-    """Every rerun attempt of one flagged feedback message (ticket 15),
-    newest first -- the "history of attempts" the Eval tab nests under each
-    flagged item, so re-running after a fix doesn't erase the record of
-    what happened before it."""
-    connection = await get_connection()
-    try:
-        async with connection.cursor() as cursor:
-            await cursor.execute(
-                f"SELECT {_COLUMNS} FROM chat_threads "
-                "WHERE rerun_of_message_id = %s ORDER BY created_at DESC",
-                (message_id,),
-            )
-            rows = await cursor.fetchall()
-            return [ChatThreadRecord(*row) for row in rows]
     finally:
         await connection.close()

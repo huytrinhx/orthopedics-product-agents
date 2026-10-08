@@ -17,6 +17,12 @@
 // tracks the paused thread_id, and the next submit (a suggested option's
 // button, or free text typed into the same input) calls resumeChat instead
 // of starting a new streamChat turn. See answerClarification.
+//
+// `/chat?ask=<question>` (the Eval tab's Rerun) sends that question as the
+// first turn of a fresh conversation on load, then strips the param so a
+// refresh doesn't ask it again. Read from window.location rather than
+// useSearchParams, which a static export would force behind a Suspense
+// boundary for no benefit here.
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import Link from "next/link";
 import ReactMarkdown from "react-markdown";
@@ -79,6 +85,9 @@ export default function ChatPage() {
   const loadedFileDocumentIdRef = useRef<string | null>(null);
 
   const threadIdRef = useRef<string | undefined>(undefined);
+  // Guards the `?ask=` auto-send against running twice (React strict mode
+  // double-invokes effects in dev).
+  const askedFromUrlRef = useRef(false);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -90,6 +99,19 @@ export default function ChatPage() {
     listChatThreads()
       .then(setThreads)
       .catch(() => setError("Couldn't load your past conversations"));
+  }, [user]);
+
+  useEffect(() => {
+    if (!user || askedFromUrlRef.current) return;
+    if (!user.is_admin && !user.is_active) return;
+    const question = new URLSearchParams(window.location.search).get("ask")?.trim();
+    if (!question) return;
+    askedFromUrlRef.current = true;
+    window.history.replaceState(null, "", window.location.pathname);
+    sendQuestion(question);
+    // sendQuestion is deliberately not a dependency -- this only ever runs
+    // once, on the first render with a user.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user]);
 
   useEffect(() => {
@@ -288,6 +310,10 @@ export default function ChatPage() {
       return;
     }
 
+    await sendQuestion(text);
+  }
+
+  async function sendQuestion(text: string) {
     const userMessage: ChatMessage = { id: uniqueId(), role: "user", content: text };
     const assistantId = uniqueId();
     setMessages((previous) => [

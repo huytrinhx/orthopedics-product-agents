@@ -17,30 +17,29 @@ the frontend only ever sends an id it already got from the backend (the
 real security boundary that matters; a malformed message_id would just be a
 harmless orphan row nothing joins against.
 
-Ticket 15 (Eval tab, rescoped from an eval-dataset harness into a
-feedback-rerun tool after a 2026-09-05 grilling session -- see
-.scratch/chat-documents-evals/issues/15-*.md) adds the admin-only routes
-below: GET /flagged lists every flagged item with its actual question/answer
+Ticket 15 (Eval tab) adds the admin-only routes below: GET / lists every
+feedback row, flagged or not, newest first, with its actual question/answer
 text (read from the checkpointer, the same source of truth GET
-/chat/threads/{id} uses -- not duplicated into the feedback table), sorted
-resolved-last so what's still outstanding stays on top; PATCH
-/{message_id}/resolved toggles the admin's "confirmed fixed" marker; GET
-/{message_id}/reruns lists that item's rerun history (POST /chat/rerun,
-api/routes/chat.py, is what creates one); DELETE /{message_id} removes a
-flagged item outright (a duplicate, a misclick, or one no longer worth
-keeping) -- cascades to its rerun chat_threads rows, see migration
-e2f039991c90.
+/chat/threads/{id} uses -- not duplicated into the feedback table) and the
+submitter's email; PATCH /{message_id}/resolved toggles the admin's
+"confirmed fixed" marker (the UI only offers it on flagged rows); DELETE
+/{message_id} removes an item outright (a duplicate, a misclick, or one no
+longer worth keeping).
+
+Rerunning an item used to be an inline, history-replaying POST /chat/rerun
+with its own per-item rerun history (GET /{message_id}/reruns). Both were
+removed 2026-10-07: the Eval tab now just opens the chat tab with the
+question pre-sent in a fresh conversation (see build-log.md).
 """
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from auth.dependencies import get_current_user, require_admin
 from auth.repository import UserRecord
-from chat_threads.models import RerunOut
-from chat_threads.repository import list_reruns, owns_thread
-from feedback.models import FeedbackOut, FeedbackRequest, FlaggedFeedbackOut, ResolvedRequest
+from chat_threads.repository import owns_thread
+from feedback.models import FeedbackListItemOut, FeedbackOut, FeedbackRequest, ResolvedRequest
 from feedback.repository import (
     delete_feedback,
-    list_flagged_feedback,
+    list_all_feedback,
     set_resolved,
     to_feedback_out,
     upsert_feedback,
@@ -71,13 +70,13 @@ async def submit_feedback(
 
 
 def _question_and_answer(messages: list, message_id: str) -> tuple[str, str] | None:
-    """The flagged AIMessage's own content, plus the HumanMessage
+    """The rated AIMessage's own content, plus the HumanMessage
     immediately before it (the question that produced it) -- feedback is
     only ever collected on an assistant turn (ticket 11's UI only renders
     the scoring control there), so the preceding message is always the
     rep's actual question, not another assistant turn. None if the id
     isn't found (the message/thread was since deleted) or has no question
-    before it (shouldn't happen for a real assistant turn, but a flagged
+    before it (shouldn't happen for a real assistant turn, but a feedback
     row pointing at a message id from a fresher answer schema than
     expected shouldn't crash the whole list).
     """
@@ -89,14 +88,13 @@ def _question_and_answer(messages: list, message_id: str) -> tuple[str, str] | N
     return None
 
 
-@router.get("/flagged", response_model=list[FlaggedFeedbackOut])
-async def list_flagged(
+@router.get("/", response_model=list[FeedbackListItemOut])
+async def list_feedback(
     request: Request, admin: UserRecord = Depends(require_admin)
-) -> list[FlaggedFeedbackOut]:
+) -> list[FeedbackListItemOut]:
     checkpointer = request.app.state.checkpointer
-    records = await list_flagged_feedback()
     out = []
-    for record in records:
+    for record, submitted_by_email in await list_all_feedback():
         checkpoint_tuple = await checkpointer.aget_tuple(
             {"configurable": {"thread_id": record.thread_id}}
         )
@@ -108,7 +106,12 @@ async def list_flagged(
             continue
         question, answer = question_and_answer
         out.append(
-            FlaggedFeedbackOut(**to_feedback_out(record).model_dump(), question=question, answer=answer)
+            FeedbackListItemOut(
+                **to_feedback_out(record).model_dump(),
+                question=question,
+                answer=answer,
+                submitted_by_email=submitted_by_email,
+            )
         )
     return out
 
@@ -119,21 +122,11 @@ async def update_resolved(
 ) -> FeedbackOut:
     record = await set_resolved(message_id, body.resolved)
     if record is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "No feedback for that message")
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "No flagged feedback for that message")
     return to_feedback_out(record)
 
 
-@router.get("/{message_id}/reruns", response_model=list[RerunOut])
-async def list_message_reruns(
-    message_id: str, admin: UserRecord = Depends(require_admin)
-) -> list[RerunOut]:
-    return [
-        RerunOut(thread_id=rerun.thread_id, workflow_name=rerun.workflow_name, created_at=rerun.created_at)
-        for rerun in await list_reruns(message_id)
-    ]
-
-
 @router.delete("/{message_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_flagged(message_id: str, admin: UserRecord = Depends(require_admin)) -> None:
+async def delete_feedback_item(message_id: str, admin: UserRecord = Depends(require_admin)) -> None:
     if not await delete_feedback(message_id):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "No feedback for that message")
