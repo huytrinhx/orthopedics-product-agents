@@ -25,5 +25,3 @@ data/
 
 # OS
 .DS_Store
-# Secrets
-.ssh/
