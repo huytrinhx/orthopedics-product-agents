@@ -76,8 +76,9 @@ class VectorStoreClient:
                     """
                     INSERT INTO chunks
                         (document_id, chunk_index, content, section_title,
-                         page_number, embedding, system_id, document_type_id)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                         page_number, embedding, system_id, document_type_id,
+                         product_family_id)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """,
                     (
                         document_id,
@@ -88,6 +89,7 @@ class VectorStoreClient:
                         chunk["embedding"],
                         chunk.get("system_id"),
                         chunk.get("document_type_id"),
+                        chunk.get("product_family_id"),
                     ),
                 )
         await self._connection.commit()

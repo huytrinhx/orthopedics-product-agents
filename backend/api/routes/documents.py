@@ -21,14 +21,17 @@ from fastapi.responses import FileResponse
 
 from auth.dependencies import get_current_user, require_admin
 from auth.repository import UserRecord
+from catalog.models import TrayOut
 from documents.models import (
     ChunkOut,
     ComponentHealth,
     DocumentOut,
+    DocumentProductFamilyOut,
     SetDocumentTagsRequest,
     SystemHealthOut,
 )
 from documents.repository import (
+    TraysOutsideFamily,
     create_document,
     delete_document,
     get_document,
@@ -67,6 +70,19 @@ def _document_out(document) -> DocumentOut:
             if document.document_type_id
             else None
         ),
+        product_family=(
+            DocumentProductFamilyOut(
+                id=document.product_family_id,
+                name=document.product_family_name,
+                display_name=document.product_family_display_name,
+            )
+            if document.product_family_id
+            else None
+        ),
+        trays=[
+            TrayOut(id=tray.id, name=tray.name, display_name=tray.display_name)
+            for tray in document.trays
+        ],
     )
 
 
@@ -271,12 +287,34 @@ async def set_document_tags(
     background_tasks: BackgroundTasks,
     admin: UserRecord = Depends(require_admin),
 ) -> DocumentOut:
-    if await get_document(document_id) is None:
+    current = await get_document(document_id)
+    if current is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Document not found")
+    # Omitted fields keep their current value (see SetDocumentTagsRequest).
+    sent = body.model_fields_set
+    family_sent = "product_family_id" in sent or "tray_ids" in sent
     try:
-        document = await set_tags(document_id, body.system_id, body.document_type_id)
+        document = await set_tags(
+            document_id,
+            system_id=body.system_id if "system_id" in sent else current.system_id,
+            document_type_id=(
+                body.document_type_id if "document_type_id" in sent else current.document_type_id
+            ),
+            product_family_id=(
+                body.product_family_id if family_sent else current.product_family_id
+            ),
+            tray_ids=body.tray_ids if family_sent else [tray.id for tray in current.trays],
+        )
     except psycopg.errors.ForeignKeyViolation:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Unknown system or document type")
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, "Unknown system, document type, product family, or tray"
+        )
+    except TraysOutsideFamily as error:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "Every tray must belong to the document's product family; not in it: "
+            + ", ".join(str(tray_id) for tray_id in error.tray_ids),
+        )
     assert document is not None
 
     # System/document-type feed the retrieval filters and (once tickets

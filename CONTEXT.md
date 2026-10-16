@@ -23,12 +23,14 @@ Single-context repo — see `docs/agents/domain.md` for how this file and
 - **System** *(legacy)* — the document-level System tag
   (`backend/documents/models.py`, the Postgres `systems` table, e.g. `MIS -
   Foot Recon`) that predates Product Families, and the old name of the
-  master item file's `Tray` column. Golden-dataset queries and intent
-  detection are still scoped by it. Family-scoped graph lookups translate a
-  System tag to its Product Family through an explicit map
-  (`backend/catalog/legacy_systems.py`) until documents are re-tagged
-  against families. Not to be confused with "workflow" (below) or a
-  computer system.
+  master item file's `Tray` column. Documents are now tagged with one
+  `Product Family` and one or more of its `Tray`s instead (issue #12;
+  `backend/catalog/migrate_legacy_system_tags.py` carries old tags over),
+  and ingestion scopes by that family. Golden-dataset queries and intent
+  detection are still scoped by System, so chat's family-scoped part lookup
+  still translates a System tag to its Product Family through an explicit
+  map (`backend/catalog/legacy_systems.py`) until the legacy-removal
+  ticket. Not to be confused with "workflow" (below) or a computer system.
 - **Master item file** — `backend/evals/master-product-detail-oct-26.xlsx`
   (the stakeholders' "Master Product Detail File (Oct-26) - Do Not Edit",
   committed as-is), the real catalog of every `Part` (family, tray, SKU,

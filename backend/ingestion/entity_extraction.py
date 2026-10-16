@@ -7,7 +7,7 @@ graph_client.py's module docstring) — it only *attaches* facts to `Part`/
 `Tray` nodes that already exist from the deterministic master-catalog seed
 (backend/ingestion/seed_master_catalog.py, path 1). It never mints a new
 `Part` node from a bare name mention: the model is given the real SKU
-catalog for the document's tagged system and told to reference only SKUs/
+catalog for the document's Product Family and told to reference only SKUs/
 trays from that list, and backend/retrieval/graph_client.py's
 attach_differentiation/attach_procedure additionally no-op if a referenced
 SKU or tray isn't already a real node — a hallucinated reference is silently
@@ -66,7 +66,7 @@ async def extract_entities(
 
     `known_parts` is `[{"sku": ..., "description": ...}, ...]` and
     `known_trays` a list of tray names — both scoped to the document's
-    tagged system (see backend/retrieval/graph_client.py's
+    Product Family (see backend/retrieval/graph_client.py's
     list_parts_for_family/list_trays_for_family), keeping the prompt small
     and giving the model a closed set of valid SKUs/trays to reference.
     Entries referencing anything outside those sets are dropped here as a

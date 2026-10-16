@@ -35,11 +35,14 @@ async def process_document(document_id: uuid.UUID, storage_path: str) -> None:
 
         text = extract_text(path, document.filename)
 
+        # Graph-side lookups go by the document's own Product Family
+        # (catalog name), not its legacy system tag.
         await ingest_document(
             document_id=str(document_id),
             text=text,
             filename=document.filename,
-            system=document.system_name,
+            product_family=document.product_family_name,
+            trays=[tray.name for tray in document.trays],
             doc_type=document.document_type_name,
         )
         await ingest_document_vectors(
@@ -47,6 +50,7 @@ async def process_document(document_id: uuid.UUID, storage_path: str) -> None:
             text=text,
             system_id=document.system_id,
             document_type_id=document.document_type_id,
+            product_family_id=document.product_family_id,
         )
 
         try:
@@ -54,7 +58,7 @@ async def process_document(document_id: uuid.UUID, storage_path: str) -> None:
                 document_id=str(document_id),
                 storage_path=path,
                 filename=document.filename,
-                system=document.system_name,
+                product_family=document.product_family_name,
             )
         except Exception:
             logger.exception(

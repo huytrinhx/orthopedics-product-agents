@@ -54,27 +54,33 @@ async def ingest_document(
     text: str,
     *,
     filename: str,
-    system: str | None,
+    product_family: str | None,
+    trays: list[str] | None = None,
     doc_type: str | None,
 ) -> None:
+    """`product_family`/`trays` are the document's catalog names (not
+    display names). Extraction is scoped to the whole family's parts and
+    trays, not just the document's own trays."""
     client = get_graph_client()
-    await client.upsert_document(document_id, filename, doc_type=doc_type, system=system)
+    await client.upsert_document(
+        document_id, filename, doc_type=doc_type, product_family=product_family, trays=trays
+    )
 
     if not os.environ.get("OPENAI_API_KEY"):
         # No LLM configured (e.g. CI without the secret, see ci.yml) --
         # skip prose extraction rather than failing the document. This is
         # an environment-config gap, not a per-document ingestion failure.
         return
-    if not system:
+    if not product_family:
         # Nothing to scope the known-parts/known-trays lookup to -- and
         # nothing in the master catalog to attach facts to either.
         return
 
-    known_parts = await client.list_parts_for_family(system)
-    known_trays = await client.list_trays_for_family(system)
+    known_parts = await client.list_parts_for_family(product_family)
+    known_trays = await client.list_trays_for_family(product_family)
     if not known_parts:
         # The master catalog (backend/ingestion/seed_master_catalog.py)
-        # hasn't been seeded for this system yet -- there's nothing to
+        # hasn't been seeded for this family yet -- there's nothing to
         # attach prose facts to.
         return
 
@@ -94,6 +100,7 @@ async def ingest_document_vectors(
     *,
     system_id: uuid.UUID | None,
     document_type_id: uuid.UUID | None,
+    product_family_id: uuid.UUID | None = None,
 ) -> None:
     """Vector leg of ingestion: chunk -> embed -> pgvector."""
     if not os.environ.get("OPENAI_API_KEY"):
@@ -109,5 +116,6 @@ async def ingest_document_vectors(
         chunk["embedding"] = vector
         chunk["system_id"] = system_id
         chunk["document_type_id"] = document_type_id
+        chunk["product_family_id"] = product_family_id
     async with get_vector_store() as store:
         await store.upsert_chunks(document_id, chunks)

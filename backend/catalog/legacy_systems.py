@@ -1,5 +1,5 @@
 """Legacy System tag -> Product Family map. Delete this module (and its two
-callers) in the legacy-removal ticket.
+call sites) in the legacy-removal ticket.
 
 Documents are still tagged with the old Postgres `systems` tags (e.g.
 `MIS - Foot Recon`), which predate the master catalog's Family column.
@@ -8,8 +8,11 @@ derive a family from such a tag by stripping everything after " - ", which
 only worked while the graph's families were the bare brand names `MIS` /
 `REFLEX`. The Oct-26 catalog retired those for 18 real families, one of
 which (`MIS - Foot Recon System`) itself contains " - " -- so the mapping
-is spelled out here instead, one entry per legacy tag. Shared with the
-migration that moves document tags from systems onto families.
+is spelled out here instead, one entry per legacy tag. Its two callers:
+chat's family-scoped part lookup (graph_client.find_parts, which is still
+handed detect_intent's system tag) and the one-off script moving document
+tags from systems onto families (catalog/migrate_legacy_system_tags.py).
+Ingestion no longer goes through it -- it uses the document's own family.
 
 Entries cover production's `systems` tags as of 2026-10-16 that aren't
 already a family name verbatim (`Ancillary Foot Recon System`, `Core Foot
