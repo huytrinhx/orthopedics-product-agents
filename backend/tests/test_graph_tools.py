@@ -17,7 +17,7 @@ async def test_graph_query_returns_compatible_parts():
     tray = _unique("TRAY")
     plate_sku = _unique("PLATE")
     screw_sku = _unique("SCREW")
-    await client.upsert_tray(tray, None)
+    await client.upsert_tray(tray, _unique("FAMILY"))
     await client.upsert_part(plate_sku, tray)
     await client.upsert_part(screw_sku, tray)
     await client.upsert_compatible_with(plate_sku, screw_sku)
