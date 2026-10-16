@@ -1,16 +1,22 @@
-"""The read-only families-with-trays endpoint (api/routes/catalog.py) and the
-legacy system-tag -> family map family-scoped graph lookups go through
-(catalog/legacy_systems.py) -- against real Postgres/Neo4j, no mocking.
+"""The families-with-trays endpoints (api/routes/catalog.py) -- the tree and
+its display-name edits -- the chat tools' display-name translation
+(catalog/display_names.py), and the legacy system-tag -> family map
+family-scoped graph lookups go through (catalog/legacy_systems.py) --
+against real Postgres/Neo4j, no mocking.
 """
 import uuid
 
 import pytest
 from fastapi.testclient import TestClient
 
+from agents.tools.graph_query import graph_query
+from agents.tools.part_lookup import part_lookup
 from api.main import app
 from catalog.legacy_systems import LEGACY_SYSTEM_FAMILIES, resolve_family_name
 from catalog.repository import upsert_families_and_trays
+from ingestion.seed_master_catalog import seed_master_catalog
 from retrieval.graph_client import get_graph_client
+from tests.test_seed_master_catalog import _write_mini_master
 
 client = TestClient(app)
 
@@ -45,6 +51,123 @@ def test_product_families_endpoint_is_admin_only(monkeypatch, tmp_path):
     headers = {"Authorization": f"Bearer {_signup_token(monkeypatch, tmp_path, admin=False)}"}
     assert client.get("/catalog/product-families", headers=headers).status_code == 403
     assert client.get("/catalog/product-families").status_code == 401
+
+
+def _listed_family(name: str, headers: dict) -> dict:
+    response = client.get("/catalog/product-families", headers=headers)
+    return next(entry for entry in response.json() if entry["name"] == name)
+
+
+async def test_admin_edits_family_and_tray_display_names_and_blank_resets(monkeypatch, tmp_path):
+    suffix = uuid.uuid4().hex[:8]
+    family, tray = f"Ankle Fracture Plating Sytem {suffix}", f"Edit Tray {suffix}"
+    await upsert_families_and_trays({family: [tray]})
+    headers = {"Authorization": f"Bearer {_signup_token(monkeypatch, tmp_path, admin=True)}"}
+    listed = _listed_family(family, headers)
+
+    family_response = client.patch(
+        f"/catalog/product-families/{listed['id']}",
+        json={"display_name": f"  Ankle Fracture Plating System {suffix}  "},
+        headers=headers,
+    )
+    tray_response = client.patch(
+        f"/catalog/trays/{listed['trays'][0]['id']}",
+        json={"display_name": f"Edited Tray {suffix}"},
+        headers=headers,
+    )
+
+    assert family_response.status_code == 200
+    assert family_response.json() == {
+        "id": listed["id"],
+        "name": family,
+        "display_name": f"Ankle Fracture Plating System {suffix}",
+    }
+    assert tray_response.status_code == 200
+    relisted = _listed_family(family, headers)
+    assert relisted["display_name"] == f"Ankle Fracture Plating System {suffix}"
+    assert relisted["trays"][0]["display_name"] == f"Edited Tray {suffix}"
+
+    # Clearing a display name falls back to the catalog name.
+    for blank in ("", "   ", None):
+        reset = client.patch(
+            f"/catalog/trays/{listed['trays'][0]['id']}", json={"display_name": blank}, headers=headers
+        )
+        assert reset.json()["display_name"] == tray
+    reset_family = client.patch(f"/catalog/product-families/{listed['id']}", json={}, headers=headers)
+    assert reset_family.json()["display_name"] == family
+
+
+def test_display_name_edits_404_for_unknown_ids(monkeypatch, tmp_path):
+    headers = {"Authorization": f"Bearer {_signup_token(monkeypatch, tmp_path, admin=True)}"}
+    unknown_id = uuid.uuid4()
+    body = {"display_name": "Anything"}
+    assert client.patch(f"/catalog/product-families/{unknown_id}", json=body, headers=headers).status_code == 404
+    assert client.patch(f"/catalog/trays/{unknown_id}", json=body, headers=headers).status_code == 404
+
+
+def test_display_name_edits_are_admin_only(monkeypatch, tmp_path):
+    headers = {"Authorization": f"Bearer {_signup_token(monkeypatch, tmp_path, admin=False)}"}
+    some_id = uuid.uuid4()
+    body = {"display_name": "Anything"}
+    assert client.patch(f"/catalog/product-families/{some_id}", json=body, headers=headers).status_code == 403
+    assert client.patch(f"/catalog/trays/{some_id}", json=body, headers=headers).status_code == 403
+    assert client.patch(f"/catalog/trays/{some_id}", json=body).status_code == 401
+
+
+async def test_reseed_after_an_admin_edit_keeps_the_edited_display_names(monkeypatch, tmp_path):
+    suffix = uuid.uuid4().hex[:8]
+    family, tray = f"Reseed Family {suffix}", f"Reseed Tray {suffix}"
+    graph = get_graph_client()
+    await graph.ensure_constraints()
+    path = _write_mini_master(tmp_path / "reseed.xlsx", [(family, tray, f"RSD-{suffix}")])
+    await seed_master_catalog(graph, path)
+    headers = {"Authorization": f"Bearer {_signup_token(monkeypatch, tmp_path, admin=True)}"}
+    listed = _listed_family(family, headers)
+    client.patch(
+        f"/catalog/product-families/{listed['id']}", json={"display_name": "Edited Family"}, headers=headers
+    )
+    client.patch(
+        f"/catalog/trays/{listed['trays'][0]['id']}", json={"display_name": "Edited Tray"}, headers=headers
+    )
+
+    await seed_master_catalog(graph, path)
+
+    relisted = _listed_family(family, headers)
+    assert relisted["id"] == listed["id"]
+    assert relisted["display_name"] == "Edited Family"
+    assert [(listed_tray["name"], listed_tray["display_name"]) for listed_tray in relisted["trays"]] == [
+        (tray, "Edited Tray")
+    ]
+
+
+async def test_chat_tools_show_display_names_and_accept_them_back(monkeypatch, tmp_path):
+    suffix = uuid.uuid4().hex[:8]
+    family, tray, sku = f"Typo Sytem {suffix}", f"Typo Tray {suffix}", f"TYP-{suffix}"
+    graph = get_graph_client()
+    await graph.ensure_constraints()
+    await graph.upsert_tray(tray, family)
+    await graph.upsert_part(sku, tray, description=f"TYPO PART {suffix}")
+    await upsert_families_and_trays({family: [tray]})
+    headers = {"Authorization": f"Bearer {_signup_token(monkeypatch, tmp_path, admin=True)}"}
+    listed = _listed_family(family, headers)
+    family_display, tray_display = f"Typo System {suffix}", f"Fixed Tray {suffix}"
+    client.patch(
+        f"/catalog/product-families/{listed['id']}", json={"display_name": family_display}, headers=headers
+    )
+    client.patch(
+        f"/catalog/trays/{listed['trays'][0]['id']}", json={"display_name": tray_display}, headers=headers
+    )
+
+    found = await part_lookup.ainvoke({"term": sku, "product_family": family_display})
+    assert [part["sku"] for part in found][:1] == [sku]
+    assert found[0]["product_family"] == family_display
+
+    related = await graph_query.ainvoke({"entity": sku, "relationship": "BELONGS_TO_TRAY"})
+    assert [row["related_entity"] for row in related] == [tray_display]
+    assert related[0]["related_properties"]["name"] == tray_display
+
+    tray_family = await graph_query.ainvoke({"entity": tray_display, "relationship": "BELONGS_TO_FAMILY"})
+    assert [row["related_entity"] for row in tray_family] == [family_display]
 
 
 def test_real_family_names_pass_through_the_legacy_map_unchanged():

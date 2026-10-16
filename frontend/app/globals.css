@@ -683,6 +683,20 @@ tr:last-child td {
   color: var(--danger);
 }
 
+/* Families & trays tree: family rows lead, their trays indent under them. */
+.settings-tree-family td:first-child {
+  font-weight: 600;
+}
+
+.settings-tree-tray td:first-child {
+  padding-left: 32px;
+}
+
+.settings-catalog-name {
+  color: var(--steel);
+  font-size: 0.86rem;
+}
+
 /* ---------------- admin workflow picker ---------------- */
 
 .workflow-picker {

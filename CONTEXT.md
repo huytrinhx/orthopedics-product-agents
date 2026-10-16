@@ -20,6 +20,11 @@ Single-context repo — see `docs/agents/domain.md` for how this file and
   Postgres (`trays`) alongside its family. A `Procedure` (below) requires a
   specific `Tray`, not just a `Product Family` — this is what answers "if
   I'm doing a hybrid MTP fusion, do I only need the hybrid tray?"
+- **Display name** — the label users see for a `Product Family` or `Tray`,
+  edited by admins on the Settings page; defaults to (and, when cleared,
+  falls back to) the catalog name. A catalog re-seed never overwrites it.
+  The graph only knows catalog names, so the chat tools translate at their
+  boundary (`backend/catalog/display_names.py`).
 - **System** *(legacy)* — the document-level System tag
   (`backend/documents/models.py`, the Postgres `systems` table, e.g. `MIS -
   Foot Recon`) that predates Product Families, and the old name of the

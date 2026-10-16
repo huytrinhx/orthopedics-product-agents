@@ -84,3 +84,49 @@ async def list_families_with_trays() -> list[ProductFamilyRecord]:
     for tray_id, name, display_name, family_id in tray_rows:
         families_by_id[family_id].trays.append(TrayRecord(tray_id, name, display_name))
     return families
+
+
+# ---- Admin display-name edits (issue #15) ----
+#
+# A blank or missing display name falls back to the catalog name rather than
+# being stored empty, so `display_name` stays NOT NULL and every reader can
+# use it as-is. `name` is never written here -- it's the seed's key.
+
+_DISPLAY_NAME_OR_CATALOG_NAME = "COALESCE(NULLIF(btrim(%s), ''), name)"
+
+
+async def set_family_display_name(
+    family_id: uuid.UUID, display_name: str | None
+) -> ProductFamilyRecord | None:
+    """Returns the updated family (its `trays` left empty), or None if no
+    family has that id."""
+    connection = await get_connection()
+    try:
+        async with connection.cursor() as cursor:
+            await cursor.execute(
+                f"UPDATE product_families SET display_name = {_DISPLAY_NAME_OR_CATALOG_NAME} "
+                "WHERE id = %s RETURNING id, name, display_name",
+                (display_name, family_id),
+            )
+            row = await cursor.fetchone()
+        await connection.commit()
+    finally:
+        await connection.close()
+    return ProductFamilyRecord(*row) if row else None
+
+
+async def set_tray_display_name(tray_id: uuid.UUID, display_name: str | None) -> TrayRecord | None:
+    """Returns the updated tray, or None if no tray has that id."""
+    connection = await get_connection()
+    try:
+        async with connection.cursor() as cursor:
+            await cursor.execute(
+                f"UPDATE trays SET display_name = {_DISPLAY_NAME_OR_CATALOG_NAME} "
+                "WHERE id = %s RETURNING id, name, display_name",
+                (display_name, tray_id),
+            )
+            row = await cursor.fetchone()
+        await connection.commit()
+    finally:
+        await connection.close()
+    return TrayRecord(*row) if row else None
