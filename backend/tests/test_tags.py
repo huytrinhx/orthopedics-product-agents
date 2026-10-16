@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 
 from api.main import app
 from config.db import get_connection
+from doc_type_hierarchy.repository import list_hierarchy, set_document_types
 
 client = TestClient(app)
 
@@ -434,6 +435,52 @@ def test_merge_into_missing_document_type_changes_nothing(monkeypatch, tmp_path)
         listed_document_type["id"] == stray["id"]
         for listed_document_type in client.get("/document-types", headers=headers).json()
     )
+
+
+def test_merge_document_type_merges_its_question_type_hierarchy_rows(monkeypatch, tmp_path):
+    """Issue #17: a question type that retrieved from the stray retrieves
+    from the survivor after the merge. Re-pointed where the question type
+    only listed the stray; deduped (survivor keeps the better rank) where it
+    listed both. Uses throwaway question-type slugs so no real question
+    type's mapping is touched."""
+    token = _admin_token(monkeypatch, tmp_path)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    def new_document_type(prefix: str) -> dict:
+        return client.post("/document-types", headers=headers, json={"name": _unique_name(prefix)}).json()
+
+    surviving = new_document_type("Surgical Technique")
+    stray = new_document_type("Surgical Techniqe")
+    other = new_document_type("Setup Guide")
+    suffix = uuid.uuid4().hex[:8]
+    only_stray = f"test-merge-only-stray-{suffix}"
+    stray_ranked_higher = f"test-merge-stray-higher-{suffix}"
+    survivor_ranked_higher = f"test-merge-survivor-higher-{suffix}"
+    rankings = {
+        only_stray: [other["id"], stray["id"]],
+        stray_ranked_higher: [stray["id"], other["id"], surviving["id"]],
+        survivor_ranked_higher: [surviving["id"], stray["id"], other["id"]],
+    }
+    for question_type, document_type_ids in rankings.items():
+        asyncio.run(set_document_types(question_type, [uuid.UUID(document_type_id) for document_type_id in document_type_ids]))
+
+    try:
+        response = client.post(
+            f"/document-types/{stray['id']}/merge", headers=headers, json={"into_id": surviving["id"]}
+        )
+        assert response.status_code == 200
+
+        hierarchy = asyncio.run(list_hierarchy())
+
+        def ranked_ids(question_type: str) -> list[str]:
+            return [str(document_type.id) for document_type in hierarchy[question_type]]
+
+        assert ranked_ids(only_stray) == [other["id"], surviving["id"]]
+        assert ranked_ids(stray_ranked_higher) == [surviving["id"], other["id"]]
+        assert ranked_ids(survivor_ranked_higher) == [surviving["id"], other["id"]]
+    finally:
+        for question_type in rankings:
+            asyncio.run(set_document_types(question_type, []))
 
 
 def test_merge_document_type_into_itself_rejected(monkeypatch, tmp_path):

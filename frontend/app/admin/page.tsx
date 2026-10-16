@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useAuth } from "../../lib/auth-context";
+import { DocTypeHierarchySection } from "./doc-type-hierarchy-section";
 import { DocumentTypesSection } from "./document-types-section";
 import { WorkflowSection } from "./workflow-section";
 
@@ -31,6 +32,7 @@ export default function AdminPage() {
 
       <WorkflowSection />
       <DocumentTypesSection />
+      <DocTypeHierarchySection />
     </main>
   );
 }

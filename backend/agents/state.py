@@ -32,6 +32,10 @@ class RetrievedPassage(TypedDict):
     # rerank weighs a candidate partly by which doctype it came from
     # (doctype-hierarchy.csv's priority order), which needs this.
     document_type: str | None
+    # The same chunk's document_type id (as a string), or None if untagged
+    # -- rerank matches it against the question type -> doc type hierarchy
+    # table (issue #17), which is keyed by id, not name.
+    document_type_id: str | None
 
 
 class BaseAgentState(TypedDict):

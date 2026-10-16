@@ -683,6 +683,102 @@ tr:last-child td {
   color: var(--danger);
 }
 
+/* ---------------- question types -> doc types hierarchy ---------------- */
+
+.hierarchy-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.hierarchy-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px 16px;
+  border: 1px solid var(--steel-line);
+  background: var(--surface);
+}
+
+.hierarchy-card-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.hierarchy-card-name {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+.hierarchy-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--steel-line);
+}
+
+.hierarchy-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 8px 10px;
+  background: var(--surface);
+}
+
+.hierarchy-item + .hierarchy-item {
+  border-top: 1px solid var(--steel-line);
+}
+
+.hierarchy-item[draggable="true"] {
+  cursor: grab;
+}
+
+.hierarchy-item-dragging {
+  opacity: 0.5;
+}
+
+.hierarchy-handle {
+  color: var(--steel);
+}
+
+.hierarchy-rank {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  color: var(--steel);
+  min-width: 1.2em;
+}
+
+.hierarchy-item-name {
+  flex: 1;
+  min-width: 0;
+}
+
+.hierarchy-item-actions {
+  gap: 10px;
+}
+
+.hierarchy-coverage-heading {
+  margin: 24px 0 10px;
+  font-size: 1rem;
+}
+
+.hierarchy-coverage {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+}
+
+.hierarchy-coverage-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.9rem;
+}
+
 /* ---------------- admin workflow picker ---------------- */
 
 .workflow-picker {
