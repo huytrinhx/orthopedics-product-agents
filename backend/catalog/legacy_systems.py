@@ -10,12 +10,18 @@ only worked while the graph's families were the bare brand names `MIS` /
 which (`MIS - Foot Recon System`) itself contains " - " -- so the mapping
 is spelled out here instead, one entry per legacy tag. Shared with the
 migration that moves document tags from systems onto families.
+
+Entries cover production's `systems` tags as of 2026-10-16 that aren't
+already a family name verbatim (`Ancillary Foot Recon System`, `Core Foot
+Plating System`, `Distal Tibia Plating System` and `MIS - Power System`
+pass straight through). `Ankle Fracture Plating Sytem` is the catalog's own
+spelling, typo included -- the display name fixes it, not the key.
 """
 
 LEGACY_SYSTEM_FAMILIES: dict[str, str] = {
+    "Ankle Fracture Plating System": "Ankle Fracture Plating Sytem",
     "MIS - Foot Recon": "MIS - Foot Recon System",
-    "MIS - Power Drive": "MIS - Power System",
-    "REFLEX - Hybrid": "REFLEX HYBRID",
+    "REFLEX Nitinol Implants": "REFLEX Foot Recon Systems",
 }
 
 _FAMILIES_BY_LOWERCASE_TAG = {
