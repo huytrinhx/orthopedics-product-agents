@@ -20,7 +20,11 @@ Schema (see CONTEXT.md's glossary for the domain story behind these):
     (Part|Procedure)-[:SOURCED_FROM]->(Document)
     (Term)-[:ALIAS_OF|ABBREVIATION_OF]->(CanonicalTerm)
 
-`Part` identity is its SKU and only its SKU (backend/evals/unite-master-csv.txt's
+ProductFamily and Tray are both named exactly as the master catalog
+(backend/evals/master-product-detail-oct-26.xlsx) names them, Family > Tray >
+Part; every Tray belongs to exactly one ProductFamily.
+
+`Part` identity is its SKU and only its SKU (the master catalog's
 `Item No.`) — no name-based or fuzzy merging. Two ingestion paths write here:
 backend/ingestion/seed_master_catalog.py (deterministic, the authoritative
 Part/Tray/ProductFamily catalog) and backend/ingestion/entity_extraction.py
@@ -31,6 +35,8 @@ import os
 import re
 
 from neo4j import AsyncGraphDatabase
+
+from catalog.legacy_systems import resolve_family_name
 
 _RELATIONSHIP_TYPES = (
     "BELONGS_TO_FAMILY",
@@ -77,20 +83,82 @@ class GraphClient:
                 "MERGE (:ProductFamily {name: $name})", name=name
             )
 
-    async def upsert_tray(self, name: str, product_family: str | None) -> None:
+    async def upsert_tray(self, name: str, product_family: str) -> None:
+        """A Tray belongs to exactly one ProductFamily, so any
+        BELONGS_TO_FAMILY edge to a different family (left over from an
+        earlier catalog, or a tray moved between families) is dropped
+        rather than merged alongside the new one.
+        """
         async with self._driver.session() as session:
-            if product_family:
-                await session.run(
-                    """
-                    MERGE (t:Tray {name: $name})
-                    MERGE (f:ProductFamily {name: $family})
-                    MERGE (t)-[:BELONGS_TO_FAMILY]->(f)
-                    """,
-                    name=name,
-                    family=product_family,
-                )
-            else:
-                await session.run("MERGE (:Tray {name: $name})", name=name)
+            await session.run(
+                """
+                MERGE (t:Tray {name: $name})
+                WITH t
+                CALL (t) {
+                    MATCH (t)-[r:BELONGS_TO_FAMILY]->(other:ProductFamily)
+                    WHERE other.name <> $family
+                    DELETE r
+                }
+                MERGE (f:ProductFamily {name: $family})
+                MERGE (t)-[:BELONGS_TO_FAMILY]->(f)
+                """,
+                name=name,
+                family=product_family,
+            )
+
+    async def rename_trays(self, renames: dict[str, str]) -> list[tuple[str, str]]:
+        """Renames Tray nodes in place (old name -> new name), so every edge
+        already pointing at one -- a Procedure's REQUIRES, Parts'
+        BELONGS_TO_TRAY -- survives a catalog renaming it, instead of the
+        seed minting a fresh Tray and the reconcile stranding the old one.
+        TraySection nodes aren't linked to their Tray by an edge, only by
+        their `tray` property and the tray-prefixed `key`
+        (replace_tray_sections), so both are rewritten alongside.
+
+        Skips a rename whose target name already exists (a re-run, or a
+        catalog that already had the new name) -- the uniqueness constraint
+        on Tray.name would reject it anyway, and the old Tray then goes
+        through prune_stale_tray_memberships like any other emptied tray.
+
+        Returns the (old, new) pairs actually renamed.
+        """
+        pairs = [{"old_name": old, "new_name": new} for old, new in renames.items() if old != new]
+        if not pairs:
+            return []
+        async with self._driver.session() as session:
+            result = await session.run(
+                """
+                UNWIND $pairs AS pair
+                MATCH (t:Tray {name: pair.old_name})
+                WHERE NOT EXISTS { MATCH (:Tray {name: pair.new_name}) }
+                SET t.name = pair.new_name
+                WITH pair
+                CALL (pair) {
+                    MATCH (s:TraySection {tray: pair.old_name})
+                    SET s.tray = pair.new_name,
+                        s.key = pair.new_name + substring(s.key, size(pair.old_name))
+                }
+                RETURN pair.old_name AS old_name, pair.new_name AS new_name
+                """,
+                pairs=pairs,
+            )
+            return [(record["old_name"], record["new_name"]) async for record in result]
+
+    async def delete_product_families(self, names: list[str]) -> list[str]:
+        """DETACH DELETEs the named ProductFamily nodes (their Trays stay,
+        just without that BELONGS_TO_FAMILY edge). Returns the names that
+        actually existed."""
+        async with self._driver.session() as session:
+            result = await session.run(
+                """
+                MATCH (f:ProductFamily) WHERE f.name IN $names
+                WITH f, f.name AS name
+                DETACH DELETE f
+                RETURN name
+                """,
+                names=names,
+            )
+            return sorted([record["name"] async for record in result])
 
     async def upsert_part(self, sku: str, tray: str, **properties: str | int | None) -> None:
         cleaned_properties = {key: value for key, value in properties.items() if value is not None}
@@ -347,18 +415,17 @@ class GraphClient:
     async def list_parts_for_family(self, product_family: str) -> list[dict]:
         # Found live (2026-09-05, ticket 25): callers hand this whatever
         # taxonomy they have on hand, which is usually documents.system_name
-        # -- the Postgres systems-tag name ("MIS - Foot Recon"), one level
-        # more specific than the Neo4j ProductFamily name ("MIS") it
-        # actually needs to match. Every real document tagged this way
-        # (i.e. every document with a system at all) was silently getting
-        # zero known parts back, with entity_extraction.py's own `if not
-        # known_parts: return` then silently no-op'ing the whole graph leg
-        # for it -- this bug predates ticket 25, it just went unnoticed
-        # because a silent empty-list no-op looks identical to "nothing to
-        # extract from this text" from the caller's side. Same
-        # normalization find_parts (below) already applies, just never
-        # ported to these two lookups.
-        family = product_family.split(" - ")[0].strip() if product_family else product_family
+        # -- a legacy Postgres systems-tag name ("MIS - Foot Recon"), not
+        # the Neo4j ProductFamily name it actually needs to match. Every
+        # real document tagged this way was silently getting zero known
+        # parts back, with entity_extraction.py's own `if not known_parts:
+        # return` then silently no-op'ing the whole graph leg for it -- a
+        # silent empty-list no-op looks identical to "nothing to extract
+        # from this text" from the caller's side. Same normalization
+        # find_parts (below) applies: the explicit legacy map in
+        # catalog/legacy_systems.py, which replaced stripping a " - "
+        # suffix once real family names started containing " - " too.
+        family = resolve_family_name(product_family) if product_family else product_family
         async with self._driver.session() as session:
             result = await session.run(
                 """
@@ -370,7 +437,7 @@ class GraphClient:
             return [dict(record) async for record in result]
 
     async def list_trays_for_family(self, product_family: str) -> list[str]:
-        family = product_family.split(" - ")[0].strip() if product_family else product_family
+        family = resolve_family_name(product_family) if product_family else product_family
         async with self._driver.session() as session:
             result = await session.run(
                 """
@@ -427,15 +494,13 @@ class GraphClient:
         properties.
 
         `product_family` scopes the match to one ProductFamily (e.g.
-        "MIS") when given, since a generic term like "wire" would
-        otherwise match parts across every ingested system. Accepts either
-        a real ProductFamily name or a Postgres systems-tag name one level
-        more specific (e.g. "MIS - Foot Recon") -- these are two separate
-        taxonomies (four Postgres system tags vs. two Neo4j ProductFamily
-        nodes) that share a naming convention where the family name is the
-        tag's prefix before " - "; normalized here (not left to the
-        caller) after react_agent.py's ticket 23 smoke test showed the
-        model passing the more specific tag name straight through
+        "MIS - Foot Recon System") when given, since a generic term like
+        "wire" would otherwise match parts across every ingested system.
+        Accepts either a real ProductFamily name or a legacy Postgres
+        systems-tag name (e.g. "MIS - Foot Recon"), mapped to its family
+        through catalog/legacy_systems.py's explicit map -- normalized here
+        (not left to the caller) after react_agent.py's ticket 23 smoke
+        test showed the model passing the tag name straight through
         (reasonably, since it's what detect_intent's resolved_system
         actually looks like) and silently matching zero real families as a
         result. Ticket 20:
@@ -460,7 +525,7 @@ class GraphClient:
         -- so callers (resolve_skus, _format_part) can read `sku`/
         `description` directly without unwrapping a nested key first.
         """
-        family = product_family.split(" - ")[0].strip() if product_family else None
+        family = resolve_family_name(product_family) if product_family else None
         # Falls back to matching on any individual word in `term` (2+
         # chars -- includes clinical abbreviations like "PT"/"FT", which
         # matter more here than most 3+ char words) when the full phrase

@@ -5,29 +5,39 @@ Single-context repo — see `docs/agents/domain.md` for how this file and
 
 ## Glossary
 
-- **System** — one orthopedic implant/instrument product line (e.g. `MIS`,
-  `REFLEX`). Golden-dataset queries and intent detection are scoped to a
-  system; retrieval and citations stay within it. Not to be confused with
-  "workflow" (below) or a computer system. Same granularity as the graph's
-  `Product Family` node and the document-level System tag
-  (`backend/documents/models.py`) — see `Tray` below for the finer
-  granularity actually used inside the master item file.
-- **Product Family** — the graph node (`backend/retrieval/graph_client.py`)
-  for a "System" (above) — `MIS`, `REFLEX`. Distinct from `Tray`, one level
-  finer.
-- **Tray** — one specific implant/instrument set, at the granularity the
-  master item file (`backend/evals/unite-master-csv.txt`) actually lists
-  under its `System` column (e.g. `REFLEX® HYBRID Implant System`, `REFLEX®
-  MINI Nitinol Staple System`) — one level below `Product Family`/System tag.
-  A `Procedure` (below) requires a specific `Tray`, not just a `Product
-  Family` — this is what answers "if I'm doing a hybrid MTP fusion, do I only
-  need the hybrid tray?"
-- **Master item file** — `backend/evals/unite-master-csv.txt`, the real
-  catalog of every `Part` (SKU, description, spec columns, and a plate↔screw
-  compatibility matrix). The authoritative source for `Part`/`Tray`/`Product
-  Family` graph nodes, seeded by a one-off script — distinct from the
-  per-document prose extraction that runs on brochures/technique guides at
-  upload time and only attaches facts to `Part`s that already exist here.
+- **Product Family** — the top-level container of the catalog hierarchy
+  (Product Family > Tray > Part), one per value of the master item file's
+  `Family` column (e.g. `MIS - Foot Recon System`, `REFLEX HYBRID`,
+  `Cannulated Screws`; 18 in the Oct-26 catalog). A graph node
+  (`backend/retrieval/graph_client.py`) mirrored into Postgres
+  (`product_families`, `backend/catalog/`) with an admin-editable display
+  name. There is no brand level above it — the old `MIS`/`REFLEX` families
+  are retired.
+- **Tray** — one specific implant/instrument set within exactly one
+  `Product Family`, named by the master item file's `Tray` column minus the
+  `UNITE® Foot & Ankle | ` brand segment (e.g. `REFLEX® HYBRID Implant
+  System`, `Soft Tissue | Comprehensive Instrument Tray`). Mirrored into
+  Postgres (`trays`) alongside its family. A `Procedure` (below) requires a
+  specific `Tray`, not just a `Product Family` — this is what answers "if
+  I'm doing a hybrid MTP fusion, do I only need the hybrid tray?"
+- **System** *(legacy)* — the document-level System tag
+  (`backend/documents/models.py`, the Postgres `systems` table, e.g. `MIS -
+  Foot Recon`) that predates Product Families, and the old name of the
+  master item file's `Tray` column. Golden-dataset queries and intent
+  detection are still scoped by it. Family-scoped graph lookups translate a
+  System tag to its Product Family through an explicit map
+  (`backend/catalog/legacy_systems.py`) until documents are re-tagged
+  against families. Not to be confused with "workflow" (below) or a
+  computer system.
+- **Master item file** — `backend/evals/master-product-detail-oct-26.xlsx`
+  (the stakeholders' "Master Product Detail File (Oct-26) - Do Not Edit",
+  committed as-is), the real catalog of every `Part` (family, tray, SKU,
+  description, spec columns, and a plate↔screw compatibility matrix). The
+  authoritative source for `Product Family`/`Tray`/`Part`, seeded by a
+  one-off script — distinct from the per-document prose extraction that runs
+  on brochures/technique guides at upload time and only attaches facts to
+  `Part`s that already exist here. Typos in it (e.g. `Ankle Fracture Plating
+  Sytem`) are fixed through display names, not by editing the file.
 - **Part** — a single catalog item, identified by SKU (the master item
   file's `Item No.`) and only that — no name-based or fuzzy matching. A
   mention in a document's prose without a resolvable SKU does not become a
