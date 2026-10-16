@@ -118,7 +118,7 @@ it.
    segmented within the one project rather than needing separate infra.
    Leave the keys blank to disable tracing entirely (it no-ops safely).
 5. **Run the backend**: `cd backend && uv venv .venv --python 3.11 && .venv/bin/pip install -e ".[dev]" && .venv/bin/alembic upgrade head && .venv/bin/uvicorn api.main:app --reload` — serves on `http://localhost:8000`. The `alembic upgrade head` step applies schema migrations (`backend/migrations/`) against `DATABASE_URL`; rerun it after pulling new migrations.
-6. **Seed the knowledge graph** (once — in a second terminal, from `backend/`, once step 5's `pip install` has run): `.venv/bin/python -m ingestion.seed_master_catalog && .venv/bin/python -m ingestion.seed_synonyms` — populates Neo4j from the real fixtures in `backend/evals/` (`unite-master-csv.txt`, `synonyms-map.csv`). Per-document prose extraction (ticket 07) only attaches facts to parts this seed already created, so uploaded documents won't produce any graph facts until this has run at least once.
+6. **Seed the knowledge graph** (once — in a second terminal, from `backend/`, once step 5's `pip install` has run): `.venv/bin/python -m ingestion.seed_master_catalog && .venv/bin/python -m ingestion.seed_synonyms` — populates Neo4j from the real fixtures in `backend/evals/` (`master-product-detail-oct-26.xlsx`, the stakeholders' master catalog committed as-is, and `synonyms-map.csv`). `seed_master_catalog` also mirrors the catalog's Product Families and Trays into Postgres (`product_families`/`trays`), so it needs `DATABASE_URL` and step 5's `alembic upgrade head` to have run; it fails with the offending row numbers if any row has a blank `Family`. Per-document prose extraction (ticket 07) only attaches facts to parts this seed already created, so uploaded documents won't produce any graph facts until this has run at least once.
 7. **Run the frontend**: `cp frontend/.env.local.example frontend/.env.local`, then `cd frontend && npm install && npm run dev` — serves on `http://localhost:3000` (or a different port if Langfuse is already on 3000). `.env.local` points the frontend at the backend on `:8000`, since Next's dev server and FastAPI run as two separate processes locally (they're one process in production — see ADR 0004).
 8. **Run backend tests**: `docker compose --profile test up -d` (once) brings up a second, disposable Postgres (`:5433`) and Neo4j (`:7688`) alongside your dev instances. `cd backend && pytest` runs against those automatically — `backend/tests/conftest.py` points `DATABASE_URL`/`NEO4J_URI` at the test containers and applies migrations/constraints itself, so the test suite never writes into the database you're doing manual dev work against. `docker compose --profile test down` drops the test containers (and their data) when you're done; bring them back with the same `up` command.
 
@@ -254,9 +254,11 @@ re-run whenever they apply:
    fails an entire deploy with no retry if a pre-deploy command exits
    non-zero, so running migrations that way would permanently block every
    future deploy the moment one migration failed for any reason.
-2. **The master-catalog or synonym source CSVs changed.** Once the deploy
-   carrying the new CSV is live (the seed reads the copy baked into the
-   image at `/app/backend/evals/`, not your local file):
+2. **The master catalog (`master-product-detail-oct-26.xlsx`) or the synonym
+   CSV changed.** Once the deploy carrying the new file is live (the seed
+   reads the copy baked into the image at `/app/backend/evals/`, not your
+   local file), and after step 1 if that deploy also added a migration —
+   the catalog seed writes the `product_families`/`trays` mirror tables too:
 
    ```bash
    railway ssh -- python -m ingestion.seed_master_catalog
@@ -265,12 +267,14 @@ re-run whenever they apply:
 
    Uploaded documents produce zero graph facts until `seed_master_catalog`
    has run at least once — prose extraction only *attaches* facts to parts
-   this seed already created. `seed_master_catalog` also reconciles tray
-   membership — a tray renamed or moved in the CSV drops the old
+   this seed already created. Product Families and Trays are mirrored into
+   Postgres keyed on their catalog name; a re-seed never overwrites a
+   `display_name` edited there. `seed_master_catalog` also reconciles tray
+   membership — a tray renamed or moved in the catalog drops the old
    `BELONGS_TO_TRAY` edges and deletes the emptied tray (unless a document's
    Procedure still references it; those are printed as "kept"), so there's
    no hand-run Cypher after a rename. Both are otherwise `MERGE`s, so they're
-   idempotent — safe to rerun (e.g. after fixing a bad row in a CSV)
+   idempotent — safe to rerun (e.g. after fixing a bad row in a source file)
    without duplicating anything.
 3. **A new environment variable was added to the app.** Set its value in
    the Railway dashboard, then also add its name to `.railway/railway.ts`'s

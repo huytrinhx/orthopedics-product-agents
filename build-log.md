@@ -465,3 +465,18 @@ feedback-promotion workflow), worked one at a time in dependency order.
   langchain 1.4.3, langgraph 1.2.12.
 - **Next:** route the chat model through OpenRouter so trying a model is a
   config change, not a code change (GitHub issue #8).
+- **Oct-26 master catalog: Product Families (GitHub issue #11).** The
+  stakeholders' `Master Product Detail File (Oct-26)` xlsx is now committed
+  (`backend/evals/master-product-detail-oct-26.xlsx`) and read directly with
+  openpyxl, replacing the hand-exported `unite-master-csv.txt`. Its new
+  `Family` column makes Product Family the top of the hierarchy (18 families
+  over 27 trays); the regex-inferred `MIS`/`REFLEX` families are retired.
+  Existing Tray nodes are renamed in place (brand prefix stripped, plus three
+  real renames) so Procedure/TraySection edges survive. Families and trays
+  are mirrored into Postgres (`product_families`/`trays`, `backend/catalog/`)
+  with display names a re-seed never overwrites, behind a read-only admin
+  `GET /catalog/product-families`. Family-scoped graph lookups now map legacy
+  System tags to families through `catalog/legacy_systems.py` instead of
+  stripping a ` - ` suffix, which `MIS - Foot Recon System` would break.
+  Also fixed: compatibility-matrix headers that lost their closing paren in
+  this file (`(MMSN20xx`) no longer silently drop their COMPATIBLE_WITH edges.

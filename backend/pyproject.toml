@@ -43,6 +43,9 @@ dependencies = [
     # langfuse.langchain.CallbackHandler (backend/observability/langfuse_setup.py)
     # requires the full langchain meta-package at import time.
     "langchain==1.4.3",
+    # Reads the master catalog xlsx directly (backend/ingestion/seed_master_catalog.py)
+    # instead of a hand-exported tab-delimited copy of it.
+    "openpyxl==3.1.5",
 ]
 
 [project.optional-dependencies]
@@ -66,7 +69,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["agents", "api", "auth", "config", "documents", "tags", "retrieval", "ingestion", "memory", "evals", "observability"]
+packages = ["agents", "api", "auth", "catalog", "config", "documents", "tags", "retrieval", "ingestion", "memory", "evals", "observability"]
 
 [tool.ruff]
 line-length = 100

@@ -1,19 +1,26 @@
-"""One-off deterministic seed script for backend/evals/unite-master-csv.txt
-(the real master item file / inventory control form) into the Neo4j graph
-(see backend/retrieval/graph_client.py's schema docstring). Run manually —
-this is NOT part of per-document ingestion (backend/ingestion/pipeline.py);
-it's a batch job seeding the authoritative Part/Tray/ProductFamily catalog
-that per-document prose extraction (backend/ingestion/entity_extraction.py)
-then attaches facts to. Run it (and backend/ingestion/seed_synonyms.py)
-before uploading/indexing real documents, or prose extraction has nothing to
-attach to:
+"""One-off deterministic seed script for the stakeholders' master catalog,
+backend/evals/master-product-detail-oct-26.xlsx (the "Master Product Detail
+File (Oct-26) - Do Not Edit" workbook, committed as-is and read directly),
+into the Neo4j graph (see backend/retrieval/graph_client.py's schema
+docstring) and its Postgres mirror (backend/catalog/repository.py). Run
+manually — this is NOT part of per-document ingestion
+(backend/ingestion/pipeline.py); it's a batch job seeding the authoritative
+ProductFamily > Tray > Part catalog that per-document prose extraction
+(backend/ingestion/entity_extraction.py) then attaches facts to. Run it (and
+backend/ingestion/seed_synonyms.py) before uploading/indexing real
+documents, or prose extraction has nothing to attach to:
 
-    python -m ingestion.seed_master_catalog [path/to/unite-master-csv.txt]
+    python -m ingestion.seed_master_catalog [path/to/master.xlsx]
 
-`Item No.` is a Part's only identity — rows without one are skipped. Two
-kinds of relationship are resolved deterministically here, both acceptable
-only inside this one-off, reviewable script (never in the LLM prose-
-extraction path, which only merges by exact SKU):
+Columns are looked up by header name, never position. `Item No.` is a
+Part's only identity — rows without one are skipped. `Family` is strict:
+every row needs one (the seed fails loudly otherwise) and every Tray must
+sit under exactly one Family. Tray names drop the leading
+`UNITE® Foot & Ankle | ` brand segment every row repeats.
+
+Two kinds of relationship are resolved deterministically here, both
+acceptable only inside this one-off, reviewable script (never in the LLM
+prose-extraction path, which only merges by exact SKU):
 
   - COMPATIBLE_WITH (plate <-> screw family): each compatibility-matrix
     column header names a literal SKU prefix, e.g. "2.7mm Polyaxial Locking
@@ -38,19 +45,26 @@ dropped from the file entirely are left alone; deleting them would also
 delete facts other ingestion paths attached to them.
 """
 import asyncio
-import csv
 import re
 import sys
 from collections import defaultdict
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
+from openpyxl import load_workbook
+
+from catalog.repository import upsert_families_and_trays
 from retrieval.graph_client import GraphClient, get_graph_client
 
-DEFAULT_PATH = Path(__file__).resolve().parents[2] / "backend" / "evals" / "unite-master-csv.txt"
+DEFAULT_PATH = (
+    Path(__file__).resolve().parents[2] / "backend" / "evals" / "master-product-detail-oct-26.xlsx"
+)
 
+_BRAND_PREFIX = "UNITE® Foot & Ankle | "
 _FIXED_COLUMNS = {
-    "System",
+    "Family",
+    "Tray",
     "Item Type",
     "Item No.",
     "Description",
@@ -63,12 +77,55 @@ _FIXED_COLUMNS = {
     "Pre-Drill Diameter",
     "Driver",
 }
-_COMPAT_PREFIX_RE = re.compile(r"\(([A-Za-z0-9]+)xx\)\s*$")
+_REQUIRED_COLUMNS = ("Family", "Tray", "Item No.")
+# The closing paren is optional: several Oct-26 headers lost theirs
+# ("2.0mm Non-Locking (MMSN20xx"), and the prefix is still unambiguous.
+_COMPAT_PREFIX_RE = re.compile(r"\(([A-Za-z0-9]+)xx\)?\s*$")
 _NUMERIC_RE = re.compile(r"\d+(?:\.\d+)?")
+
+# ---- One-time Oct-26 migration. Remove once this seed has run in
+# production (or in the legacy-removal ticket at the latest). ----
+#
+# Before Oct-26 every Tray node was named with the brand prefix, and the
+# MIS/REFLEX ProductFamily nodes were inferred from tray names by regex.
+# Renaming the existing Tray nodes in place (rather than letting the seed
+# mint new ones) keeps their Procedure REQUIRES, TraySection, and
+# BELONGS_TO_TRAY edges. Beyond the prefix strip, three trays were
+# genuinely renamed in this catalog; `Pre-Hydrated Bioimplant System |
+# Implants` has no successor and goes through the tray-membership reconcile
+# like any other dropped tray.
+_RENAMED_TRAYS = {
+    "Distal Tibia XL Plate Caddy": "Distal Tibia Plating System | XL Plate Caddy",
+    "DEX Soft Tissue | Comprehensive Instrument Tray": "Soft Tissue | Comprehensive Instrument Tray",
+    "Pre-Hydrated Bioimplant System | Instruments": (
+        "Biologics and Bioimplants | Pre-hydrated Bioimplants Instruments"
+    ),
+}
+_RETIRED_FAMILIES = ("MIS", "REFLEX")
+
+
+def legacy_tray_renames(trays: Iterable[str]) -> dict[str, str]:
+    """Old (pre-Oct-26) Tray name -> its name in this catalog, for every
+    tray in `trays` that had one."""
+    tray_set = set(trays)
+    renames = {f"{_BRAND_PREFIX}{tray}": tray for tray in tray_set}
+    for old_name, new_name in _RENAMED_TRAYS.items():
+        if new_name in tray_set:
+            renames[f"{_BRAND_PREFIX}{old_name}"] = new_name
+    return renames
+
+
+# ---- End of one-time migration. ----
+
+
+class MasterCatalogError(ValueError):
+    """The workbook breaks a rule the catalog hierarchy depends on (a
+    missing column, a blank Family, a Tray under two Families)."""
 
 
 @dataclass
 class CatalogRow:
+    family: str
     tray: str
     item_type: str
     sku: str
@@ -85,23 +142,19 @@ class CatalogRow:
     compat_columns: dict[str, str]
 
 
-def _clean(value: str | None) -> str:
-    value = (value or "").strip()
-    return "" if value.upper() == "N/A" else value
+def _clean(value: object) -> str:
+    text = "" if value is None else str(value).strip()
+    return "" if text.upper() == "N/A" else text
 
 
-def _infer_product_family(tray: str) -> str | None:
-    """Best-effort bucketing into the two product families the golden
-    datasets/ticket-05 tags actually use today — most trays in this file
-    (Ankle Fracture Plating, DEX Soft Tissue, ...) belong to neither and
-    are seeded as standalone Trays with no ProductFamily edge, which is
-    fine; ticket 05's System tag is admin-defined, not a fixed enum.
-    """
-    if re.search(r"\bMIS\b", tray):
-        return "MIS"
-    if re.search(r"\bREFLEX\b", tray, re.IGNORECASE):
-        return "REFLEX"
-    return None
+def normalize_tray_name(raw: str) -> str:
+    """Drops the leading brand segment (that exact segment only — inner
+    " | " parts like "Soft Tissue | Comprehensive Instrument Tray" are part
+    of the name) and trims whitespace, which the file doesn't always do."""
+    name = raw.strip()
+    if name.startswith(_BRAND_PREFIX):
+        name = name[len(_BRAND_PREFIX):].strip()
+    return name
 
 
 # 2026-09-04: two independently-run evals of the MIS question set (both
@@ -117,7 +170,7 @@ def _infer_product_family(tray: str) -> str | None:
 # HV/COMPRESSION rule -- both words appear in several *other* trays' rows
 # too (plating systems that have nothing to do with MIS), where they almost
 # certainly don't carry the same meaning and haven't been verified to.
-_MIS_FOOT_RECON_TRAY = "UNITE® Foot & Ankle | MIS Foot Recon System"
+_MIS_FOOT_RECON_TRAY = "MIS Foot Recon System"
 
 
 def _infer_indication(tray: str, description: str) -> str | None:
@@ -132,22 +185,39 @@ def _infer_indication(tray: str, description: str) -> str | None:
 
 
 def parse_master_catalog(path: Path) -> list[CatalogRow]:
-    with path.open(newline="", encoding="latin-1") as file:
-        reader = csv.DictReader(file, delimiter="\t")
+    workbook = load_workbook(path, read_only=True, data_only=True)
+    try:
+        sheet_rows = workbook.worksheets[0].iter_rows(values_only=True)
+        headers = [_clean(cell) for cell in next(sheet_rows, ())]
+        missing = [column for column in _REQUIRED_COLUMNS if column not in headers]
+        if missing:
+            raise MasterCatalogError(f"{path.name} has no {', '.join(missing)} column")
+
         rows = []
-        for raw in reader:
+        blank_family_rows = []
+        families_by_tray: dict[str, set[str]] = defaultdict(set)
+        # Row 1 is the header, so data rows start at the spreadsheet's row 2
+        # -- the number someone fixing the file would look for.
+        for row_number, cells in enumerate(sheet_rows, start=2):
+            raw = dict(zip(headers, cells, strict=False))
             sku = _clean(raw.get("Item No."))
             if not sku:
                 continue
+            family = _clean(raw.get("Family"))
+            tray = normalize_tray_name(_clean(raw.get("Tray")))
+            if not family:
+                blank_family_rows.append(row_number)
+                continue
+            families_by_tray[tray].add(family)
             compat_columns = {
-                header: value.strip()
+                header: _clean(value)
                 for header, value in raw.items()
-                if header not in _FIXED_COLUMNS and value and value.strip()
+                if header and header not in _FIXED_COLUMNS and _clean(value)
             }
-            tray = _clean(raw.get("System"))
             description = _clean(raw.get("Description"))
             rows.append(
                 CatalogRow(
+                    family=family,
                     tray=tray,
                     item_type=_clean(raw.get("Item Type")),
                     sku=sku,
@@ -164,7 +234,24 @@ def parse_master_catalog(path: Path) -> list[CatalogRow]:
                     compat_columns=compat_columns,
                 )
             )
-        return rows
+    finally:
+        workbook.close()
+
+    if blank_family_rows:
+        raise MasterCatalogError(
+            f"{path.name}: every row needs a Family, but row(s) "
+            f"{', '.join(str(row_number) for row_number in blank_family_rows)} have none"
+        )
+    split_trays = {tray: families for tray, families in families_by_tray.items() if len(families) > 1}
+    if split_trays:
+        details = "; ".join(
+            f"{tray!r} under {', '.join(sorted(families))}"
+            for tray, families in sorted(split_trays.items())
+        )
+        raise MasterCatalogError(
+            f"{path.name}: each Tray must belong to exactly one Family, but {details}"
+        )
+    return rows
 
 
 def _numeric_tokens(text: str) -> set[str]:
@@ -220,11 +307,12 @@ async def seed_master_catalog(client: GraphClient, path: Path = DEFAULT_PATH) ->
         print(f"No rows with an Item No. found in {path}")
         return
 
-    tray_family: dict[str, str | None] = {}
-    for row in rows:
-        tray_family.setdefault(row.tray, _infer_product_family(row.tray))
+    tray_family = {row.tray: row.family for row in rows}
+    families = sorted(set(tray_family.values()))
 
-    for family in sorted({family for family in tray_family.values() if family}):
+    renamed_trays = await client.rename_trays(legacy_tray_renames(tray_family))
+
+    for family in families:
         await client.upsert_product_family(family)
     for tray, family in tray_family.items():
         await client.upsert_tray(tray, family)
@@ -251,6 +339,9 @@ async def seed_master_catalog(client: GraphClient, path: Path = DEFAULT_PATH) ->
         trays_by_sku[row.sku].add(row.tray)
     pruned_edges, deleted_trays, kept_trays = await client.prune_stale_tray_memberships(
         {sku: sorted(trays) for sku, trays in trays_by_sku.items()}
+    )
+    retired_families = await client.delete_product_families(
+        [family for family in _RETIRED_FAMILIES if family not in families]
     )
 
     all_skus = [row.sku for row in rows]
@@ -282,12 +373,21 @@ async def seed_master_catalog(client: GraphClient, path: Path = DEFAULT_PATH) ->
                 await client.upsert_requires_tool(row.sku, tool_sku)
                 tool_count += 1
 
+    trays_by_family: dict[str, list[str]] = defaultdict(list)
+    for tray, family in sorted(tray_family.items()):
+        trays_by_family[family].append(tray)
+    await upsert_families_and_trays(dict(trays_by_family))
+
     print(
-        f"Seeded {len(rows)} parts across {len(tray_family)} trays "
-        f"({len([family for family in tray_family.values() if family])} mapped to a ProductFamily), "
+        f"Seeded {len(rows)} parts across {len(families)} product families and "
+        f"{len(tray_family)} trays (mirrored to Postgres), "
         f"{compat_count} COMPATIBLE_WITH edges, {tool_count} REQUIRES_TOOL edges; "
         f"removed {pruned_edges} stale BELONGS_TO_TRAY edges"
     )
+    for old_name, new_name in renamed_trays:
+        print(f"  renamed tray: {old_name} -> {new_name}")
+    for family in retired_families:
+        print(f"  retired product family: {family}")
     for tray in deleted_trays:
         print(f"  deleted emptied tray: {tray}")
     for tray in kept_trays:
