@@ -10,54 +10,23 @@ query -> detect_intent -> resolve_synonyms
            then self_eval again)
        -> finalize
 
-This is the baseline workflow every other architecture is compared against.
-`react_agent` (ticket 23, backend/agents/workflows/react_agent.py) is a
-deliberately separate, actually-agentic workflow -- decided in the
-2026-09-03 grilling session not to fold tool-choice into this graph, since
-resolve_skus/aggregate_facts below is fixed control flow with a
-question-type branch, not a case where the model needs to decide what to
-do next.
+detect_intent classifies which product system the query is about and,
+  when it can't tell confidently, calls interrupt() to ask
 
-"Fixed pipeline" means this graph always calls vector_search
-(backend/agents/tools/vector_search.py, ticket 06) in the same place every
-turn for prose/context, and always calls part_lookup
-(backend/agents/tools/part_lookup.py, ticket 20) to ground spec/SKU/pairing
-facts directly in the graph's Part-node properties -- it never chooses
-between them. resolve_synonyms and resolve_skus both extract candidate
-terms from text (agents/tools/term_extraction.py) and resolve each one
-individually against the graph (ticket 21) -- a whole free-text sentence
-essentially never matches a Term or Part node as a literal string, so
-per-term lookup is what makes either of these nodes do anything. Both
-hybrid_retrieve and resolve_skus retrieve/resolve against
-resolved_canonical_terms (resolve_synonyms' output), not the rep's raw
-wording alone -- see resolve_synonyms' own docstring for why canonical
-terms specifically.
-
-Two judgment-call exceptions to "no judgment calls," both using the same
-interrupt()/resume suspend pattern (ticket 09) so the rep answers directly
-rather than the graph silently guessing -- both share one
-clarification_rounds budget per turn (see request_clarification's own
-docstring):
-- detect_intent classifies which product system the query is about and,
-  when it can't tell confidently, calls interrupt() to ask rather than
-  letting hybrid_retrieve search unfiltered across every system's
-  documents -- see its own docstring below.
-- resolve_synonyms/_should_clarify_synonyms (2026-09-05): when a single
+resolve_synonyms/_should_clarify_synonyms: when a single
   extracted word matches more than one distinct canonical concept (the
   rep's own word is ambiguous, not just "the query mentions several
   things"), the graph asks which one they mean before ever running
   retrieval on a guess.
 
-self_eval used to be a third: an LLM judge scored every draft, and a low
-faithfulness/relevance score paused the turn to ask the rep a clarifying
-question. It's now a deterministic fact check (agents/fact_check.py) with
+self_eval is a deterministic fact check (agents/fact_check.py) with
 no model call -- a failed check means the model misstated something the
 sources already settle (a wrong thread type, an invented SKU, a citation
 to a passage it never saw), which the rep can't clarify, so it earns one
 correction pass with the specific problems listed instead of a question.
 
 hybrid_retrieve also hard-filters its retrieval pool by document type
-(2026-09-04) based on the classified question type (_DOCTYPE_PRIORITY,
+based on the classified question type (_DOCTYPE_PRIORITY,
 keyed by agents/question_types.py's canonical slugs), rather than only
 softly re-ranking afterward -- found live comparing an answer against its
 golden expected answer that a technique_procedural question's real
@@ -66,10 +35,10 @@ entirely by inventory-table/marketing chunks that happened to rank higher
 on raw semantic+keyword similarity; filtering the *retrieval* step itself,
 not just the rerank tiebreak, is what actually keeps them out of
 contention. The filter always still admits untagged chunks (tagging is
-optional, ticket 05) -- see RetrievalFilters' docstring.
+optional) -- see RetrievalFilters' docstring.
 
 rerank scores that retrieval pool with BM25 (a classic keyword-overlap
-ranking, 2026-09-05, replacing an LLM relevance-scoring pass -- see its own
+ranking replacing an LLM relevance-scoring pass -- see its own
 docstring) plus the same doctype-priority bonus, so picking among an
 already-retrieved candidate pool costs no model round-trip.
 """
@@ -132,7 +101,7 @@ class DeterministicState(BaseAgentState, total=False):
     # dict -- since none has a reducer and would otherwise leak a prior
     # turn's leftover value in via the checkpointer.
     search_query: str
-    # Set by resolve_synonyms (2026-09-05, replacing resolved_synonyms) --
+    # Set by resolve_synonyms --
     # see that node's own docstring for why canonical terms specifically,
     # not a flat canonical+alias mix. synonym_ambiguity is only ever
     # non-None for the one turn between resolve_synonyms detecting a
@@ -142,7 +111,7 @@ class DeterministicState(BaseAgentState, total=False):
     resolved_canonical_terms: list[str]
     synonym_ambiguity: dict[str, list[str]] | None
     reranked: list[RetrievedPassage]
-    # Set by resolve_skus/aggregate_facts (ticket 22) -- resolved_parts is
+    # Set by resolve_skus/aggregate_facts -- resolved_parts is
     # every candidate Part node matched from this turn's extracted terms,
     # deduped by SKU; aggregated_facts is that same data formatted into
     # generate's context. Multiple candidates are never disambiguated down
@@ -244,8 +213,7 @@ async def _classify_intent(query: str, system_names: list[str]) -> _IntentClassi
                     "separate powered-instrument system, unless it "
                     "explicitly asks about the powered tool itself). Use "
                     "the question type names exactly as given -- most "
-                    "questions are exactly one type; only include more than "
-                    "one if the question genuinely spans more than one."
+                    "questions are exactly one type; If a question can be intepreted as more than one type, output multiple types"
                 )
             ),
             {"role": "user", "content": query},

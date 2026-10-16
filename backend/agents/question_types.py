@@ -42,17 +42,9 @@ class QuestionType:
 QUESTION_TYPES: list[QuestionType] = [
     QuestionType("product_characteristics", "materials, dimensions, thread types, color, etc."),
     QuestionType("system_contents", "what's included in a set/system, SKUs, levels in the tray"),
-    QuestionType(
-        "technique_procedural",
-        "step-by-step surgical technique, procedural walkthrough, applications of products or "
-        "parts, etc.",
-    ),
+    QuestionType("technique_procedural", "step-by-step surgical technique, procedural walkthrough, applications of products or parts, etc.",),
     QuestionType("documents_lookup", "fast pull of a document by name, SKU, or other identifier"),
-    QuestionType(
-        "compatibility_lookup",
-        "which products/parts are compatible with which others, e.g. screws with plates, "
-        "implants with instruments, etc.",
-    ),
+    QuestionType("compatibility_lookup", "which products/parts are compatible with which others, e.g. screws with plates, implants with instruments, etc.",),
 ]
 
 QUESTION_TYPE_NAMES: list[str] = [question_type.name for question_type in QUESTION_TYPES]
