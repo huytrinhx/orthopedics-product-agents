@@ -9,14 +9,13 @@ import {
   indexDocument,
   listDocuments,
   reuploadDocumentFile,
-  setDocumentTags,
   uploadDocument,
 } from "../../lib/documents/api";
-import { createSystem, deleteSystem, listDocumentTypes, listSystems } from "../../lib/documents/tags/api";
+import { listDocumentTypes } from "../../lib/documents/tags/api";
 import { useAuth } from "../../lib/auth-context";
 import type { ComponentHealth, DocumentRecord, SystemHealth } from "../../lib/documents/types";
 import type { Tag } from "../../lib/documents/tags/types";
-import { TagList, TagSelect } from "./tag-select";
+import { TagSelect } from "./tag-select";
 
 // Polls while anything's still in flight -- the background task (see
 // backend/documents/service.py) is a placeholder today (tickets 06/07 wire
@@ -99,6 +98,21 @@ function HealthStrip({ health, error }: { health: SystemHealth | null; error: st
 // Index/Reindex trigger for the (still stubbed, see backend/documents/service.py)
 // ingestion pipeline: upload leaves a document "pending" rather than
 // auto-indexing it, so this is the only way a document reaches "done".
+// Read-only tag cells (issue #12) -- editing family/trays/doc type moves
+// into the tag modal ticket. One value per line, wrapped rather than
+// truncated, since tray names run long ("Soft Tissue | Comprehensive
+// Instrument Tray") and a family can carry several.
+function TagValues({ values }: { values: string[] }) {
+  if (values.length === 0) return <span className="tag-values-empty">—</span>;
+  return (
+    <ul className="tag-values">
+      {values.map((value, index) => (
+        <li key={`${index}-${value}`}>{value}</li>
+      ))}
+    </ul>
+  );
+}
+
 function IndexButton({ documentRecord, onIndex }: { documentRecord: DocumentRecord; onIndex: (documentRecord: DocumentRecord) => void }) {
   const running = documentRecord.status === "queued" || documentRecord.status === "processing";
   const label = running ? "Indexing…" : documentRecord.status === "done" ? "Reindex" : "Index";
@@ -112,14 +126,12 @@ function IndexButton({ documentRecord, onIndex }: { documentRecord: DocumentReco
 export default function DocumentsPage() {
   const { user, loading } = useAuth();
   const [documents, setDocuments] = useState<DocumentRecord[]>([]);
-  const [systems, setSystems] = useState<Tag[]>([]);
   const [documentTypes, setDocumentTypes] = useState<Tag[]>([]);
   const [health, setHealth] = useState<SystemHealth | null>(null);
   const [healthError, setHealthError] = useState<string | null>(null);
   const [listError, setListError] = useState<string | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
-  const [uploadSystemId, setUploadSystemId] = useState("");
   const [uploadDocumentTypeId, setUploadDocumentTypeId] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -142,7 +154,6 @@ export default function DocumentsPage() {
   useEffect(() => {
     if (!user?.is_admin) return;
     refresh();
-    listSystems().then(setSystems).catch(() => {});
     listDocumentTypes().then(setDocumentTypes).catch(() => {});
     // A fresh poke every time this page loads (component mount), not a
     // cached/periodic status -- see backend/api/routes/documents.py's
@@ -176,7 +187,6 @@ export default function DocumentsPage() {
     setUploadError(null);
     try {
       await uploadDocument(file, {
-        systemId: uploadSystemId || undefined,
         documentTypeId: uploadDocumentTypeId || undefined,
       });
       if (fileInputRef.current) fileInputRef.current.value = "";
@@ -186,17 +196,6 @@ export default function DocumentsPage() {
     } finally {
       setUploading(false);
     }
-  }
-
-  async function handleCreateSystem(name: string): Promise<Tag> {
-    const tag = await createSystem(name);
-    setSystems((previous) => [...previous, tag].sort((first, second) => first.name.localeCompare(second.name)));
-    return tag;
-  }
-
-  async function handleDeleteSystem(tag: Tag): Promise<void> {
-    await deleteSystem(tag.id);
-    setSystems((previous) => previous.filter((listedSystem) => listedSystem.id !== tag.id));
   }
 
   async function handleDelete(documentRecord: DocumentRecord) {
@@ -247,21 +246,6 @@ export default function DocumentsPage() {
     }
   }
 
-  async function handleRowTagChange(
-    documentRecord: DocumentRecord,
-    field: "system" | "document_type",
-    tagId: string
-  ) {
-    const systemId = field === "system" ? tagId || null : documentRecord.system?.id ?? null;
-    const documentTypeId = field === "document_type" ? tagId || null : documentRecord.document_type?.id ?? null;
-    try {
-      const updated = await setDocumentTags(documentRecord.id, { systemId, documentTypeId });
-      setDocuments((previous) => previous.map((listedDocument) => (listedDocument.id === documentRecord.id ? updated : listedDocument)));
-    } catch (caughtError) {
-      setListError(caughtError instanceof Error ? caughtError.message : "failed to update tags");
-    }
-  }
-
   if (loading) return <main className="page-wide"><p>Loading…</p></main>;
 
   if (!user || !user.is_admin) {
@@ -279,9 +263,9 @@ export default function DocumentsPage() {
       <span className="eyebrow">Source library</span>
       <h1>Document Manager</h1>
       <p className="lede">
-        Upload the technique guides, IFUs, and brochures OrthoMate cites from. Tag each with
-        the system and document type it belongs to. Systems can be added on the spot; document
-        types are picked from the list curated in <Link href="/admin">Settings</Link>.
+        Upload the technique guides, IFUs, and brochures OrthoMate cites from. Each is tagged
+        with its product family, the trays it covers, and its document type; document types
+        are picked from the list curated in <Link href="/admin">Settings</Link>.
       </p>
 
       <HealthStrip health={health} error={healthError} />
@@ -293,25 +277,12 @@ export default function DocumentsPage() {
       is tracked in state either way, not read from this form's fields. */}
       <div className="tag-picker-row">
         <TagSelect
-          label="System"
-          tags={systems}
-          value={uploadSystemId}
-          onChange={setUploadSystemId}
-          onCreate={handleCreateSystem}
-        />
-        <TagSelect
           label="Document type"
           tags={documentTypes}
           value={uploadDocumentTypeId}
           onChange={setUploadDocumentTypeId}
         />
       </div>
-      <details className="tag-manager">
-        <summary>Manage systems</summary>
-        <div className="tag-manager-body">
-          <TagList label="System" tags={systems} onDelete={handleDeleteSystem} />
-        </div>
-      </details>
       <form onSubmit={handleUpload} className="upload-row">
         <input ref={fileInputRef} type="file" required />
         <button type="submit" className="btn btn-primary" disabled={uploading}>
@@ -338,7 +309,8 @@ export default function DocumentsPage() {
               <tr>
                 <th>Filename</th>
                 <th>Status</th>
-                <th>System</th>
+                <th>Product family</th>
+                <th>Trays</th>
                 <th>Document type</th>
                 <th>Uploaded</th>
                 <th></th>
@@ -351,22 +323,14 @@ export default function DocumentsPage() {
                   <td>
                     <StatusBadge documentRecord={documentRecord} />
                   </td>
-                  <td>
-                    <TagSelect
-                      label="System"
-                      tags={systems}
-                      value={documentRecord.system?.id ?? ""}
-                      onChange={(id) => handleRowTagChange(documentRecord, "system", id)}
-                      onCreate={handleCreateSystem}
-                    />
+                  <td className="tag-values-cell">
+                    <TagValues values={documentRecord.product_family ? [documentRecord.product_family.display_name] : []} />
                   </td>
-                  <td>
-                    <TagSelect
-                      label="Document type"
-                      tags={documentTypes}
-                      value={documentRecord.document_type?.id ?? ""}
-                      onChange={(id) => handleRowTagChange(documentRecord, "document_type", id)}
-                    />
+                  <td className="tag-values-cell">
+                    <TagValues values={documentRecord.trays.map((tray) => tray.display_name)} />
+                  </td>
+                  <td className="tag-values-cell">
+                    <TagValues values={documentRecord.document_type ? [documentRecord.document_type.name] : []} />
                   </td>
                   <td>{new Date(documentRecord.created_at).toLocaleString()}</td>
                   <td>

@@ -8,7 +8,7 @@ This is a third, independent ingestion leg (backend/documents/service.py),
 sibling to backend/ingestion/entity_extraction.py (graph leg, prose facts)
 and backend/ingestion/chunking.py/embedding.py (vector leg) — triggered from
 the same place, but never blocks or fails either of them (best-effort: a
-document with no tray photo, an untagged system, or a non-PDF file is a
+document with no tray photo, no Product Family, or a non-PDF file is a
 silent no-op, not an error).
 
 No document-type gating: `document_types` are free-text admin tags (ticket
@@ -29,7 +29,7 @@ diameter/thread codes baked into the tray's photo, which the page's caption
 text alone doesn't repeat) well enough to sort known SKUs into the right
 region, not producing a spatial map. Reuses entity_extraction.py's
 established convention: the model is given the real "known parts"/"known
-trays" lists for the document's tagged system and may only reference names
+trays" lists for the document's Product Family and may only reference names
 from them -- anything else is dropped here (and again, defensively, at the
 graph write layer) rather than merged as a fuzzy match or a new node.
 """
@@ -218,24 +218,24 @@ async def extract_tray_layout(
     storage_path: str | Path,
     filename: str,
     *,
-    system: str | None,
+    product_family: str | None,
 ) -> int:
     """Entry point called from backend/documents/service.py, after the graph
-    leg (ingest_document) has run so list_parts_for_family/
-    list_trays_for_family already reflect this document's system. Returns
+    leg (ingest_document) has run. `product_family` is the document's
+    Product Family catalog name; known parts/trays are scoped to it. Returns
     the number of Part -[:LOCATED_IN]-> TraySection edges written (0 for
-    every no-op case: no system, no known parts/trays yet, not a PDF, or no
+    every no-op case: no family, no known parts/trays yet, not a PDF, or no
     page passes the heuristic). Never raises -- a bug in vision extraction
     shouldn't take down the other two ingestion legs; the caller doesn't
     need to wrap this in its own try/except.
     """
     try:
-        if not system or Path(filename).suffix.lower() != ".pdf":
+        if not product_family or Path(filename).suffix.lower() != ".pdf":
             return 0
 
         client = get_graph_client()
-        known_parts = await client.list_parts_for_family(system)
-        known_trays = await client.list_trays_for_family(system)
+        known_parts = await client.list_parts_for_family(product_family)
+        known_trays = await client.list_trays_for_family(product_family)
         if not known_parts or not known_trays:
             return 0
 

@@ -54,7 +54,7 @@ async def test_differentiation_noops_when_a_sku_is_unknown():
     unknown_sku = _unique("UNKNOWN")
     document_id = _unique("DOC")
 
-    await client.upsert_document(document_id, "brochure.pdf", doc_type="Brochure", system="MIS")
+    await client.upsert_document(document_id, "brochure.pdf", doc_type="Brochure", product_family="MIS")
     await client.upsert_tray(tray, "MIS")
     await client.upsert_part(known_sku, tray)
     # unknown_sku is never upserted as a Part -- a hallucinated/unresolved
@@ -73,7 +73,7 @@ async def test_differentiation_attaches_and_is_queryable_both_directions():
     sku_b = _unique("B")
     document_id = _unique("DOC")
 
-    await client.upsert_document(document_id, "brochure.pdf", doc_type="Brochure", system="MIS")
+    await client.upsert_document(document_id, "brochure.pdf", doc_type="Brochure", product_family="MIS")
     await client.upsert_tray(tray, "MIS")
     await client.upsert_part(sku_a, tray)
     await client.upsert_part(sku_b, tray)
@@ -91,7 +91,7 @@ async def test_procedure_requires_tray_noops_for_unknown_tray():
     procedure = _unique("PROCEDURE")
     unknown_tray = _unique("UNKNOWN-TRAY")
 
-    await client.upsert_document(document_id, "guide.pdf", doc_type="Surgical Technique", system="MIS")
+    await client.upsert_document(document_id, "guide.pdf", doc_type="Surgical Technique", product_family="MIS")
     assert await client.attach_procedure(procedure, unknown_tray, document_id) is False
 
 

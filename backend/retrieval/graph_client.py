@@ -283,19 +283,61 @@ class GraphClient:
     # ---- Prose extraction writes (backend/ingestion/entity_extraction.py) ----
 
     async def upsert_document(
-        self, document_id: str, filename: str, doc_type: str | None, system: str | None
+        self,
+        document_id: str,
+        filename: str,
+        doc_type: str | None,
+        product_family: str | None,
+        trays: list[str] | None = None,
     ) -> None:
+        """`product_family` and `trays` are catalog names (what the
+        ProductFamily/Tray nodes are keyed on), not display names. The
+        legacy `system` property an older ingestion wrote is removed."""
         async with self._driver.session() as session:
             await session.run(
                 """
                 MERGE (d:Document {id: $id})
-                SET d.filename = $filename, d.doc_type = $doc_type, d.system = $system
+                SET d.filename = $filename, d.doc_type = $doc_type,
+                    d.product_family = $product_family, d.trays = $trays
+                REMOVE d.system
                 """,
                 id=document_id,
                 filename=filename,
                 doc_type=doc_type,
-                system=system,
+                product_family=product_family,
+                trays=list(trays or []),
             )
+
+    async def set_document_family_and_trays(
+        self, document_id: str, product_family: str | None, trays: list[str]
+    ) -> bool:
+        """Re-tags an already-ingested Document node in place (the legacy
+        system-tag migration, catalog/migrate_legacy_system_tags.py) without
+        re-running ingestion. Matches rather than merges: a document never
+        indexed has no node yet, and gets one with these properties on its
+        first ingestion. Returns whether a node was there to update.
+        """
+        async with self._driver.session() as session:
+            result = await session.run(
+                """
+                MATCH (d:Document {id: $id})
+                SET d.product_family = $product_family, d.trays = $trays
+                REMOVE d.system
+                RETURN d.id AS id
+                """,
+                id=document_id,
+                product_family=product_family,
+                trays=list(trays),
+            )
+            return await result.single() is not None
+
+    async def get_document_properties(self, document_id: str) -> dict | None:
+        async with self._driver.session() as session:
+            result = await session.run(
+                "MATCH (d:Document {id: $id}) RETURN properties(d) AS properties", id=document_id
+            )
+            record = await result.single()
+            return dict(record["properties"]) if record else None
 
     async def attach_differentiation(
         self, sku_a: str, sku_b: str, explanation: str, document_id: str
@@ -413,38 +455,29 @@ class GraphClient:
     # ---- Lookups used to keep the LLM prompt scoped to real SKUs/trays ----
 
     async def list_parts_for_family(self, product_family: str) -> list[dict]:
-        # Found live (2026-09-05, ticket 25): callers hand this whatever
-        # taxonomy they have on hand, which is usually documents.system_name
-        # -- a legacy Postgres systems-tag name ("MIS - Foot Recon"), not
-        # the Neo4j ProductFamily name it actually needs to match. Every
-        # real document tagged this way was silently getting zero known
-        # parts back, with entity_extraction.py's own `if not known_parts:
-        # return` then silently no-op'ing the whole graph leg for it -- a
-        # silent empty-list no-op looks identical to "nothing to extract
-        # from this text" from the caller's side. Same normalization
-        # find_parts (below) applies: the explicit legacy map in
-        # catalog/legacy_systems.py, which replaced stripping a " - "
-        # suffix once real family names started containing " - " too.
-        family = resolve_family_name(product_family) if product_family else product_family
+        # `product_family` is the exact catalog name -- ingestion
+        # (pipeline.py, tray_layout_extraction.py) passes the document's
+        # own Product Family now, not a legacy systems-tag name, so there's
+        # no legacy map in the way here (find_parts below still has one,
+        # for chat's system-scoped lookups).
         async with self._driver.session() as session:
             result = await session.run(
                 """
                 MATCH (p:Part)-[:BELONGS_TO_TRAY]->(:Tray)-[:BELONGS_TO_FAMILY]->(f:ProductFamily {name: $family})
                 RETURN p.sku AS sku, p.description AS description
                 """,
-                family=family,
+                family=product_family,
             )
             return [dict(record) async for record in result]
 
     async def list_trays_for_family(self, product_family: str) -> list[str]:
-        family = resolve_family_name(product_family) if product_family else product_family
         async with self._driver.session() as session:
             result = await session.run(
                 """
                 MATCH (t:Tray)-[:BELONGS_TO_FAMILY]->(:ProductFamily {name: $family})
                 RETURN t.name AS name
                 """,
-                family=family,
+                family=product_family,
             )
             return [record["name"] async for record in result]
 

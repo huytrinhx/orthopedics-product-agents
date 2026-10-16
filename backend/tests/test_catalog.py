@@ -54,7 +54,7 @@ def test_real_family_names_pass_through_the_legacy_map_unchanged():
 
 
 @pytest.mark.parametrize(("legacy_tag", "family"), sorted(LEGACY_SYSTEM_FAMILIES.items()))
-async def test_family_scoped_part_lookups_resolve_each_legacy_system_tag(legacy_tag, family):
+async def test_chat_part_lookup_resolves_each_legacy_system_tag(legacy_tag, family):
     suffix = uuid.uuid4().hex[:8]
     tray, sku = f"Legacy Lookup Tray {suffix}", f"LGL-{suffix}"
     graph = get_graph_client()
@@ -62,11 +62,23 @@ async def test_family_scoped_part_lookups_resolve_each_legacy_system_tag(legacy_
     await graph.upsert_tray(tray, family)
     await graph.upsert_part(sku, tray, description=f"LEGACY LOOKUP PART {suffix}")
 
-    parts = await graph.list_parts_for_family(legacy_tag)
-    trays = await graph.list_trays_for_family(legacy_tag)
     found = await graph.find_parts(sku, product_family=legacy_tag)
 
-    assert sku in {part["sku"] for part in parts}
-    assert tray in trays
     assert [part["sku"] for part in found][:1] == [sku]
     assert found[0]["product_family"] == family
+
+
+async def test_ingestion_lookups_take_the_documents_real_family_not_a_legacy_tag():
+    # Ingestion scopes by the document's own Product Family now, so the
+    # legacy map is no longer applied on this path.
+    legacy_tag, family = "MIS - Foot Recon", "MIS - Foot Recon System"
+    suffix = uuid.uuid4().hex[:8]
+    tray, sku = f"Family Lookup Tray {suffix}", f"FML-{suffix}"
+    graph = get_graph_client()
+    await graph.ensure_constraints()
+    await graph.upsert_tray(tray, family)
+    await graph.upsert_part(sku, tray, description=f"FAMILY LOOKUP PART {suffix}")
+
+    assert sku in {part["sku"] for part in await graph.list_parts_for_family(family)}
+    assert tray in await graph.list_trays_for_family(family)
+    assert sku not in {part["sku"] for part in await graph.list_parts_for_family(legacy_tag)}

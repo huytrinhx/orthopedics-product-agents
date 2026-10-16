@@ -80,6 +80,36 @@ async def test_ingest_document_vectors_denormalizes_tags(monkeypatch):
         await delete_document(document_id)
 
 
+async def test_ingest_document_vectors_denormalizes_the_product_family(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-dummy")
+    monkeypatch.setattr(pipeline, "embed_texts", _fake_embed_texts)
+    from catalog.repository import list_families_with_trays, upsert_families_and_trays
+
+    family_name = _unique("Family")
+    await upsert_families_and_trays({family_name: [_unique("Tray")]})
+    family = next(
+        listed for listed in await list_families_with_trays() if listed.name == family_name
+    )
+    document_id = await _create_document()
+    try:
+        await pipeline.ingest_document_vectors(
+            str(document_id),
+            "Some text about a part.",
+            system_id=None,
+            document_type_id=None,
+            product_family_id=family.id,
+        )
+
+        async with get_vector_store() as store, store._connection.cursor() as cursor:
+            await cursor.execute(
+                "SELECT product_family_id FROM chunks WHERE document_id = %s", (document_id,)
+            )
+            (product_family_id,) = await cursor.fetchone()
+        assert product_family_id == family.id
+    finally:
+        await delete_document(document_id)
+
+
 async def test_ingest_document_vectors_skips_without_openai_key(monkeypatch):
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     document_id = await _create_document()

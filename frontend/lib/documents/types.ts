@@ -2,6 +2,21 @@ import type { Tag } from "./tags/types";
 
 export type DocumentStatus = "pending" | "queued" | "processing" | "done" | "failed";
 
+// Mirrors backend/documents/models.py's DocumentProductFamilyOut and
+// catalog/models.py's TrayOut: `name` is the stable catalog name,
+// `display_name` the admin-editable label the UI shows.
+export interface DocumentProductFamily {
+  id: string;
+  name: string;
+  display_name: string;
+}
+
+export interface DocumentTray {
+  id: string;
+  name: string;
+  display_name: string;
+}
+
 export interface DocumentRecord {
   id: string;
   filename: string;
@@ -10,8 +25,12 @@ export interface DocumentRecord {
   uploaded_by: string;
   created_at: string;
   updated_at: string;
+  // Legacy, no longer shown -- replaced by product_family/trays (issue #12)
+  // and dropped from the API in the legacy-removal ticket.
   system: Tag | null;
   document_type: Tag | null;
+  product_family: DocumentProductFamily | null;
+  trays: DocumentTray[];
 }
 
 // Mirrors backend/documents/models.py's ChunkOut -- backs the chat citation

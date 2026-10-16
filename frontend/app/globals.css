@@ -594,6 +594,30 @@ tr:last-child td {
   border-bottom: none;
 }
 
+/* Documents table's read-only family / trays / doc type cells: one value
+per line, wrapping instead of stretching the table. */
+.tag-values-cell {
+  min-width: 140px;
+  max-width: 260px;
+  vertical-align: top;
+}
+
+.tag-values {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.tag-values li + li {
+  margin-top: 4px;
+}
+
+.tag-values-empty {
+  color: var(--ink-soft);
+}
+
 /* ---------------- status badges ---------------- */
 
 .badge {

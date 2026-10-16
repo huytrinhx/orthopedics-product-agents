@@ -3,11 +3,10 @@ import type { DocumentChunk, DocumentRecord, SystemHealth } from "./types";
 
 export async function uploadDocument(
   file: File,
-  tags?: { systemId?: string; documentTypeId?: string }
+  tags?: { documentTypeId?: string }
 ): Promise<DocumentRecord> {
   const form = new FormData();
   form.append("file", file);
-  if (tags?.systemId) form.append("system_id", tags.systemId);
   if (tags?.documentTypeId) form.append("document_type_id", tags.documentTypeId);
   const response = await fetch(`${API_BASE}/documents/upload`, {
     method: "POST",
@@ -28,13 +27,26 @@ export async function checkSystemHealth(): Promise<SystemHealth> {
   return request("/documents/health");
 }
 
+// Only the tags passed are changed; the rest keep their current value (see
+// backend/documents/models.py's SetDocumentTagsRequest). A family and its
+// tray set always travel together, and the server rejects a tray outside
+// the family.
 export async function setDocumentTags(
   documentId: string,
-  tags: { systemId: string | null; documentTypeId: string | null }
+  tags: {
+    documentTypeId?: string | null;
+    family?: { productFamilyId: string | null; trayIds: string[] };
+  }
 ): Promise<DocumentRecord> {
+  const body: Record<string, unknown> = {};
+  if (tags.documentTypeId !== undefined) body.document_type_id = tags.documentTypeId;
+  if (tags.family) {
+    body.product_family_id = tags.family.productFamilyId;
+    body.tray_ids = tags.family.trayIds;
+  }
   return request(`/documents/${documentId}/tags`, {
     method: "PATCH",
-    body: JSON.stringify({ system_id: tags.systemId, document_type_id: tags.documentTypeId }),
+    body: JSON.stringify(body),
   });
 }
 
