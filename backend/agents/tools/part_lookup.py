@@ -8,6 +8,7 @@ backend/retrieval/graph_client.py's find_parts docstring).
 """
 from langchain_core.tools import tool
 
+from catalog.display_names import load_catalog_display_names
 from retrieval.graph_client import get_graph_client
 
 
@@ -20,4 +21,14 @@ async def part_lookup(term: str, product_family: str | None = None) -> list[dict
     tag ("MIS - Foot Recon") works, so pass whatever system name you
     already have.
     """
-    return await get_graph_client().find_parts(term, product_family=product_family)
+    # Each result's product_family is its admin-edited display name (issue
+    # #15), and that same display name is accepted back as product_family.
+    display_names = await load_catalog_display_names()
+    family = display_names.family_catalog_name(product_family) if product_family else None
+    parts = await get_graph_client().find_parts(term, product_family=family)
+    return [
+        {**part, "product_family": display_names.family_display_name(part["product_family"])}
+        if part.get("product_family")
+        else part
+        for part in parts
+    ]

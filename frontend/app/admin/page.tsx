@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useAuth } from "../../lib/auth-context";
 import { DocumentTypesSection } from "./document-types-section";
+import { ProductFamiliesSection } from "./product-families-section";
 import { WorkflowSection } from "./workflow-section";
 
 // The Settings page (nav: "Settings"). Each concern is its own
@@ -31,6 +32,7 @@ export default function AdminPage() {
 
       <WorkflowSection />
       <DocumentTypesSection />
+      <ProductFamiliesSection />
     </main>
   );
 }
