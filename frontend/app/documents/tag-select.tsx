@@ -6,9 +6,10 @@ import type { Tag } from "../../lib/documents/tags/types";
 const NEW_VALUE = "__new__";
 
 // Shared by the upload form's two pickers and each table row's inline
-// pickers (ticket 05: assign a tag at upload or by editing afterward) --
-// same "pick an existing tag, or add a new one on the spot" behavior for
-// both Systems and Document Types.
+// pickers (ticket 05: assign a tag at upload or by editing afterward).
+// With `onCreate`, it's "pick an existing tag, or add a new one on the
+// spot" (Systems); without it, pick-from-list only (Document Types, a
+// closed list curated on the Settings page -- issue #16).
 export function TagSelect({
   label,
   tags,
@@ -20,7 +21,7 @@ export function TagSelect({
   tags: Tag[];
   value: string;
   onChange: (id: string) => void;
-  onCreate: (name: string) => Promise<Tag>;
+  onCreate?: (name: string) => Promise<Tag>;
 }) {
   const [adding, setAdding] = useState(false);
   const [newName, setNewName] = useState("");
@@ -38,7 +39,7 @@ export function TagSelect({
   async function handleCreate(event: FormEvent) {
     event.preventDefault();
     const name = newName.trim();
-    if (!name) return;
+    if (!name || !onCreate) return;
     setCreating(true);
     setError(null);
     try {
@@ -53,7 +54,7 @@ export function TagSelect({
     }
   }
 
-  if (adding) {
+  if (adding && onCreate) {
     return (
       <form onSubmit={handleCreate} className="tag-add-row">
         <input
@@ -88,13 +89,13 @@ export function TagSelect({
           {tag.name}
         </option>
       ))}
-      <option value={NEW_VALUE}>+ New {label.toLowerCase()}…</option>
+      {onCreate && <option value={NEW_VALUE}>+ New {label.toLowerCase()}…</option>}
     </select>
   );
 }
 
-// The admin-facing counterpart to TagSelect above: every System/Document
-// Type tag that exists (the picker's `tags` prop, unfiltered -- see
+// The admin-facing counterpart to TagSelect above: every System tag that
+// exists (Document Types are managed on the Settings page instead) (the picker's `tags` prop, unfiltered -- see
 // backend/tags/repository.py's _list_tags), each removable on the spot.
 // Deleting one still assigned to a document is rejected server-side (409),
 // surfaced here rather than silently dropping the chip.

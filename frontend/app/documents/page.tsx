@@ -12,14 +12,7 @@ import {
   setDocumentTags,
   uploadDocument,
 } from "../../lib/documents/api";
-import {
-  createDocumentType,
-  createSystem,
-  deleteDocumentType,
-  deleteSystem,
-  listDocumentTypes,
-  listSystems,
-} from "../../lib/documents/tags/api";
+import { createSystem, deleteSystem, listDocumentTypes, listSystems } from "../../lib/documents/tags/api";
 import { useAuth } from "../../lib/auth-context";
 import type { ComponentHealth, DocumentRecord, SystemHealth } from "../../lib/documents/types";
 import type { Tag } from "../../lib/documents/tags/types";
@@ -201,20 +194,9 @@ export default function DocumentsPage() {
     return tag;
   }
 
-  async function handleCreateDocumentType(name: string): Promise<Tag> {
-    const tag = await createDocumentType(name);
-    setDocumentTypes((previous) => [...previous, tag].sort((first, second) => first.name.localeCompare(second.name)));
-    return tag;
-  }
-
   async function handleDeleteSystem(tag: Tag): Promise<void> {
     await deleteSystem(tag.id);
     setSystems((previous) => previous.filter((listedSystem) => listedSystem.id !== tag.id));
-  }
-
-  async function handleDeleteDocumentType(tag: Tag): Promise<void> {
-    await deleteDocumentType(tag.id);
-    setDocumentTypes((previous) => previous.filter((listedDocumentType) => listedDocumentType.id !== tag.id));
   }
 
   async function handleDelete(documentRecord: DocumentRecord) {
@@ -298,7 +280,8 @@ export default function DocumentsPage() {
       <h1>Document Manager</h1>
       <p className="lede">
         Upload the technique guides, IFUs, and brochures OrthoMate cites from. Tag each with
-        the system and document type it belongs to — reuse an existing tag, or add a new one.
+        the system and document type it belongs to. Systems can be added on the spot; document
+        types are picked from the list curated in <Link href="/admin">Settings</Link>.
       </p>
 
       <HealthStrip health={health} error={healthError} />
@@ -321,14 +304,12 @@ export default function DocumentsPage() {
           tags={documentTypes}
           value={uploadDocumentTypeId}
           onChange={setUploadDocumentTypeId}
-          onCreate={handleCreateDocumentType}
         />
       </div>
       <details className="tag-manager">
-        <summary>Manage tags</summary>
+        <summary>Manage systems</summary>
         <div className="tag-manager-body">
           <TagList label="System" tags={systems} onDelete={handleDeleteSystem} />
-          <TagList label="Document type" tags={documentTypes} onDelete={handleDeleteDocumentType} />
         </div>
       </details>
       <form onSubmit={handleUpload} className="upload-row">
@@ -385,7 +366,6 @@ export default function DocumentsPage() {
                       tags={documentTypes}
                       value={documentRecord.document_type?.id ?? ""}
                       onChange={(id) => handleRowTagChange(documentRecord, "document_type", id)}
-                      onCreate={handleCreateDocumentType}
                     />
                   </td>
                   <td>{new Date(documentRecord.created_at).toLocaleString()}</td>

@@ -84,10 +84,11 @@ picking this repo up cold, read this before making structural changes.
   - The frontend mirrors this 1:1 under `frontend/lib/`: one folder per
     domain (`auth/`, `documents/`, `chat/`), each holding `api.ts` +
     `types.ts` (+ `token.ts` for auth's session storage). `tags` nests
-    under `documents/tags/` there — frontend only ever reads tags in
-    service of the documents page, unlike the backend's dedicated
-    `tags.py` admin route — so the two sides deliberately diverge in
-    shape while sharing the same packaging convention. The one exception
+    under `documents/tags/` there — tags only exist to label documents,
+    unlike the backend's dedicated `tags.py` admin route — so the two
+    sides deliberately diverge in shape while sharing the same packaging
+    convention. (The Settings page, `frontend/app/admin/`, imports it too:
+    Document Types are a closed list curated only there, issue #16.) The one exception
     is `frontend/lib/api/client.ts`: shared HTTP plumbing (`API_BASE`,
     `authHeaders`, `request`, `unwrap`) that every domain imports — not a
     domain itself, low-churn, so it isn't a collision risk the way a flat

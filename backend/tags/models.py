@@ -11,3 +11,12 @@ class TagOut(BaseModel):
 
 class CreateTagRequest(BaseModel):
     name: str
+
+
+class RenameTagRequest(BaseModel):
+    name: str
+
+
+class MergeTagRequest(BaseModel):
+    # The canonical document type the stray one (the path id) folds into.
+    into_id: uuid.UUID

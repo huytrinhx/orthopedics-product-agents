@@ -25,8 +25,25 @@ export async function listDocumentTypes(): Promise<Tag[]> {
   return request("/document-types");
 }
 
+// Document Types are a closed, admin-curated list (issue #16): create,
+// rename, merge, and delete are only ever called from the Settings page
+// (app/admin/document-types-section.tsx). The Document Manager only reads
+// the list via listDocumentTypes above.
 export async function createDocumentType(name: string): Promise<Tag> {
   return request("/document-types", { method: "POST", body: JSON.stringify({ name }) });
+}
+
+export async function renameDocumentType(id: string, name: string): Promise<Tag> {
+  return request(`/document-types/${id}`, { method: "PATCH", body: JSON.stringify({ name }) });
+}
+
+// Moves every document and chunk on `strayId` to `intoId` and deletes the
+// stray, server-side in one transaction. Resolves to the surviving type.
+export async function mergeDocumentType(strayId: string, intoId: string): Promise<Tag> {
+  return request(`/document-types/${strayId}/merge`, {
+    method: "POST",
+    body: JSON.stringify({ into_id: intoId }),
+  });
 }
 
 export async function deleteDocumentType(id: string): Promise<void> {
