@@ -26,8 +26,9 @@ to a passage it never saw), which the rep can't clarify, so it earns one
 correction pass with the specific problems listed instead of a question.
 
 hybrid_retrieve also hard-filters its retrieval pool by document type
-based on the classified question type (_DOCTYPE_PRIORITY,
-keyed by agents/question_types.py's canonical slugs), rather than only
+based on the classified question type (the admin-edited question type ->
+doc type hierarchy table, doc_type_hierarchy/, matched by doc type id --
+issue #17), rather than only
 softly re-ranking afterward -- found live comparing an answer against its
 golden expected answer that a technique_procedural question's real
 step-by-step narrative chunks were being crowded out of the retrieval pool
@@ -62,8 +63,9 @@ from agents.tools.part_lookup import part_lookup
 from agents.tools.term_extraction import extract_candidate_terms, with_singular_variants
 from agents.tools.vector_search import vector_search
 from config.llm_clients import get_chat_model
+from doc_type_hierarchy.repository import RankedDocumentType, list_hierarchy
 from retrieval.graph_client import get_graph_client
-from tags.repository import TagRecord, list_document_types, list_systems
+from tags.repository import list_systems
 
 # Neo4j round-trips are cheap individually but resolve_skus can extract
 # dozens of candidate terms from a long procedural passage -- capped so one
@@ -137,7 +139,7 @@ class DeterministicState(BaseAgentState, total=False):
     # and because a resume answer that doesn't match any known system name
     # still gets recorded as itself, resolved_system_id just stays None.
     # resolved_question_type drives hybrid_retrieve's document-type filter
-    # (_DOCTYPE_PRIORITY, 2026-09-04) in addition to its original
+    # (the doc type hierarchy table, issue #17) in addition to its original
     # observability role. It's a list, not a single value, since a question
     # can genuinely span more than one type (e.g. both a procedural step
     # and a product spec in the same question) -- detect_intent does NOT
@@ -148,6 +150,10 @@ class DeterministicState(BaseAgentState, total=False):
     resolved_system: str | None
     resolved_system_id: str | None
     resolved_question_type: list[str]
+    # Set by hybrid_retrieve from the doc type hierarchy table: document
+    # type id -> rerank's additive priority bonus for this turn's question
+    # types. Carried to rerank in state so the table is read once per turn.
+    document_type_bonuses: dict[str, float]
 
 
 class _IntentClassification(BaseModel):
@@ -175,7 +181,8 @@ class _IntentClassification(BaseModel):
             "questions are exactly one, but include more than one only when "
             "the question genuinely asks about more than one kind of thing "
             "(e.g. both a technique/procedural step and a product spec in "
-            "the same question). Empty if none clearly apply."
+            "the same question). Use unclassified, alone, if none of the "
+            "others clearly applies."
         ),
     )
 
@@ -239,10 +246,11 @@ async def detect_intent(state: DeterministicState) -> dict:
     leaves resolved_system None -- retrieval runs unfiltered, the same
     baseline behavior as before this node existed.
 
-    question_type never triggers this interrupt -- it has no
-    retrieval-filtering role today, only an observability one, so an
-    unclear (or multi-type) classification there is left as whatever the
-    classifier returns rather than blocking the turn on a second question.
+    question_type never triggers this interrupt -- an unclear question
+    is classified `unclassified`, which simply retrieves unfiltered (see
+    the doc type hierarchy notes above hybrid_retrieve), so an unclear (or
+    multi-type) classification there is left as whatever the classifier
+    returns rather than blocking the turn on a second question.
     It's a list, not a single value, since a question can genuinely be more
     than one type -- see agents/question_types.py for the canonical values,
     enforced directly by _IntentClassification's Literal-typed field.
@@ -347,36 +355,23 @@ def _should_clarify_synonyms(
     return "hybrid_retrieve"
 
 
-# doctype-hierarchy.csv's priority order, expressed in this system's real
-# document_type names (tags/repository.py's list_document_types()), not the
-# CSV's own generic wording ("Inventory Control Form" here is "Inventory
-# Control", etc.), keyed by agents/question_types.py's canonical slugs
-# (2026-09-05, was the CSV's own verbose question-type wording). That CSV's
-# own Priority 1 ("Master Item File") isn't a document at all -- it's the
-# graph, already covered by resolve_skus/aggregate_facts (ticket 20) -- so
-# this ranks what's left: the P2-P4 document-chunk tiers. Matched by
-# substring, since a real document_type name and the CSV's wording don't
-# line up exactly. Used twice: hard-filters hybrid_retrieve's retrieval
-# pool to these types (plus anything untagged), and rerank's
-# _doctype_priority_bonus below still ranks an allowed type above an
-# untagged chunk within that pool -- filter narrows *which* documents are
-# eligible, the bonus decides *ordering* among them.
+# Which document types each question type retrieves from, ranked, is data
+# (issue #17, docs/adr/0006-doc-type-hierarchy-is-data.md): the
+# question_type_document_types table, edited from the Settings page and
+# read once per turn by hybrid_retrieve (doc_type_hierarchy.repository's
+# list_hierarchy). It replaced an in-code _DOCTYPE_PRIORITY dict of name
+# substrings -- the table is matched by document type id, so renaming a doc
+# type can't silently drop it out of retrieval, and a new one is wired in
+# without a deploy. That dict's contents seeded the table (see the
+# ..._create_question_type_document_types.py migration).
 #
-# compatibility_lookup has no CSV-era precedent (canonicalized in from
-# scratch, not carried over from an existing question type) -- given the
-# same priority order as the two spec types is a reasonable default
-# (compatibility facts are catalog/cross-reference-shaped, same as specs),
-# not a verified-against-real-data choice the way the other three are.
-_DOCTYPE_PRIORITY: dict[str, list[str]] = {
-    "system_contents": ["Inventory Control", "Tray Layout", "Setup Guide", "Surgical Technique"],
-    "product_characteristics": [
-        "Inventory Control", "Tray Layout", "Setup Guide", "Surgical Technique",
-    ],
-    "compatibility_lookup": [
-        "Inventory Control", "Tray Layout", "Setup Guide", "Surgical Technique",
-    ],
-    "technique_procedural": ["Surgical Technique", "Setup Guide", "Launch Presentation"],
-}
+# Used twice: hard-filters hybrid_retrieve's retrieval pool to the mapped
+# types (plus anything untagged), and rerank's bonus still ranks an allowed
+# type above an untagged chunk within that pool -- filter narrows *which*
+# documents are eligible, the bonus decides *ordering* among them. A
+# question type with nothing mapped -- always including `unclassified`,
+# and e.g. `documents_lookup` -- applies no filter.
+#
 # Additive score bonus per priority rank -- kept small relative to rerank's
 # normalized-to-[0,1] BM25 score (see rerank below), so it breaks ties/
 # favors a more-authoritative source on close calls rather than overriding
@@ -384,42 +379,48 @@ _DOCTYPE_PRIORITY: dict[str, list[str]] = {
 _DOCTYPE_BONUS_STEP = 0.05
 
 
-def _doctype_priority_bonus(question_types: list[str], document_type: str | None) -> float:
-    if not document_type:
-        return 0.0
+def _ranked_document_type_ids(
+    hierarchy: dict[str, list[RankedDocumentType]],
+) -> dict[str, list[str]]:
+    return {
+        question_type: [str(document_type.id) for document_type in document_types]
+        for question_type, document_types in hierarchy.items()
+    }
+
+
+def _document_type_bonuses(
+    question_types: list[str], ranking: dict[str, list[str]]
+) -> dict[str, float]:
+    """Document type id -> rerank bonus for this turn. The first of this
+    turn's question types with anything mapped decides the order (most
+    authoritative gets the biggest bonus); a doc type it doesn't rank gets
+    none. Empty when no question type has anything mapped.
+    """
     for question_type in question_types:
-        order = _DOCTYPE_PRIORITY.get(question_type)
-        if not order:
-            continue
-        for rank, name in enumerate(order):
-            if name.lower() in document_type.lower():
-                return (len(order) - rank) * _DOCTYPE_BONUS_STEP
-        return 0.0  # this question type has a defined order and this doctype just isn't ranked in it
-    return 0.0
+        ranked_ids = ranking.get(question_type)
+        if ranked_ids:
+            return {
+                document_type_id: (len(ranked_ids) - rank) * _DOCTYPE_BONUS_STEP
+                for rank, document_type_id in enumerate(ranked_ids)
+            }
+    return {}
 
 
 def _allowed_document_type_ids(
-    question_types: list[str], document_types: list[TagRecord]
+    question_types: list[str], ranking: dict[str, list[str]]
 ) -> list[str] | None:
-    """Resolves _DOCTYPE_PRIORITY's per-question-type allowed doctype names
-    to real document_type ids, for hybrid_retrieve's hard filter. Returns
-    None (no filter -- retrieve unfiltered) when none of this turn's
-    resolved_question_type values have a defined priority order (e.g.
-    "documents_lookup"), since restricting to an arbitrary/empty list would
-    be worse than not filtering at all when there's no actual rule to apply.
+    """The document type ids hybrid_retrieve hard-filters to: every id
+    mapped to any of this turn's question types. Returns None (no filter --
+    retrieve unfiltered) when none of them has anything mapped (e.g.
+    "unclassified" or "documents_lookup"), since restricting to an empty
+    list would be worse than not filtering at all when there's no actual
+    rule to apply.
     """
-    allowed_names: set[str] = set()
-    have_rule = False
+    allowed_ids: dict[str, None] = {}
     for question_type in question_types:
-        order = _DOCTYPE_PRIORITY.get(question_type)
-        if order:
-            have_rule = True
-            allowed_names.update(name.lower() for name in order)
-    if not have_rule:
-        return None
-    return [
-        str(document_type.id) for document_type in document_types if any(name in document_type.name.lower() for name in allowed_names)
-    ]
+        for document_type_id in ranking.get(question_type, []):
+            allowed_ids.setdefault(document_type_id, None)
+    return list(allowed_ids) or None
 
 
 async def hybrid_retrieve(state: DeterministicState) -> dict:
@@ -437,7 +438,7 @@ async def hybrid_retrieve(state: DeterministicState) -> dict:
     search_text = " ".join(filter(None, [search_query, *state.get("resolved_canonical_terms", [])]))
     question_types = state.get("resolved_question_type") or []
     # Hard-filters the retrieval pool by document type when the classified
-    # question type has a defined preference (_DOCTYPE_PRIORITY) -- added
+    # question type has doc types mapped (the hierarchy table) -- added
     # 2026-09-04 after comparing a Technique/procedural answer against its
     # golden expected answer found the real step-by-step Surgical Technique
     # narrative chunks ("Step 1. Surgical Approach", ...) never reaching the
@@ -449,8 +450,8 @@ async def hybrid_retrieve(state: DeterministicState) -> dict:
     # chunks out of contention. Still admits untagged chunks regardless
     # (RetrievalFilters' own doc) -- this narrows the pool to relevant
     # *and* unknown-type documents, never to relevant-only.
-    document_types = await list_document_types()
-    allowed_document_type_ids = _allowed_document_type_ids(question_types, document_types)
+    ranking = _ranked_document_type_ids(await list_hierarchy())
+    allowed_document_type_ids = _allowed_document_type_ids(question_types, ranking)
     results = await vector_search.ainvoke(
         {
             "query": search_text,
@@ -465,10 +466,14 @@ async def hybrid_retrieve(state: DeterministicState) -> dict:
             "text": result["content"],
             "score": result["score"],
             "document_type": result.get("document_type"),
+            "document_type_id": result.get("document_type_id"),
         }
         for result in results
     ]
-    return {"retrieved": retrieved}
+    return {
+        "retrieved": retrieved,
+        "document_type_bonuses": _document_type_bonuses(question_types, ranking),
+    }
 
 
 _TOKEN_PATTERN = re.compile(r"[a-z0-9.]+")
@@ -551,14 +556,17 @@ async def rerank(state: DeterministicState) -> dict:
     query_terms = [state["query"], *state.get("resolved_canonical_terms", [])]
     documents = [passage["text"] for passage in passages]
     bm25 = _normalize_to_unit_range(_bm25_scores(query_terms, documents))
-    question_types = state.get("resolved_question_type") or []
+    # Doc type id -> bonus, computed by hybrid_retrieve from the hierarchy
+    # table for this turn's question types. An untagged chunk (no id) or a
+    # type the leading question type doesn't rank gets no bonus.
+    document_type_bonuses = state.get("document_type_bonuses") or {}
     # score is overwritten with the combined (BM25 + doctype priority
     # bonus) value, not left at hybrid_retrieve's original RRF fusion
     # score -- that's the number that actually decided this passage's
     # rank, and a trace/debugging view showing the old, pre-rerank score
     # here would misrepresent why a given passage made the cut.
     combined = [
-        {**passage, "score": score + _doctype_priority_bonus(question_types, passage.get("document_type"))}
+        {**passage, "score": score + document_type_bonuses.get(passage.get("document_type_id") or "", 0.0)}
         for passage, score in zip(passages, bm25)
     ]
     scored = sorted(combined, key=lambda passage: passage["score"], reverse=True)

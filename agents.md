@@ -93,6 +93,21 @@ picking this repo up cold, read this before making structural changes.
     `authHeaders`, `request`, `unwrap`) that every domain imports — not a
     domain itself, low-churn, so it isn't a collision risk the way a flat
     `lib/api.ts` with every domain's functions appended to it was.
+- **Question types are code; their doc-type hierarchy is data.** Slugs
+  and descriptions live in `backend/agents/question_types.py`, because the
+  deterministic workflow branches on them and the classifier's enum is
+  built from them. Which document types each one retrieves from, and in
+  what order, lives in the `question_type_document_types` table
+  (`backend/doc_type_hierarchy/`, route `api/routes/question_types.py`).
+  Admins edit it from Settings. `hybrid_retrieve`'s hard filter and
+  `rerank`'s bonus read it by document type **id**. Don't bring back
+  name/substring matching or an in-code priority dict. `unclassified` is
+  always present, is read-only, and never has rows (there's a check
+  constraint); like any question type with an empty list, it retrieves
+  unfiltered. A doc-type merge moves the merged type's rows to the
+  surviving type (`tags.repository.merge_document_type`). If you add a
+  table that references `document_types`, make merge handle it too. See
+  `docs/adr/0006-doc-type-hierarchy-is-data.md`.
 - **Golden datasets are per-product-system, not generic.** `mis.jsonl` /
   `reflex.jsonl` correspond to real implant systems (MIS, REFLEX); the
   intent-detection dataset routes a query to the right system before

@@ -135,7 +135,9 @@ async def merge_document_type(stray_id: uuid.UUID, surviving_id: uuid.UUID) -> T
     nothing half-moved. Chunks are updated directly rather than re-ingested:
     their document_type_id is a denormalized copy of the document's (see
     ..._create_chunks_table.py), so re-pointing both keeps retrieval's
-    doc-type filter in step without re-embedding anything.
+    doc-type filter in step without re-embedding anything. The stray's
+    question-type hierarchy rows are merged into the survivor's the same
+    way (see below).
 
     Returns the surviving document type. Raises TagNotFound if either id
     doesn't exist. Callers must reject stray_id == surviving_id first.
@@ -160,6 +162,33 @@ async def merge_document_type(stray_id: uuid.UUID, surviving_id: uuid.UUID) -> T
             )
             await cursor.execute(
                 "UPDATE chunks SET document_type_id = %s WHERE document_type_id = %s",
+                (surviving_id, stray_id),
+            )
+            # Question Types -> Doc Types hierarchy rows (issue #17,
+            # backend/doc_type_hierarchy/) move with the merge too, so a
+            # question type that retrieved from the stray keeps retrieving
+            # from the survivor. Where a question type already lists both,
+            # the survivor keeps the better (lower) of the two ranks and the
+            # stray's row goes; otherwise the stray's row is re-pointed.
+            await cursor.execute(
+                "UPDATE question_type_document_types AS surviving "
+                "SET rank = LEAST(surviving.rank, stray.rank) "
+                "FROM question_type_document_types AS stray "
+                "WHERE surviving.document_type_id = %s AND stray.document_type_id = %s "
+                "AND surviving.question_type = stray.question_type",
+                (surviving_id, stray_id),
+            )
+            await cursor.execute(
+                "DELETE FROM question_type_document_types AS stray "
+                "WHERE stray.document_type_id = %s AND EXISTS ("
+                "SELECT 1 FROM question_type_document_types AS surviving "
+                "WHERE surviving.document_type_id = %s "
+                "AND surviving.question_type = stray.question_type)",
+                (stray_id, surviving_id),
+            )
+            await cursor.execute(
+                "UPDATE question_type_document_types SET document_type_id = %s "
+                "WHERE document_type_id = %s",
                 (surviving_id, stray_id),
             )
             await cursor.execute("DELETE FROM document_types WHERE id = %s", (stray_id,))

@@ -45,8 +45,8 @@ class RetrievalFilters:
     # filter regardless of what's listed here, so an untagged document
     # never becomes silently unreachable for a question type that has a
     # doctype preference. deterministic.py's hybrid_retrieve (2026-09-04)
-    # is the one caller: it resolves a question type's allowed doctypes
-    # (_DOCTYPE_PRIORITY) to ids and passes them here so the *retrieval*
+    # is the one caller: it reads a question type's allowed doctype ids
+    # from the hierarchy table (issue #17) and passes them here so the *retrieval*
     # pool itself is narrowed to relevant document types, not just
     # re-ranked afterward -- rerank's existing doctype-priority bonus still
     # ranks an allowed-type chunk above an untagged one within that pool.
@@ -127,15 +127,15 @@ class VectorStoreClient:
             # parameter cast explicitly to match `<=>`'s declared operand
             # types.
             #
-            # document_type name (not just id) is joined in here -- ticket
-            # 24: reranking weighs a candidate partly by which doctype it
-            # came from (doctype-hierarchy.csv's priority order), which
-            # needs the name, not just the FK, and doing that join per-row
-            # later would mean N extra queries instead of one JOIN here.
+            # document_type id and name both come back -- rerank weighs a
+            # candidate partly by which doctype it came from, matched by id
+            # against the question type -> doc type hierarchy table (issue
+            # #17); the name rides along for prompts/traces, and joining it
+            # per-row later would mean N extra queries instead of one JOIN.
             await cursor.execute(
                 f"""
                 SELECT c.id, c.document_id, c.chunk_index, c.content, c.section_title,
-                       dt.name AS document_type
+                       c.document_type_id, dt.name AS document_type
                 FROM chunks c
                 LEFT JOIN document_types dt ON dt.id = c.document_type_id
                 WHERE true {filter_sql}
@@ -149,7 +149,7 @@ class VectorStoreClient:
             await cursor.execute(
                 f"""
                 SELECT c.id, c.document_id, c.chunk_index, c.content, c.section_title,
-                       dt.name AS document_type
+                       c.document_type_id, dt.name AS document_type
                 FROM chunks c
                 LEFT JOIN document_types dt ON dt.id = c.document_type_id
                 WHERE c.tsv @@ plainto_tsquery('english', %s) {filter_sql}
@@ -181,6 +181,11 @@ def _reciprocal_rank_fusion(
             "content": rows_by_id[chunk_id]["content"],
             "section_title": rows_by_id[chunk_id]["section_title"],
             "document_type": rows_by_id[chunk_id]["document_type"],
+            "document_type_id": (
+                str(rows_by_id[chunk_id]["document_type_id"])
+                if rows_by_id[chunk_id]["document_type_id"]
+                else None
+            ),
             "score": scores[chunk_id],
             "citation": f"{rows_by_id[chunk_id]['document_id']}#{rows_by_id[chunk_id]['chunk_index']}",
         }

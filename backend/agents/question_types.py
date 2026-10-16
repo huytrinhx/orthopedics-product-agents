@@ -29,8 +29,23 @@ Nothing currently scores against `expected_question_type` (`evals/
 harness.py` doesn't read `question_type`), so this is a latent mismatch,
 not an active bug -- but whoever builds that scoring needs a translation
 step (and a decision on what backfills `compatibility_lookup`) first.
+
+Slugs and descriptions are code, but which document types each one
+retrieves from is data (issue #17, docs/adr/0006-doc-type-hierarchy-is-
+data.md): the ranked list per question type lives in the
+`question_type_document_types` table (backend/doc_type_hierarchy/),
+edited from the Settings page. The deterministic workflow branches on
+these slugs and the classifier's structured-output enum is built from
+them, so adding or renaming one is a code change; wiring a new doc type
+into one is not.
+
+`unclassified` is the escape hatch: always present, never editable, and
+it maps to no doc-type filter at all -- so a doc type nobody has mapped
+yet is still reachable on a turn the classifier can't place.
 """
 from dataclasses import dataclass
+
+UNCLASSIFIED = "unclassified"
 
 
 @dataclass(frozen=True)
@@ -45,6 +60,8 @@ QUESTION_TYPES: list[QuestionType] = [
     QuestionType("technique_procedural", "step-by-step surgical technique, procedural walkthrough, applications of products or parts, etc.",),
     QuestionType("documents_lookup", "fast pull of a document by name, SKU, or other identifier"),
     QuestionType("compatibility_lookup", "which products/parts are compatible with which others, e.g. screws with plates, implants with instruments, etc.",),
+    QuestionType("features_benefits", "product features and benefits, selling points, why choose this product"),
+    QuestionType(UNCLASSIFIED, "none of the other question types clearly applies"),
 ]
 
 QUESTION_TYPE_NAMES: list[str] = [question_type.name for question_type in QUESTION_TYPES]

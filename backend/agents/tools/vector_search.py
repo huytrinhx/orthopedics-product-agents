@@ -3,8 +3,9 @@
 See backend/retrieval/vector_store.py for the underlying client.
 `document_type_ids` (added 2026-09-04) is a real filter, but a narrow one in
 practice: `agents/workflows/deterministic.py`'s hybrid_retrieve is the only
-caller that passes it, resolved from the query's classified question type
-via `_DOCTYPE_PRIORITY` -- it's exposed as a tool arg (rather than kept
+caller that passes it, read for the query's classified question type from
+the question type -> doc type hierarchy table (issue #17,
+`doc_type_hierarchy/`) -- it's exposed as a tool arg (rather than kept
 private to that one caller) mainly so react_agent's model *could* pass real
 ids it looked up itself in principle, though nothing prompts it to today; it
 has no way to guess a real document_type UUID unprompted, so in practice

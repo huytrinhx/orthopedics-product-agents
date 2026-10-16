@@ -53,6 +53,17 @@ Single-context repo — see `docs/agents/domain.md` for how this file and
   fusion, ...) as a graph entity, distinct from "Technique/procedural"
   question types in the golden datasets, which are about the same concept
   but expressed as free text rather than a graph node.
+- **Question type** — what kind of thing a rep's question asks about
+  (`product_characteristics`, `technique_procedural`, `features_benefits`,
+  ..., `unclassified`), classified per turn by the deterministic workflow.
+  The slugs are code (`backend/agents/question_types.py`).
+- **Doc-type hierarchy** — for each question type, the ranked list of
+  document types retrieval filters to, most authoritative first. It's data
+  (`question_type_document_types`, edited in Settings) keyed by document
+  type id. An empty list, which `unclassified` always has, means no filter.
+  A document type that no question type lists is **unmapped**: it's only
+  reachable on an unfiltered turn. See
+  `docs/adr/0006-doc-type-hierarchy-is-data.md`.
 - **Workflow** — one agent architecture (deterministic pipeline, ReAct
   agent, supervisor/multi-agent), registered by name in
   `backend/agents/registry.py`. Selected per-request (`/chat/<workflow>/stream`)
