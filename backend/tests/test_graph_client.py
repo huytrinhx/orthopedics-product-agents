@@ -47,6 +47,37 @@ async def test_compatible_with_is_bidirectionally_queryable():
     assert any(related_entry["related_entity"] == plate_sku for related_entry in from_screw)
 
 
+async def test_batched_upserts_write_every_row_across_batch_boundaries(monkeypatch):
+    """A batch size of 2 over 5 parts / 4 pairs forces partial final
+    batches, so an off-by-one in the slicing would drop a row."""
+    monkeypatch.setattr("retrieval.graph_client.UPSERT_BATCH_SIZE", 2)
+    client = get_graph_client()
+    tray = _unique("TRAY")
+    await client.upsert_tray(tray, _unique("FAMILY"))
+    plate_sku = _unique("PLATE")
+    screw_skus = [_unique("SCREW") for _ in range(4)]
+
+    await client.upsert_parts(
+        [(plate_sku, tray, {"description": "batched plate", "thread": None})]
+        + [(screw_sku, tray, {"description": "batched screw"}) for screw_sku in screw_skus]
+    )
+    await client.upsert_compatible_with_pairs([(plate_sku, screw_sku) for screw_sku in screw_skus])
+    await client.upsert_requires_tool_pairs([(screw_sku, plate_sku) for screw_sku in screw_skus])
+
+    from_plate = await client.query_related_entities(plate_sku)
+    compatible = {entry["related_entity"] for entry in from_plate if entry["relationship"] == "COMPATIBLE_WITH"}
+    required_by = {entry["related_entity"] for entry in from_plate if entry["relationship"] == "REQUIRES_TOOL"}
+    assert compatible == set(screw_skus)
+    assert required_by == set(screw_skus)
+    for screw_sku in screw_skus:
+        trays = [
+            entry["related_entity"]
+            for entry in await client.query_related_entities(screw_sku)
+            if entry["relationship"] == "BELONGS_TO_TRAY"
+        ]
+        assert trays == [tray]
+
+
 async def test_differentiation_noops_when_a_sku_is_unknown():
     client = get_graph_client()
     tray = _unique("TRAY")
