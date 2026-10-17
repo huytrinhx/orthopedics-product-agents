@@ -31,6 +31,14 @@ class DocumentOut(BaseModel):
     document_type: TagOut | None
     product_family: DocumentProductFamilyOut | None
     trays: list[TrayOut]
+    # Set only when an indexing run finishes successfully; None when that's
+    # never happened or predates the column (issue #14).
+    last_indexed_at: datetime | None
+    # The tags still needed before this document may be indexed --
+    # "Product Family", "Tray", "Document Type" (documents.service
+    # .missing_index_tags). Empty means complete. Computed here so the
+    # Document Manager highlights exactly what the index endpoint enforces.
+    missing_tags: list[str]
 
 
 class SetDocumentTagsRequest(BaseModel):

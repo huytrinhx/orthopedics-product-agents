@@ -39,6 +39,10 @@ class DocumentRecord:
     # on) and the admin-editable label shown in the UI, respectively.
     product_family_name: str | None = None
     product_family_display_name: str | None = None
+    # When an indexing run last finished successfully (issue #14) -- None
+    # for never-indexed documents and for ones indexed before the column
+    # existed (no backfill, see its migration).
+    last_indexed_at: datetime | None = None
     trays: list[TrayRecord] = field(default_factory=list)
 
 
@@ -55,7 +59,7 @@ class TraysOutsideFamily(Exception):
 _SELECT = """
     SELECT d.id, d.filename, d.storage_path, d.status, d.error, d.uploaded_by,
            d.created_at, d.updated_at, d.system_id, s.name, d.document_type_id, dt.name,
-           d.product_family_id, pf.name, pf.display_name
+           d.product_family_id, pf.name, pf.display_name, d.last_indexed_at
     FROM documents d
     LEFT JOIN systems s ON s.id = d.system_id
     LEFT JOIN document_types dt ON dt.id = d.document_type_id
@@ -205,6 +209,24 @@ async def set_status(
             await cursor.execute(
                 "UPDATE documents SET status = %s, error = %s, updated_at = now() WHERE id = %s",
                 (status, error, document_id),
+            )
+        await connection.commit()
+    finally:
+        await connection.close()
+
+
+async def mark_indexed(document_id: uuid.UUID) -> None:
+    """The end of a successful indexing run: status "done" and
+    last_indexed_at stamped in the same write. The only place
+    last_indexed_at is set -- queueing, a failed run, and tag edits all go
+    through set_status/set_tags, which leave it alone (issue #14)."""
+    connection = await get_connection()
+    try:
+        async with connection.cursor() as cursor:
+            await cursor.execute(
+                "UPDATE documents SET status = 'done', error = NULL, last_indexed_at = now(), "
+                "updated_at = now() WHERE id = %s",
+                (document_id,),
             )
         await connection.commit()
     finally:

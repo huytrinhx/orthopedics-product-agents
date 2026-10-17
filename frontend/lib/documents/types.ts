@@ -31,6 +31,13 @@ export interface DocumentRecord {
   document_type: Tag | null;
   product_family: DocumentProductFamily | null;
   trays: DocumentTray[];
+  // Set only when an indexing run finishes successfully (issue #14); null
+  // if that's never happened or predates the column.
+  last_indexed_at: string | null;
+  // Tags still needed before the document may be indexed ("Product
+  // Family", "Tray", "Document Type") -- the server's own rule, the same
+  // one POST /documents/{id}/index enforces. Empty means complete.
+  missing_tags: string[];
 }
 
 // Mirrors backend/documents/models.py's ChunkOut -- backs the chat citation

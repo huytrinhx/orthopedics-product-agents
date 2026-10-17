@@ -16,6 +16,7 @@ from fastapi.testclient import TestClient
 
 from api.main import app
 from auth.repository import set_user_active
+from tests.complete_tagging import tag_completely
 
 needs_openai_key = pytest.mark.skipif(
     not os.environ.get("OPENAI_API_KEY"), reason="requires a real OPENAI_API_KEY"
@@ -178,6 +179,7 @@ def test_full_pipeline_answers_with_citations_from_a_real_indexed_document(monke
             files={"file": ("torque-spec.txt", content, "text/plain")},
         )
         document_id = upload.json()["id"]
+        tag_completely(client, admin_headers, document_id)
         client.post(f"/documents/{document_id}/index", headers=admin_headers)
         for _ in range(40):
             if client.get(f"/documents/{document_id}", headers=admin_headers).json()["status"] == "done":
@@ -243,6 +245,7 @@ def test_citations_survive_a_thread_resume(monkeypatch, tmp_path):
             files={"file": ("mira-apex-torque-spec.txt", content, "text/plain")},
         )
         document_id = upload.json()["id"]
+        tag_completely(client, admin_headers, document_id)
         client.post(f"/documents/{document_id}/index", headers=admin_headers)
         for _ in range(40):
             if client.get(f"/documents/{document_id}", headers=admin_headers).json()["status"] == "done":

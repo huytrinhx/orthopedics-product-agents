@@ -115,14 +115,33 @@ function TagValues({ values }: { values: string[] }) {
   );
 }
 
+// Issue #14: an incomplete document (no Product Family, no Tray, or no
+// Document Type) can't be indexed -- the server refuses it too (POST
+// /documents/{id}/index answers 409), this just says so up front.
+function incompleteExplanation(documentRecord: DocumentRecord): string {
+  return `Missing ${documentRecord.missing_tags.join(", ")}. Set them in Tags to index this document.`;
+}
+
 function IndexButton({ documentRecord, onIndex }: { documentRecord: DocumentRecord; onIndex: (documentRecord: DocumentRecord) => void }) {
   const running = documentRecord.status === "queued" || documentRecord.status === "processing";
+  const incomplete = documentRecord.missing_tags.length > 0;
   const label = running ? "Indexing…" : documentRecord.status === "done" ? "Reindex" : "Index";
+  // The title sits on a wrapping span, not the button: a disabled button
+  // gets no pointer events in some browsers, so its own tooltip never shows.
   return (
-    <button type="button" className="btn-text" disabled={running} onClick={() => onIndex(documentRecord)}>
-      {label}
-    </button>
+    <span title={incomplete ? incompleteExplanation(documentRecord) : undefined}>
+      <button type="button" className="btn-text" disabled={running || incomplete} onClick={() => onIndex(documentRecord)}>
+        {label}
+      </button>
+    </span>
   );
+}
+
+// "Last indexed": stamped only by a successful indexing run, so null means
+// never indexed -- or indexed before the column existed (no backfill).
+function LastIndexed({ documentRecord }: { documentRecord: DocumentRecord }) {
+  if (!documentRecord.last_indexed_at) return <span className="tag-values-empty">—</span>;
+  return <>{new Date(documentRecord.last_indexed_at).toLocaleString()}</>;
 }
 
 export default function DocumentsPage() {
@@ -308,64 +327,80 @@ export default function DocumentsPage() {
                 <th>Trays</th>
                 <th>Document type</th>
                 <th>Uploaded</th>
+                <th>Last indexed</th>
                 <th></th>
               </tr>
             </thead>
             <tbody>
-              {documents.map((documentRecord) => (
-                <tr key={documentRecord.id}>
-                  <td>{documentRecord.filename}</td>
-                  <td>
-                    <StatusBadge documentRecord={documentRecord} />
-                  </td>
-                  <td className="tag-values-cell">
-                    <TagValues values={documentRecord.product_family ? [documentRecord.product_family.display_name] : []} />
-                  </td>
-                  <td className="tag-values-cell">
-                    <TagValues values={documentRecord.trays.map((tray) => tray.display_name)} />
-                  </td>
-                  <td className="tag-values-cell">
-                    <TagValues values={documentRecord.document_type ? [documentRecord.document_type.name] : []} />
-                  </td>
-                  <td>{new Date(documentRecord.created_at).toLocaleString()}</td>
-                  <td>
-                    <div className="actions-cell">
-                      <button type="button" className="btn-text" onClick={() => setTaggingDocument(documentRecord)}>
-                        Tags
-                      </button>
-                      <IndexButton documentRecord={documentRecord} onIndex={handleIndex} />
-                      <button
-                        type="button"
-                        className="btn-icon"
-                        disabled={reuploadingId === documentRecord.id}
-                        title={reuploadingId === documentRecord.id ? "Reuploading…" : "Re-upload"}
-                        aria-label={reuploadingId === documentRecord.id ? "Reuploading…" : "Re-upload"}
-                        onClick={() => handleReuploadClick(documentRecord)}
-                      >
-                        <UploadIcon />
-                      </button>
-                      <button
-                        type="button"
-                        className="btn-icon"
-                        title="Download"
-                        aria-label="Download"
-                        onClick={() => handleDownload(documentRecord)}
-                      >
-                        <DownloadIcon />
-                      </button>
-                      <button
-                        type="button"
-                        className="btn-icon btn-icon-danger"
-                        title="Delete"
-                        aria-label="Delete"
-                        onClick={() => handleDelete(documentRecord)}
-                      >
-                        <TrashIcon />
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
+              {documents.map((documentRecord) => {
+                const incomplete = documentRecord.missing_tags.length > 0;
+                return (
+                  <tr key={documentRecord.id} className={incomplete ? "document-row-incomplete" : undefined}>
+                    <td>
+                      {documentRecord.filename}
+                      {incomplete && (
+                        <span className="document-incomplete-note">{incompleteExplanation(documentRecord)}</span>
+                      )}
+                    </td>
+                    <td>
+                      <StatusBadge documentRecord={documentRecord} />
+                    </td>
+                    <td className="tag-values-cell">
+                      <TagValues values={documentRecord.product_family ? [documentRecord.product_family.display_name] : []} />
+                    </td>
+                    <td className="tag-values-cell">
+                      <TagValues values={documentRecord.trays.map((tray) => tray.display_name)} />
+                    </td>
+                    <td className="tag-values-cell">
+                      <TagValues values={documentRecord.document_type ? [documentRecord.document_type.name] : []} />
+                    </td>
+                    <td>{new Date(documentRecord.created_at).toLocaleString()}</td>
+                    <td>
+                      <LastIndexed documentRecord={documentRecord} />
+                    </td>
+                    <td>
+                      <div className="actions-cell">
+                        <button type="button" className="btn-text" onClick={() => setTaggingDocument(documentRecord)}>
+                          Tags
+                        </button>
+                        <IndexButton documentRecord={documentRecord} onIndex={handleIndex} />
+                        {/* A re-upload re-indexes, so it's behind the same
+                        completeness gate as Index/Reindex. */}
+                        <span title={incomplete ? incompleteExplanation(documentRecord) : undefined}>
+                          <button
+                            type="button"
+                            className="btn-icon"
+                            disabled={incomplete || reuploadingId === documentRecord.id}
+                            title={incomplete ? undefined : reuploadingId === documentRecord.id ? "Reuploading…" : "Re-upload"}
+                            aria-label={reuploadingId === documentRecord.id ? "Reuploading…" : "Re-upload"}
+                            onClick={() => handleReuploadClick(documentRecord)}
+                          >
+                            <UploadIcon />
+                          </button>
+                        </span>
+                        <button
+                          type="button"
+                          className="btn-icon"
+                          title="Download"
+                          aria-label="Download"
+                          onClick={() => handleDownload(documentRecord)}
+                        >
+                          <DownloadIcon />
+                        </button>
+                        <button
+                          type="button"
+                          className="btn-icon btn-icon-danger"
+                          title="Delete"
+                          aria-label="Delete"
+                          onClick={() => handleDelete(documentRecord)}
+                        >
+                          <TrashIcon />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
