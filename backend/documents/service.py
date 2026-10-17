@@ -1,4 +1,6 @@
-"""Background processing kicked off by upload (backend/api/routes/documents.py).
+"""Document processing behind backend/api/routes/documents.py: the in-place
+re-tag (retag_document), and the background indexing an admin triggers
+with Index/Reindex or a re-upload (process_document).
 
 Extracts text once (backend/ingestion/text_extraction.py) and runs three
 ingestion legs against it (backend/ingestion/pipeline.py): the graph leg
@@ -15,12 +17,51 @@ import logging
 import uuid
 from pathlib import Path
 
-from documents.repository import get_document, set_status
+from documents.repository import DocumentRecord, get_document, set_status, set_tags
 from ingestion.pipeline import ingest_document, ingest_document_vectors
 from ingestion.text_extraction import extract_text
 from ingestion.tray_layout_extraction import extract_tray_layout
+from retrieval.graph_client import get_graph_client
 
 logger = logging.getLogger(__name__)
+
+
+async def retag_document(
+    document_id: uuid.UUID,
+    system_id: uuid.UUID | None,
+    document_type_id: uuid.UUID | None,
+    product_family_id: uuid.UUID | None,
+    tray_ids: list[uuid.UUID],
+) -> DocumentRecord | None:
+    """Saves a document's tags and syncs them onto what indexing already
+    wrote, in place (issue #13): set_tags rewrites the chunks' filter
+    columns in its transaction, then the graph's Document node gets the new
+    doc type/family/trays. No re-extraction, no re-embedding, no status
+    change. Facts prose extraction already attached stay as they are --
+    a Reindex is what re-scopes those to a new family.
+
+    Raises TraysOutsideFamily / psycopg ForeignKeyViolation (nothing
+    written) from set_tags, and lets a Neo4j error propagate after the
+    Postgres write has committed -- the caller reports it, and a Reindex
+    resyncs the graph.
+    """
+    document = await set_tags(
+        document_id,
+        system_id=system_id,
+        document_type_id=document_type_id,
+        product_family_id=product_family_id,
+        tray_ids=tray_ids,
+    )
+    if document is None:
+        return None
+    # Catalog names, not display names -- what the graph's nodes are keyed on.
+    await get_graph_client().set_document_tags(
+        str(document_id),
+        doc_type=document.document_type_name,
+        product_family=document.product_family_name,
+        trays=[tray.name for tray in document.trays],
+    )
+    return document
 
 
 async def process_document(document_id: uuid.UUID, storage_path: str) -> None:

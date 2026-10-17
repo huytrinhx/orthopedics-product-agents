@@ -436,10 +436,13 @@ def test_ambiguous_query_pauses_for_clarification_and_resume_completes_the_turn(
         upload = client.post(
             "/documents/upload",
             headers=admin_headers,
-            data={"system_id": system_id},
             files={"file": ("clarify-doc.txt", b"placeholder content", "text/plain")},
         )
         document_id = upload.json()["id"]
+        # Upload takes no tags (issue #13); they're set afterward.
+        client.patch(
+            f"/documents/{document_id}/tags", headers=admin_headers, json={"system_id": system_id}
+        )
 
         user_headers = {"Authorization": f"Bearer {_user_token(client)}"}
 

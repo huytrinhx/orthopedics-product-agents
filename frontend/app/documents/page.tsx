@@ -12,10 +12,12 @@ import {
   uploadDocument,
 } from "../../lib/documents/api";
 import { listDocumentTypes } from "../../lib/documents/tags/api";
+import { listProductFamilies } from "../../lib/catalog/api";
 import { useAuth } from "../../lib/auth-context";
 import type { ComponentHealth, DocumentRecord, SystemHealth } from "../../lib/documents/types";
 import type { Tag } from "../../lib/documents/tags/types";
-import { TagSelect } from "./tag-select";
+import type { ProductFamily } from "../../lib/catalog/types";
+import { TagModal } from "./tag-modal";
 
 // Polls while anything's still in flight -- the background task (see
 // backend/documents/service.py) is a placeholder today (tickets 06/07 wire
@@ -98,8 +100,8 @@ function HealthStrip({ health, error }: { health: SystemHealth | null; error: st
 // Index/Reindex trigger for the (still stubbed, see backend/documents/service.py)
 // ingestion pipeline: upload leaves a document "pending" rather than
 // auto-indexing it, so this is the only way a document reaches "done".
-// Read-only tag cells (issue #12) -- editing family/trays/doc type moves
-// into the tag modal ticket. One value per line, wrapped rather than
+// Read-only tag cells (issue #12) -- editing family/trays/doc type happens
+// in the row's tag modal (tag-modal.tsx). One value per line, wrapped rather than
 // truncated, since tray names run long ("Soft Tissue | Comprehensive
 // Instrument Tray") and a family can carry several.
 function TagValues({ values }: { values: string[] }) {
@@ -127,12 +129,13 @@ export default function DocumentsPage() {
   const { user, loading } = useAuth();
   const [documents, setDocuments] = useState<DocumentRecord[]>([]);
   const [documentTypes, setDocumentTypes] = useState<Tag[]>([]);
+  const [families, setFamilies] = useState<ProductFamily[]>([]);
+  const [taggingDocument, setTaggingDocument] = useState<DocumentRecord | null>(null);
   const [health, setHealth] = useState<SystemHealth | null>(null);
   const [healthError, setHealthError] = useState<string | null>(null);
   const [listError, setListError] = useState<string | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
-  const [uploadDocumentTypeId, setUploadDocumentTypeId] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Re-upload's hidden per-row file picker: one shared <input>, retargeted
@@ -155,6 +158,7 @@ export default function DocumentsPage() {
     if (!user?.is_admin) return;
     refresh();
     listDocumentTypes().then(setDocumentTypes).catch(() => {});
+    listProductFamilies().then(setFamilies).catch(() => {});
     // A fresh poke every time this page loads (component mount), not a
     // cached/periodic status -- see backend/api/routes/documents.py's
     // check_system_health.
@@ -186,9 +190,7 @@ export default function DocumentsPage() {
     setUploading(true);
     setUploadError(null);
     try {
-      await uploadDocument(file, {
-        documentTypeId: uploadDocumentTypeId || undefined,
-      });
+      await uploadDocument(file);
       if (fileInputRef.current) fileInputRef.current.value = "";
       await refresh();
     } catch (caughtError) {
@@ -215,6 +217,11 @@ export default function DocumentsPage() {
     } catch (caughtError) {
       setListError(caughtError instanceof Error ? caughtError.message : "failed to trigger indexing");
     }
+  }
+
+  function handleTagsSaved(updated: DocumentRecord) {
+    setDocuments((previous) => previous.map((listedDocument) => (listedDocument.id === updated.id ? updated : listedDocument)));
+    setTaggingDocument(null);
   }
 
   function handleReuploadClick(documentRecord: DocumentRecord) {
@@ -263,26 +270,14 @@ export default function DocumentsPage() {
       <span className="eyebrow">Source library</span>
       <h1>Document Manager</h1>
       <p className="lede">
-        Upload the technique guides, IFUs, and brochures OrthoMate cites from. Each is tagged
-        with its product family, the trays it covers, and its document type; document types
-        are picked from the list curated in <Link href="/admin">Settings</Link>.
+        Upload the technique guides, IFUs, and brochures OrthoMate cites from. A new upload
+        lands untagged: open its Tags to set the product family, the trays it covers, and its
+        document type (picked from the list curated in <Link href="/admin">Settings</Link>),
+        then index it.
       </p>
 
       <HealthStrip health={health} error={healthError} />
 
-      {/* TagSelect's own "add new" affordance renders a <form> (see
-      tag-select.tsx), so these live outside the upload form rather than
-      nested inside it -- nested <form> elements are invalid HTML and
-      Next/React will warn (and misbehave) if they're nested here. Selection
-      is tracked in state either way, not read from this form's fields. */}
-      <div className="tag-picker-row">
-        <TagSelect
-          label="Document type"
-          tags={documentTypes}
-          value={uploadDocumentTypeId}
-          onChange={setUploadDocumentTypeId}
-        />
-      </div>
       <form onSubmit={handleUpload} className="upload-row">
         <input ref={fileInputRef} type="file" required />
         <button type="submit" className="btn btn-primary" disabled={uploading}>
@@ -335,6 +330,9 @@ export default function DocumentsPage() {
                   <td>{new Date(documentRecord.created_at).toLocaleString()}</td>
                   <td>
                     <div className="actions-cell">
+                      <button type="button" className="btn-text" onClick={() => setTaggingDocument(documentRecord)}>
+                        Tags
+                      </button>
                       <IndexButton documentRecord={documentRecord} onIndex={handleIndex} />
                       <button
                         type="button"
@@ -371,6 +369,16 @@ export default function DocumentsPage() {
             </tbody>
           </table>
         </div>
+      )}
+
+      {taggingDocument && (
+        <TagModal
+          documentRecord={taggingDocument}
+          families={families}
+          documentTypes={documentTypes}
+          onClose={() => setTaggingDocument(null)}
+          onSaved={handleTagsSaved}
+        />
       )}
     </main>
   );
