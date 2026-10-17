@@ -317,22 +317,28 @@ async def seed_master_catalog(client: GraphClient, path: Path = DEFAULT_PATH) ->
     for tray, family in tray_family.items():
         await client.upsert_tray(tray, family)
 
-    for row in rows:
-        await client.upsert_part(
-            row.sku,
-            row.tray,
-            description=row.description or None,
-            item_type=row.item_type or None,
-            head_style=row.head_style or None,
-            construct=row.construct or None,
-            thread=row.thread or None,
-            color=row.color or None,
-            guidewire_spec=row.guidewire_spec or None,
-            pre_drill_spec=row.pre_drill_spec or None,
-            driver_spec=row.driver_spec or None,
-            qty_per_set=row.qty_per_set or None,
-            indication=row.indication,
-        )
+    await client.upsert_parts(
+        [
+            (
+                row.sku,
+                row.tray,
+                {
+                    "description": row.description or None,
+                    "item_type": row.item_type or None,
+                    "head_style": row.head_style or None,
+                    "construct": row.construct or None,
+                    "thread": row.thread or None,
+                    "color": row.color or None,
+                    "guidewire_spec": row.guidewire_spec or None,
+                    "pre_drill_spec": row.pre_drill_spec or None,
+                    "driver_spec": row.driver_spec or None,
+                    "qty_per_set": row.qty_per_set or None,
+                    "indication": row.indication,
+                },
+            )
+            for row in rows
+        ]
+    )
 
     trays_by_sku: dict[str, set[str]] = defaultdict(set)
     for row in rows:
@@ -345,20 +351,21 @@ async def seed_master_catalog(client: GraphClient, path: Path = DEFAULT_PATH) ->
     )
 
     all_skus = [row.sku for row in rows]
-    compat_count = 0
+    compatible_pairs: list[tuple[str, str]] = []
     for row in rows:
         for header, value in row.compat_columns.items():
             if value.upper() != "X":
                 continue
             for other_sku in resolve_compatible_skus(header, all_skus, row.sku):
-                await client.upsert_compatible_with(row.sku, other_sku)
-                compat_count += 1
+                compatible_pairs.append((row.sku, other_sku))
+    await client.upsert_compatible_with_pairs(compatible_pairs)
+    compat_count = len(compatible_pairs)
 
     rows_by_tray: dict[str, list[CatalogRow]] = defaultdict(list)
     for row in rows:
         rows_by_tray[row.tray].append(row)
 
-    tool_count = 0
+    tool_pairs: list[tuple[str, str]] = []
     for row in rows:
         tray_rows = rows_by_tray[row.tray]
         for kind, spec in (
@@ -370,8 +377,9 @@ async def seed_master_catalog(client: GraphClient, path: Path = DEFAULT_PATH) ->
                 continue
             tool_sku = resolve_tool_sku(kind, spec, tray_rows)
             if tool_sku and tool_sku != row.sku:
-                await client.upsert_requires_tool(row.sku, tool_sku)
-                tool_count += 1
+                tool_pairs.append((row.sku, tool_sku))
+    await client.upsert_requires_tool_pairs(tool_pairs)
+    tool_count = len(tool_pairs)
 
     trays_by_family: dict[str, list[str]] = defaultdict(list)
     for tray, family in sorted(tray_family.items()):

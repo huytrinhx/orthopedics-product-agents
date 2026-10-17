@@ -38,6 +38,10 @@ from neo4j import AsyncGraphDatabase
 
 from catalog.legacy_systems import resolve_family_name
 
+# Rows per UNWIND statement for the batched catalog upserts (upsert_parts,
+# upsert_compatible_with_pairs, upsert_requires_tool_pairs).
+UPSERT_BATCH_SIZE = 1000
+
 _RELATIONSHIP_TYPES = (
     "BELONGS_TO_FAMILY",
     "BELONGS_TO_TRAY",
@@ -161,20 +165,45 @@ class GraphClient:
             return sorted([record["name"] async for record in result])
 
     async def upsert_part(self, sku: str, tray: str, **properties: str | int | None) -> None:
-        cleaned_properties = {key: value for key, value in properties.items() if value is not None}
+        await self.upsert_parts([(sku, tray, properties)])
+
+    async def upsert_parts(
+        self, parts: list[tuple[str, str, dict[str, str | int | None]]]
+    ) -> None:
+        """Batched upsert_part: (sku, tray, properties) triples, written
+        UPSERT_BATCH_SIZE per statement. The master catalog seed has ~2k
+        parts and ~80k COMPATIBLE_WITH pairs; one round trip each took
+        hours against AuraDB from a high-latency network, versus seconds
+        batched.
+        """
+        rows = [
+            {
+                "sku": sku,
+                "tray": tray,
+                "properties": {key: value for key, value in properties.items() if value is not None},
+            }
+            for sku, tray, properties in parts
+        ]
+        await self._run_batched(
+            """
+            UNWIND $rows AS row
+            MERGE (p:Part {sku: row.sku})
+            SET p += row.properties
+            WITH p, row
+            MERGE (t:Tray {name: row.tray})
+            MERGE (p)-[:BELONGS_TO_TRAY]->(t)
+            """,
+            rows,
+        )
+
+    async def _run_batched(self, statement: str, rows: list[dict]) -> None:
+        """Runs `statement` (which UNWINDs `$rows`) once per
+        UPSERT_BATCH_SIZE slice of `rows`, each slice its own transaction --
+        small enough that one batch never holds locks for long, large enough
+        that round trips stop dominating."""
         async with self._driver.session() as session:
-            await session.run(
-                """
-                MERGE (p:Part {sku: $sku})
-                SET p += $properties
-                WITH p
-                MERGE (t:Tray {name: $tray})
-                MERGE (p)-[:BELONGS_TO_TRAY]->(t)
-                """,
-                sku=sku,
-                tray=tray,
-                properties=cleaned_properties,
-            )
+            for start in range(0, len(rows), UPSERT_BATCH_SIZE):
+                await session.run(statement, rows=rows[start : start + UPSERT_BATCH_SIZE])
 
     async def prune_stale_tray_memberships(
         self, trays_by_sku: dict[str, list[str]]
@@ -225,28 +254,32 @@ class GraphClient:
         return sum(removed_by_tray.values()), sorted(deleted_trays), kept_trays
 
     async def upsert_compatible_with(self, sku_a: str, sku_b: str) -> None:
-        async with self._driver.session() as session:
-            await session.run(
-                """
-                MATCH (a:Part {sku: $sku_a})
-                MATCH (b:Part {sku: $sku_b})
-                MERGE (a)-[:COMPATIBLE_WITH]->(b)
-                """,
-                sku_a=sku_a,
-                sku_b=sku_b,
-            )
+        await self.upsert_compatible_with_pairs([(sku_a, sku_b)])
+
+    async def upsert_compatible_with_pairs(self, pairs: list[tuple[str, str]]) -> None:
+        await self._run_batched(
+            """
+            UNWIND $rows AS row
+            MATCH (a:Part {sku: row.sku_a})
+            MATCH (b:Part {sku: row.sku_b})
+            MERGE (a)-[:COMPATIBLE_WITH]->(b)
+            """,
+            [{"sku_a": sku_a, "sku_b": sku_b} for sku_a, sku_b in pairs],
+        )
 
     async def upsert_requires_tool(self, sku: str, tool_sku: str) -> None:
-        async with self._driver.session() as session:
-            await session.run(
-                """
-                MATCH (p:Part {sku: $sku})
-                MATCH (tool:Part {sku: $tool_sku})
-                MERGE (p)-[:REQUIRES_TOOL]->(tool)
-                """,
-                sku=sku,
-                tool_sku=tool_sku,
-            )
+        await self.upsert_requires_tool_pairs([(sku, tool_sku)])
+
+    async def upsert_requires_tool_pairs(self, pairs: list[tuple[str, str]]) -> None:
+        await self._run_batched(
+            """
+            UNWIND $rows AS row
+            MATCH (p:Part {sku: row.sku})
+            MATCH (tool:Part {sku: row.tool_sku})
+            MERGE (p)-[:REQUIRES_TOOL]->(tool)
+            """,
+            [{"sku": sku, "tool_sku": tool_sku} for sku, tool_sku in pairs],
+        )
 
     # ---- Synonym seed (backend/ingestion/seed_synonyms.py) ----
 
