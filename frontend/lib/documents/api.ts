@@ -1,13 +1,11 @@
 import { API_BASE, authHeaders, handleUnauthorized, request, unwrap } from "../api/client";
 import type { DocumentChunk, DocumentRecord, SystemHealth } from "./types";
 
-export async function uploadDocument(
-  file: File,
-  tags?: { documentTypeId?: string }
-): Promise<DocumentRecord> {
+// File only -- a new upload lands untagged and "pending", and gets its tags
+// in the Document Manager's tag modal before it's indexed (issue #13).
+export async function uploadDocument(file: File): Promise<DocumentRecord> {
   const form = new FormData();
   form.append("file", file);
-  if (tags?.documentTypeId) form.append("document_type_id", tags.documentTypeId);
   const response = await fetch(`${API_BASE}/documents/upload`, {
     method: "POST",
     headers: authHeaders(), // no Content-Type: fetch sets the multipart boundary itself
@@ -30,7 +28,8 @@ export async function checkSystemHealth(): Promise<SystemHealth> {
 // Only the tags passed are changed; the rest keep their current value (see
 // backend/documents/models.py's SetDocumentTagsRequest). A family and its
 // tray set always travel together, and the server rejects a tray outside
-// the family.
+// the family. Saving never re-indexes: an indexed document's chunks and
+// graph node are updated in place and its status is left alone.
 export async function setDocumentTags(
   documentId: string,
   tags: {

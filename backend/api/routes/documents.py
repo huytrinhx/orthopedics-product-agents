@@ -4,10 +4,11 @@ decided in agents.md), except GET /{document_id}/chunks: any authenticated
 user can already surface a document's chunk text indirectly through chat
 retrieval, so reading it directly to back the chat citation viewer isn't a
 new exposure -- see backend/api/routes/chat.py. Upload writes the raw file
-under INGEST_DATA_DIR and leaves the document "pending" -- indexing only
-runs once an admin triggers it via POST /{document_id}/index (or re-tags
-the document), which kicks off backend/documents/service.py's background
-processing.
+under INGEST_DATA_DIR and leaves the document untagged and "pending" --
+indexing only runs once an admin triggers it via POST /{document_id}/index
+(or re-uploads the file), which kicks off backend/documents/service.py's
+background processing. A re-tag never re-indexes: it updates what indexing
+already wrote in place (documents.service.retag_document).
 """
 import mimetypes
 import os
@@ -16,7 +17,7 @@ from pathlib import Path
 
 import neo4j.exceptions
 import psycopg
-from fastapi import APIRouter, BackgroundTasks, Depends, Form, HTTPException, UploadFile, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, UploadFile, status
 from fastapi.responses import FileResponse
 
 from auth.dependencies import get_current_user, require_admin
@@ -39,9 +40,8 @@ from documents.repository import (
     list_documents,
     replace_file,
     set_status,
-    set_tags,
 )
-from documents.service import process_document
+from documents.service import process_document, retag_document
 from retrieval.graph_client import get_graph_client
 from retrieval.vector_store import get_vector_store
 from tags.models import TagOut
@@ -101,27 +101,22 @@ async def _save_upload(file: UploadFile) -> Path:
 @router.post("/upload", response_model=DocumentOut)
 async def upload_document(
     file: UploadFile,
-    system_id: uuid.UUID | None = Form(None),
-    document_type_id: uuid.UUID | None = Form(None),
     admin: UserRecord = Depends(require_admin),
 ) -> DocumentOut:
+    """Takes the file only -- no tags (issue #13). The document lands
+    untagged and "pending" (the row's default); an admin tags it in the
+    Document Manager's tag modal (PATCH /{document_id}/tags) and then
+    indexes it explicitly (POST /{document_id}/index).
+    """
     if not file.filename:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Uploaded file has no filename")
 
     storage_path = await _save_upload(file)
-
-    try:
-        document = await create_document(
-            filename=file.filename,
-            storage_path=str(storage_path),
-            uploaded_by=admin.id,
-            system_id=system_id,
-            document_type_id=document_type_id,
-        )
-    except psycopg.errors.ForeignKeyViolation:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Unknown system or document type")
-    # Stays "pending" (the row's default) until an admin explicitly indexes
-    # it -- see index_document below.
+    document = await create_document(
+        filename=file.filename,
+        storage_path=str(storage_path),
+        uploaded_by=admin.id,
+    )
     return _document_out(document)
 
 
@@ -233,8 +228,8 @@ async def reupload_document_file(
     """Re-upload button: swaps an existing document's underlying file (e.g.
     a corrected PDF, or recovering one lost to a pre-volume Railway deploy --
     see README's Railway deploy section) without losing its id, tags, or
-    upload history. Same tags/re-tag pipeline seam as set_document_tags/
-    index_document below: queue + process_document re-extracts and
+    upload history. Same pipeline seam as index_document below: queue +
+    process_document re-extracts and
     re-indexes against the new file, upserting this document_id's chunks/
     graph entities in place rather than duplicating them.
     """
@@ -266,9 +261,9 @@ async def index_document(
     background_tasks: BackgroundTasks,
     admin: UserRecord = Depends(require_admin),
 ) -> DocumentOut:
-    """Manual Index/Reindex trigger from the Document Manager UI -- runs the
-    same (currently stubbed, see documents/service.py) pipeline seam as a
-    re-tag, on demand rather than only as a side effect of tagging.
+    """Manual Index/Reindex trigger from the Document Manager UI -- the only
+    way (besides a re-upload) a document's text gets (re-)extracted and
+    embedded; tagging never triggers it (see set_document_tags below).
     """
     document = await get_document(document_id)
     if document is None:
@@ -284,9 +279,13 @@ async def index_document(
 async def set_document_tags(
     document_id: uuid.UUID,
     body: SetDocumentTagsRequest,
-    background_tasks: BackgroundTasks,
     admin: UserRecord = Depends(require_admin),
 ) -> DocumentOut:
+    """Backs the Document Manager's tag modal. Updates an already-indexed
+    document's chunk filter columns and graph Document node in place
+    (documents.service.retag_document) -- no re-index, so the document's
+    status is left exactly as it was.
+    """
     current = await get_document(document_id)
     if current is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Document not found")
@@ -294,7 +293,7 @@ async def set_document_tags(
     sent = body.model_fields_set
     family_sent = "product_family_id" in sent or "tray_ids" in sent
     try:
-        document = await set_tags(
+        document = await retag_document(
             document_id,
             system_id=body.system_id if "system_id" in sent else current.system_id,
             document_type_id=(
@@ -315,15 +314,14 @@ async def set_document_tags(
             "Every tray must belong to the document's product family; not in it: "
             + ", ".join(str(tray_id) for tray_id in error.tray_ids),
         )
-    assert document is not None
-
-    # System/document-type feed the retrieval filters and (once tickets
-    # 06/07 land) the chunk/entity metadata written alongside a document's
-    # vectors and graph nodes -- a re-tag has to re-run the same pipeline
-    # seam as upload so that metadata stays in sync.
-    await set_status(document_id, "queued")
-    background_tasks.add_task(process_document, document.id, document.storage_path)
-    document = await get_document(document_id)
+    except neo4j.exceptions.GqlError as error:
+        # Postgres (tags + chunk columns) already committed; only the graph
+        # node is behind. Say so rather than pretend nothing was saved.
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            f"Tags saved, but the graph could not be updated ({error}); "
+            "reindex the document to resync it.",
+        )
     assert document is not None
     return _document_out(document)
 

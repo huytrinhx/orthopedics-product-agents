@@ -41,6 +41,19 @@ def _user_token(monkeypatch, tmp_path) -> str:
     return response.json()["access_token"]
 
 
+def _upload_tagged(headers: dict, **tags: str) -> str:
+    """Upload takes no tags (issue #13) -- a document gets them afterward,
+    through the tag modal's PATCH."""
+    upload = client.post(
+        "/documents/upload", headers=headers, files={"file": ("a.txt", b"x", "text/plain")}
+    )
+    assert upload.status_code == 200
+    document_id = upload.json()["id"]
+    edit = client.patch(f"/documents/{document_id}/tags", headers=headers, json=tags)
+    assert edit.status_code == 200
+    return document_id
+
+
 def test_system_tags_list_immediately_on_creation(monkeypatch, tmp_path):
     """The picker (and any tag-management UI) shows every tag an admin has
     created, not just ones already attached to a document -- otherwise a
@@ -86,13 +99,7 @@ def test_deleting_a_documents_only_document_leaves_its_tags_listed(monkeypatch, 
     headers = {"Authorization": f"Bearer {token}"}
     system = client.post("/systems", headers=headers, json={"name": _unique_name("MIS")}).json()
 
-    upload = client.post(
-        "/documents/upload",
-        headers=headers,
-        data={"system_id": system["id"]},
-        files={"file": ("a.txt", b"x", "text/plain")},
-    )
-    document_id = upload.json()["id"]
+    document_id = _upload_tagged(headers, system_id=system["id"])
     assert any(listed_system["id"] == system["id"] for listed_system in client.get("/systems", headers=headers).json())
 
     client.delete(f"/documents/{document_id}", headers=headers)
@@ -128,12 +135,7 @@ def test_delete_system_tag_still_in_use_conflicts(monkeypatch, tmp_path):
     token = _admin_token(monkeypatch, tmp_path)
     headers = {"Authorization": f"Bearer {token}"}
     system = client.post("/systems", headers=headers, json={"name": _unique_name("REFLEX")}).json()
-    client.post(
-        "/documents/upload",
-        headers=headers,
-        data={"system_id": system["id"]},
-        files={"file": ("a.txt", b"x", "text/plain")},
-    )
+    _upload_tagged(headers, system_id=system["id"])
 
     response = client.delete(f"/systems/{system['id']}", headers=headers)
     assert response.status_code == 409
@@ -147,12 +149,7 @@ def test_delete_document_type_tag_still_in_use_conflicts(monkeypatch, tmp_path):
     document_type = client.post(
         "/document-types", headers=headers, json={"name": _unique_name("IFU")}
     ).json()
-    client.post(
-        "/documents/upload",
-        headers=headers,
-        data={"document_type_id": document_type["id"]},
-        files={"file": ("a.txt", b"x", "text/plain")},
-    )
+    _upload_tagged(headers, document_type_id=document_type["id"])
 
     response = client.delete(f"/document-types/{document_type['id']}", headers=headers)
     assert response.status_code == 409
@@ -189,11 +186,11 @@ def test_non_admin_cannot_manage_tags(monkeypatch, tmp_path):
     assert client.delete(f"/document-types/{uuid.uuid4()}", headers=headers).status_code == 403
 
 
-def test_upload_with_tags_and_list_shows_them(monkeypatch, tmp_path):
+def test_upload_takes_no_tags_and_lands_pending(monkeypatch, tmp_path):
+    """Tags are set in the tag modal after upload (issue #13): tag fields
+    sent alongside the file are ignored, not applied."""
     token = _admin_token(monkeypatch, tmp_path)
     headers = {"Authorization": f"Bearer {token}"}
-
-    system = client.post("/systems", headers=headers, json={"name": _unique_name("REFLEX")}).json()
     document_type = client.post(
         "/document-types", headers=headers, json={"name": _unique_name("Brochure")}
     ).json()
@@ -201,31 +198,45 @@ def test_upload_with_tags_and_list_shows_them(monkeypatch, tmp_path):
     upload = client.post(
         "/documents/upload",
         headers=headers,
-        data={"system_id": system["id"], "document_type_id": document_type["id"]},
+        data={"document_type_id": document_type["id"]},
         files={"file": ("tagged.txt", b"contents", "text/plain")},
     )
+
     assert upload.status_code == 200
     body = upload.json()
-    assert body["system"]["id"] == system["id"]
-    assert body["document_type"]["id"] == document_type["id"]
+    assert body["status"] == "pending"
+    assert body["document_type"] is None
+    assert body["product_family"] is None
+    assert body["trays"] == []
+
+
+def test_tagged_document_type_shows_in_the_list(monkeypatch, tmp_path):
+    token = _admin_token(monkeypatch, tmp_path)
+    headers = {"Authorization": f"Bearer {token}"}
+    document_type = client.post(
+        "/document-types", headers=headers, json={"name": _unique_name("Brochure")}
+    ).json()
+
+    document_id = _upload_tagged(headers, document_type_id=document_type["id"])
 
     listing = client.get("/documents/", headers=headers)
-    document = next(listed_document for listed_document in listing.json() if listed_document["id"] == body["id"])
-    assert document["system"]["name"] == system["name"]
+    document = next(listed_document for listed_document in listing.json() if listed_document["id"] == document_id)
     assert document["document_type"]["name"] == document_type["name"]
 
 
-def test_upload_with_unknown_tag_id_rejected(monkeypatch, tmp_path):
+def test_tagging_with_unknown_tag_id_rejected(monkeypatch, tmp_path):
     token = _admin_token(monkeypatch, tmp_path)
     headers = {"Authorization": f"Bearer {token}"}
-
     upload = client.post(
-        "/documents/upload",
-        headers=headers,
-        data={"system_id": str(uuid.uuid4())},
-        files={"file": ("a.txt", b"x", "text/plain")},
+        "/documents/upload", headers=headers, files={"file": ("a.txt", b"x", "text/plain")}
     )
-    assert upload.status_code == 400
+
+    edit = client.patch(
+        f"/documents/{upload.json()['id']}/tags",
+        headers=headers,
+        json={"document_type_id": str(uuid.uuid4())},
+    )
+    assert edit.status_code == 400
 
 
 def test_edit_tags_after_upload(monkeypatch, tmp_path):
@@ -247,7 +258,7 @@ def test_edit_tags_after_upload(monkeypatch, tmp_path):
     assert edit.json()["document_type"] is None
 
 
-def test_edit_tags_re_triggers_the_ingestion_pipeline(monkeypatch, tmp_path):
+def test_edit_tags_on_an_indexed_document_does_not_reindex(monkeypatch, tmp_path):
     token = _admin_token(monkeypatch, tmp_path)
     headers = {"Authorization": f"Bearer {token}"}
 
@@ -262,31 +273,17 @@ def test_edit_tags_re_triggers_the_ingestion_pipeline(monkeypatch, tmp_path):
         if client.get(f"/documents/{document_id}", headers=headers).json()["status"] == "done":
             break
         time.sleep(0.05)
+    assert client.get(f"/documents/{document_id}", headers=headers).json()["status"] == "done"
 
     system = client.post("/systems", headers=headers, json={"name": _unique_name("REFLEX")}).json()
     edit = client.patch(f"/documents/{document_id}/tags", headers=headers, json={"system_id": system["id"]})
     assert edit.status_code == 200
-    # Re-tagging resets status so the background pipeline re-runs and lands
-    # back on "done" -- it must not just leave the prior "done" untouched.
-    assert edit.json()["status"] in ("queued", "processing", "done")
-
-    for _ in range(20):
-        detail = client.get(f"/documents/{document_id}", headers=headers)
-        if detail.json()["status"] == "done":
-            break
-        time.sleep(0.05)
-    assert detail.json()["status"] == "done"
+    # Re-tagging updates in place (issue #13) -- no re-queue.
+    assert edit.json()["status"] == "done"
 
 
 def _upload_with_document_type(headers: dict, document_type_id: str) -> str:
-    upload = client.post(
-        "/documents/upload",
-        headers=headers,
-        data={"document_type_id": document_type_id},
-        files={"file": ("typed.txt", b"x", "text/plain")},
-    )
-    assert upload.status_code == 200
-    return upload.json()["id"]
+    return _upload_tagged(headers, document_type_id=document_type_id)
 
 
 def _insert_chunk(document_id: str, document_type_id: str) -> None:

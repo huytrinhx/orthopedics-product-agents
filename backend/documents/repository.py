@@ -264,7 +264,13 @@ async def set_tags(
 ) -> DocumentRecord | None:
     """Replaces every tag on the document in one transaction -- callers
     pass the current value for anything they aren't changing. Raises
-    TraysOutsideFamily (nothing written) if a tray isn't in the family."""
+    TraysOutsideFamily (nothing written) if a tray isn't in the family.
+
+    The document's existing chunks get the new tags copied onto their
+    denormalized filter columns in the same transaction (issue #13), so a
+    re-tag takes effect in retrieval immediately without re-embedding --
+    the document's status and its chunks' content/embeddings are untouched.
+    """
     connection = await get_connection()
     try:
         async with connection.transaction(), connection.cursor() as cursor:
@@ -274,6 +280,10 @@ async def set_tags(
                 (system_id, document_type_id, document_id),
             )
             await _write_family_and_trays(cursor, document_id, product_family_id, tray_ids)
+            await cursor.execute(
+                "UPDATE chunks SET system_id = %s, document_type_id = %s WHERE document_id = %s",
+                (system_id, document_type_id, document_id),
+            )
     finally:
         await connection.close()
     return await get_document(document_id)

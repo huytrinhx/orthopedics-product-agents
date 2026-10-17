@@ -341,6 +341,36 @@ class GraphClient:
                 trays=list(trays or []),
             )
 
+    async def set_document_tags(
+        self,
+        document_id: str,
+        doc_type: str | None,
+        product_family: str | None,
+        trays: list[str],
+    ) -> bool:
+        """Re-tags an already-ingested Document node in place from the
+        Document Manager's tag modal (issue #13) -- the same properties
+        upsert_document writes, without re-running ingestion. Matches rather
+        than merges, like set_document_family_and_trays below: a never-
+        indexed document gets its node on first ingestion. Returns whether a
+        node was there to update.
+        """
+        async with self._driver.session() as session:
+            result = await session.run(
+                """
+                MATCH (d:Document {id: $id})
+                SET d.doc_type = $doc_type,
+                    d.product_family = $product_family, d.trays = $trays
+                REMOVE d.system
+                RETURN d.id AS id
+                """,
+                id=document_id,
+                doc_type=doc_type,
+                product_family=product_family,
+                trays=list(trays),
+            )
+            return await result.single() is not None
+
     async def set_document_family_and_trays(
         self, document_id: str, product_family: str | None, trays: list[str]
     ) -> bool:
