@@ -2,7 +2,7 @@
 
 Also exposes the suspend/resume human-clarification pattern (ticket 09):
 detect_intent (agents/workflows/deterministic.py, the graph's entry node)
-calls interrupt() when it can't confidently tell which product system a
+calls interrupt() when it can't confidently tell which Product Family a
 query is about; astream_events surfaces that as an on_chain_stream "LangGraph"
 chunk carrying an "__interrupt__" tuple rather than raising, so _stream_graph
 below watches for that chunk shape and emits a "clarification" SSE event
@@ -108,10 +108,10 @@ class ChatStreamRequest(BaseModel):
 class ChatResumeRequest(BaseModel):
     thread_id: str
     # Either the exact text of a clicked clarification option, or free
-    # text -- detect_intent's _match_option tries to match it against the
-    # options it offered, and falls back to leaving resolved_system
-    # unresolved (not the raw text) if nothing matches, rather than
-    # recording an answer that isn't actually one of the real systems.
+    # text -- detect_intent's _resolve_family matches it against every
+    # Product Family's display or catalog name (not only the offered
+    # candidates), and leaves the turn unscoped (not the raw text) if
+    # nothing matches, rather than recording a family that doesn't exist.
     human_input: str
 
 

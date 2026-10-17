@@ -16,6 +16,7 @@ from fastapi.testclient import TestClient
 
 from api.main import app
 from auth.repository import set_user_active
+from catalog.repository import list_families_with_trays, upsert_families_and_trays
 
 needs_openai_key = pytest.mark.skipif(
     not os.environ.get("OPENAI_API_KEY"), reason="requires a real OPENAI_API_KEY"
@@ -408,39 +409,24 @@ def test_done_event_message_id_round_trips_through_feedback_and_transcript(monke
 def test_ambiguous_query_pauses_for_clarification_and_resume_completes_the_turn(
     monkeypatch, tmp_path
 ):
-    """Ticket 09's core acceptance criterion, end to end: a query that names
-    no product system (matching evals/golden_datasets/intent_detection.jsonl's
-    hand-authored expects_clarification: true fixtures --
-    build_dataset.py's _AMBIGUOUS_FIXTURES, since the real feedback-notes.csv
-    rows all confidently name one) pauses detect_intent's interrupt() rather
-    than guessing, and answering it via POST /chat/resume resumes the same
-    thread to a real "done" instead of starting a new turn.
+    """Ticket 09's core acceptance criterion, end to end, with issue #18's
+    Product Families: a query that names no family (matching
+    evals/golden_datasets/intent_detection.jsonl's hand-authored
+    expects_clarification: true fixtures -- build_dataset.py's
+    _AMBIGUOUS_FIXTURES, since the real feedback-notes.csv rows all
+    confidently name one) pauses detect_intent's interrupt() rather than
+    guessing, and answering it via POST /chat/resume -- here as free text
+    naming a real family, which needn't be one of the offered candidates --
+    resumes the same thread to a real "done" instead of starting a new turn.
 
-    Creates and tags its own document (rather than relying on whatever
-    systems already exist in this shared dev Postgres) so the clarification
-    options this test asserts against are deterministic.
+    Mirrors its own family so there's always at least one to offer; which
+    candidates the classifier picks among whatever families this shared
+    test database already holds isn't deterministic, so only their count
+    is asserted.
     """
-    monkeypatch.setenv("INGEST_DATA_DIR", str(tmp_path))
+    family_name = f"ClarifyFamily-{uuid.uuid4().hex[:8]}"
+    asyncio.run(upsert_families_and_trays({family_name: []}))
     with TestClient(app) as client:
-        admin_email = _unique_email()
-        monkeypatch.setenv("ADMIN_EMAILS", admin_email)
-        admin_token = client.post(
-            "/auth/signup", json={"email": admin_email, "password": "correct horse battery"}
-        ).json()["access_token"]
-        admin_headers = {"Authorization": f"Bearer {admin_token}"}
-
-        system_name = f"ClarifySys-{uuid.uuid4().hex[:8]}"
-        system_id = client.post(
-            "/systems", headers=admin_headers, json={"name": system_name}
-        ).json()["id"]
-        upload = client.post(
-            "/documents/upload",
-            headers=admin_headers,
-            data={"system_id": system_id},
-            files={"file": ("clarify-doc.txt", b"placeholder content", "text/plain")},
-        )
-        document_id = upload.json()["id"]
-
         user_headers = {"Authorization": f"Bearer {_user_token(client)}"}
 
         first = client.post(
@@ -453,18 +439,17 @@ def test_ambiguous_query_pauses_for_clarification_and_resume_completes_the_turn(
         clarification = events["clarification"]
         thread_id = clarification["thread_id"]
         assert clarification["question"]
-        assert system_name in clarification["options"]
+        family_count = len(asyncio.run(list_families_with_trays()))
+        assert 1 <= len(clarification["options"]) <= 4 or len(clarification["options"]) == family_count
 
         second = client.post(
             "/chat/resume",
             headers=user_headers,
-            json={"thread_id": thread_id, "human_input": system_name},
+            json={"thread_id": thread_id, "human_input": family_name.lower()},
         )
         events2 = dict(_sse_events(second.text))
         assert events2["thread"]["thread_id"] == thread_id
         assert "done" in events2
-
-        client.delete(f"/documents/{document_id}", headers=admin_headers)
 
 
 @needs_openai_key

@@ -38,7 +38,7 @@ class _FakePartLookup:
 
 def _patch(monkeypatch, replies: list[AIMessage]) -> _ScriptedModel:
     async def fake_detect_intent(state):
-        return {"resolved_system": None, "resolved_system_id": None, "resolved_question_type": []}
+        return {"resolved_family": None, "resolved_family_id": None, "resolved_question_type": []}
 
     model = _ScriptedModel(replies)
     monkeypatch.setattr(react, "detect_intent", fake_detect_intent)

@@ -10,10 +10,12 @@ names coming out of the graph become display names, and a display name the
 model passes back in (having just read it in an earlier tool result) is
 mapped back to the catalog name the graph needs. Anything not recognised
 passes through unchanged -- a legacy system tag, a SKU, a free-text term.
+The deterministic workflow's intent classifier (issue #18) also chooses
+among family display names and maps its pick back to a real family here.
 """
 from dataclasses import dataclass
 
-from catalog.repository import list_families_with_trays
+from catalog.repository import ProductFamilyRecord, list_families_with_trays
 
 
 @dataclass
@@ -50,7 +52,13 @@ def _catalog_name_for(name: str, display_names: dict[str, str]) -> str:
 
 
 async def load_catalog_display_names() -> CatalogDisplayNames:
-    families = await list_families_with_trays()
+    return catalog_display_names_for(await list_families_with_trays())
+
+
+def catalog_display_names_for(families: list[ProductFamilyRecord]) -> CatalogDisplayNames:
+    """For a caller that already loaded the families for its own use (the
+    deterministic workflow's detect_intent needs their ids too), so it
+    doesn't read them twice."""
     return CatalogDisplayNames(
         family_display_names={family.name: family.display_name for family in families},
         tray_display_names={

@@ -36,8 +36,6 @@ import re
 
 from neo4j import AsyncGraphDatabase
 
-from catalog.legacy_systems import resolve_family_name
-
 _RELATIONSHIP_TYPES = (
     "BELONGS_TO_FAMILY",
     "BELONGS_TO_TRAY",
@@ -529,14 +527,10 @@ class GraphClient:
         `product_family` scopes the match to one ProductFamily (e.g.
         "MIS - Foot Recon System") when given, since a generic term like
         "wire" would otherwise match parts across every ingested system.
-        Accepts either a real ProductFamily name or a legacy Postgres
-        systems-tag name (e.g. "MIS - Foot Recon"), mapped to its family
-        through catalog/legacy_systems.py's explicit map -- normalized here
-        (not left to the caller) after react_agent.py's ticket 23 smoke
-        test showed the model passing the tag name straight through
-        (reasonably, since it's what detect_intent's resolved_system
-        actually looks like) and silently matching zero real families as a
-        result. Ticket 20:
+        Takes the ProductFamily's catalog name only -- detect_intent
+        resolves a real family now (issue #18), so the legacy systems-tag
+        map this used to apply is gone from this path; part_lookup maps a
+        display name back to the catalog name before calling here. Ticket 20:
         this is the mechanism spec/SKU/pairing questions should ground
         answers in instead of vector-retrieved prose alone -- see
         backend/agents/workflows/deterministic.py's resolve_skus node.
@@ -558,7 +552,7 @@ class GraphClient:
         -- so callers (resolve_skus, _format_part) can read `sku`/
         `description` directly without unwrapping a nested key first.
         """
-        family = resolve_family_name(product_family) if product_family else None
+        family = product_family or None
         # Falls back to matching on any individual word in `term` (2+
         # chars -- includes clinical abbreviations like "PT"/"FT", which
         # matter more here than most 3+ char words) when the full phrase
