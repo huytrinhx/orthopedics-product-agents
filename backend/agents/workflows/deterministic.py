@@ -10,8 +10,10 @@ query -> detect_intent -> resolve_synonyms
            then self_eval again)
        -> finalize
 
-detect_intent classifies which product system the query is about and,
-  when it can't tell confidently, calls interrupt() to ask
+detect_intent classifies which Product Family the query is about and,
+  when it can't tell confidently, calls interrupt() to ask -- offering the
+  classifier's few candidate families (or every family, if it had none)
+  plus free text. hybrid_retrieve then hard-filters to that family.
 
 resolve_synonyms/_should_clarify_synonyms: when a single
   extracted word matches more than one distinct canonical concept (the
@@ -35,8 +37,9 @@ step-by-step narrative chunks were being crowded out of the retrieval pool
 entirely by inventory-table/marketing chunks that happened to rank higher
 on raw semantic+keyword similarity; filtering the *retrieval* step itself,
 not just the rerank tiebreak, is what actually keeps them out of
-contention. The filter always still admits untagged chunks (tagging is
-optional) -- see RetrievalFilters' docstring.
+contention. The doc-type filter always still admits chunks with no doc
+type; the family filter (issue #18) does not -- see RetrievalFilters'
+docstring.
 
 rerank scores that retrieval pool with BM25 (a classic keyword-overlap
 ranking replacing an LLM relevance-scoring pass -- see its own
@@ -62,10 +65,11 @@ from agents.state import BaseAgentState, RetrievedPassage
 from agents.tools.part_lookup import part_lookup
 from agents.tools.term_extraction import extract_candidate_terms, with_singular_variants
 from agents.tools.vector_search import vector_search
+from catalog.display_names import CatalogDisplayNames, catalog_display_names_for
+from catalog.repository import ProductFamilyRecord, list_families_with_trays
 from config.llm_clients import get_chat_model
 from doc_type_hierarchy.repository import RankedDocumentType, list_hierarchy
 from retrieval.graph_client import get_graph_client
-from tags.repository import list_systems
 
 # Neo4j round-trips are cheap individually but resolve_skus can extract
 # dozens of candidate terms from a long procedural passage -- capped so one
@@ -85,6 +89,9 @@ MAX_CORRECTION_ROUNDS = 1
 # what narrows it down, so it needs real candidates to choose among.
 RETRIEVE_TOP_K = 12
 RERANK_TOP_N = 5
+# How many Product Families detect_intent's clarification offers when the
+# classifier is unsure (issue #18) -- all 18 at once is too many to scan.
+MAX_FAMILY_CANDIDATES = 4
 
 # BM25's standard tuning constants (Okapi BM25) -- k1 controls term-frequency
 # saturation, b controls document-length normalization strength. 1.5/0.75
@@ -133,22 +140,24 @@ class DeterministicState(BaseAgentState, total=False):
     # see _should_correct. Reset per turn by the API layer like the
     # clarification fields above.
     correction_rounds: int
-    # Set by detect_intent, the graph's entry node. resolved_system_id is
-    # what hybrid_retrieve actually filters on; resolved_system is kept
-    # alongside it (rather than looked up again) for the done/eval payload
-    # and because a resume answer that doesn't match any known system name
-    # still gets recorded as itself, resolved_system_id just stays None.
+    # Set by detect_intent, the graph's entry node (issue #18).
+    # resolved_family_id is what hybrid_retrieve hard-filters on;
+    # resolved_family is that same family's display name, kept alongside it
+    # for resolve_skus' graph scoping (part_lookup maps a display name back
+    # to the catalog name) and react_agent's prompt. Both are None together
+    # when no family was resolved -- nothing configured, or a clarification
+    # reply that names no real family -- and retrieval then runs unscoped.
     # resolved_question_type drives hybrid_retrieve's document-type filter
     # (the doc type hierarchy table, issue #17) in addition to its original
     # observability role. It's a list, not a single value, since a question
     # can genuinely span more than one type (e.g. both a procedural step
     # and a product spec in the same question) -- detect_intent does NOT
-    # interrupt on a multi-type classification, only on system ambiguity
+    # interrupt on a multi-type classification, only on family ambiguity
     # (see its own docstring). Always one of agents/question_types.py's
     # QUESTION_TYPE_NAMES, enforced by _IntentClassification's Literal
     # field -- not a free-form string.
-    resolved_system: str | None
-    resolved_system_id: str | None
+    resolved_family: str | None
+    resolved_family_id: str | None
     resolved_question_type: list[str]
     # Set by hybrid_retrieve from the doc type hierarchy table: document
     # type id -> rerank's additive priority bonus for this turn's question
@@ -157,13 +166,27 @@ class DeterministicState(BaseAgentState, total=False):
 
 
 class _IntentClassification(BaseModel):
-    system: str | None = Field(
+    # Free strings checked against the real families afterwards
+    # (_resolve_family), not a Literal enum like question_type: families
+    # are data (admin-renamable display names), and anything that isn't a
+    # real family -- including the literal "null" structured output
+    # sometimes writes instead of leaving the field unset -- simply
+    # resolves to no family.
+    product_family: str | None = Field(
         default=None,
         description=(
-            "The one product system name (from the allowed list given in the "
+            "The one product family name (from the allowed list given in the "
             "prompt) the query is clearly about, or null if it doesn't "
             "clearly name or imply exactly one -- don't guess between two "
-            "plausible systems."
+            "plausible families."
+        ),
+    )
+    candidate_families: list[str] = Field(
+        default_factory=list,
+        description=(
+            f"Only when product_family is null: up to {MAX_FAMILY_CANDIDATES} "
+            "allowed product family names the query could plausibly be "
+            "about, most likely first. Empty if none is plausible."
         ),
     )
     # A Literal built from QUESTION_TYPE_NAMES, not a bare `list[str]` --
@@ -187,15 +210,37 @@ class _IntentClassification(BaseModel):
     )
 
 
-def _match_option(answer: str, options: list[str]) -> str | None:
-    normalized = answer.strip().lower()
-    for option in options:
-        if option.lower() == normalized:
-            return option
-    return None
+def _resolve_family(
+    name: str | None, families: list[ProductFamilyRecord], display_names: CatalogDisplayNames
+) -> ProductFamilyRecord | None:
+    """Turns a family name -- the classifier's pick, a clicked clarification
+    option, or a rep's free-text reply -- back into the real family it
+    names: its display name or catalog name, case-insensitively. None for
+    anything else, so a reply naming no family leaves the turn unscoped
+    rather than recording a family that doesn't exist.
+    """
+    if not name or not name.strip():
+        return None
+    catalog_name = display_names.family_catalog_name(name.strip()).lower()
+    return next((family for family in families if family.name.lower() == catalog_name), None)
 
 
-async def _classify_intent(query: str, system_names: list[str]) -> _IntentClassification:
+def _clarification_options(
+    candidate_names: list[str], families: list[ProductFamilyRecord], display_names: CatalogDisplayNames
+) -> list[str]:
+    """The family display names a clarification offers: the classifier's
+    candidates that are real families, deduped and capped at
+    MAX_FAMILY_CANDIDATES -- or every family when none of them is.
+    """
+    options: dict[str, None] = {}
+    for name in candidate_names:
+        family = _resolve_family(name, families, display_names)
+        if family is not None:
+            options.setdefault(family.display_name, None)
+    return list(options)[:MAX_FAMILY_CANDIDATES] or [family.display_name for family in families]
+
+
+async def _classify_intent(query: str, family_names: list[str]) -> _IntentClassification:
     model = get_chat_model().with_structured_output(_IntentClassification)
     question_type_listing = "\n".join(f"- {question_type.name}: {question_type.description}" for question_type in QUESTION_TYPES)
     return await model.ainvoke(
@@ -203,24 +248,28 @@ async def _classify_intent(query: str, system_names: list[str]) -> _IntentClassi
             SystemMessage(
                 content=(
                     "Classify the sales rep's question below.\n\n"
-                    f"Allowed systems: {', '.join(system_names) or '(none configured)'}\n"
+                    f"Allowed product families: {', '.join(family_names) or '(none configured)'}\n"
                     f"Allowed question types:\n{question_type_listing}\n\n"
-                    "Set system to null if the question doesn't clearly name "
-                    "or imply exactly one of the allowed systems -- when "
-                    "genuinely unclear, always prefer null over guessing, "
-                    "even if only one system is configured. Only once the "
-                    "question does clearly identify a system: if several "
-                    "allowed systems share a common family name (e.g. a "
-                    "generic name alongside more specific sub-systems under "
-                    "it), pick the most specific one that matches rather "
-                    "than the generic family name, and don't switch to a "
-                    "different sub-system just because of incidental word "
-                    "overlap (a question about a screw, wire, or guidepin "
-                    "describes the implant/consumable system, not a "
-                    "separate powered-instrument system, unless it "
-                    "explicitly asks about the powered tool itself). Use "
-                    "the question type names exactly as given -- most "
-                    "questions are exactly one type; If a question can be intepreted as more than one type, output multiple types"
+                    "Set product_family to null if the question doesn't "
+                    "clearly name or imply exactly one of the allowed "
+                    "product families -- when genuinely unclear, always "
+                    "prefer null over guessing, even if only one family is "
+                    "configured. When it's null, list in candidate_families "
+                    f"the (at most {MAX_FAMILY_CANDIDATES}) allowed families "
+                    "the question could plausibly be about, most likely "
+                    "first, or none if nothing in it points anywhere. Only "
+                    "once the question does clearly identify a family: if "
+                    "several allowed families share a common brand name "
+                    "(e.g. MIS or REFLEX), pick the one that actually "
+                    "matches, and don't switch to a different family just "
+                    "because of incidental word overlap (a question about a "
+                    "screw, wire, or guidepin describes the implant/"
+                    "consumable family, not a separate powered-instrument "
+                    "family, unless it explicitly asks about the powered "
+                    "tool itself). Use family names and question type names "
+                    "exactly as given -- most questions are exactly one "
+                    "type; if a question can be interpreted as more than one "
+                    "type, output multiple types."
                 )
             ),
             {"role": "user", "content": query},
@@ -229,22 +278,26 @@ async def _classify_intent(query: str, system_names: list[str]) -> _IntentClassi
 
 
 async def detect_intent(state: DeterministicState) -> dict:
-    """Entry node: classifies which product system and question type the
-    query is about. A query that doesn't clearly name or imply one system
-    (e.g. it never mentions MIS, REFLEX, or any distinguishing product
-    term) pauses the graph via interrupt() for a clarifying answer, rather
-    than letting hybrid_retrieve search unfiltered across every system's
+    """Entry node: classifies which Product Family and question type the
+    query is about (issue #18). A query that doesn't clearly name or imply
+    one family pauses the graph via interrupt() for a clarifying answer,
+    rather than letting hybrid_retrieve search across every family's
     documents -- backend/api/routes/chat.py's resume_chat is the other half
-    of this suspend/resume pair, and _match_option is what turns either a
-    clicked option or free text back into a real system name on resume.
+    of this suspend/resume pair, and _resolve_family is what turns either a
+    clicked option or free text back into a real family on resume.
 
-    Systems come from tags.list_systems() rather than a fixed enum,
-    matching ticket 05's system tag -- adding a new system in the admin UI
-    makes it selectable here with no code change. If none are configured
-    yet (a fresh environment with nothing tagged), there's nothing to
-    disambiguate against, so this skips straight past the interrupt and
-    leaves resolved_system None -- retrieval runs unfiltered, the same
-    baseline behavior as before this node existed.
+    The question offers the classifier's candidate families (at most
+    MAX_FAMILY_CANDIDATES -- showing all 18 is too many), or every family
+    when it had no real candidates; free text may name any family, not
+    just an offered one. At most one family clarification per turn: a
+    reply that names no real family leaves the turn unscoped (retrieval
+    unfiltered by family) rather than asking again.
+
+    Families come from the Postgres catalog mirror (catalog.repository),
+    by display name, so an admin rename shows up here with no code change.
+    If none are mirrored yet (a fresh environment before the catalog
+    seed), there's nothing to disambiguate against, so this skips straight
+    past the interrupt and leaves resolved_family None.
 
     question_type never triggers this interrupt -- an unclear question
     is classified `unclassified`, which simply retrieves unfiltered (see
@@ -255,44 +308,35 @@ async def detect_intent(state: DeterministicState) -> dict:
     than one type -- see agents/question_types.py for the canonical values,
     enforced directly by _IntentClassification's Literal-typed field.
     """
-    systems = await list_systems()
-    system_names = [system.name for system in systems]
-    if not system_names:
-        # list_systems() only returns tags currently attached to at least
-        # one document (tags/repository.py's _list_tags) -- an empty result
-        # is the expected "nothing tagged yet" case on a fresh environment,
-        # but on a populated one (documents ARE tagged) it's unexpected and
-        # silently disables detect_intent's disambiguation guardrail for
-        # this turn (see the eval reflection, 2026-09-03: this happened
-        # intermittently against a DB known to have tagged documents).
-        # Logged, not raised, since the graph's existing fallback (skip the
-        # interrupt, run retrieval unfiltered) is still the right behavior
-        # either way -- this just makes the unexpected case observable.
+    families = await list_families_with_trays()
+    display_names = catalog_display_names_for(families)
+    if not families:
+        # Expected only before the master catalog seed has run. Logged, not
+        # raised: skipping the interrupt and retrieving unscoped is still
+        # the right behavior -- this just makes the case observable.
         logger.warning(
-            "detect_intent: list_systems() returned no systems for query=%r "
-            "-- disambiguation guardrail skipped this turn",
+            "detect_intent: no product families mirrored for query=%r "
+            "-- family clarification skipped this turn",
             state["query"],
         )
 
-    result = await _classify_intent(state["query"], system_names)
-    if result.system is not None and result.system.strip().lower() in ("null", "none", ""):
-        # Structured output can put the literal word "null"/"none" *into*
-        # the string field instead of actually leaving it unset -- seen for
-        # real in the 2026-09-03 ticket 20/21/22 eval run (Q10), where this
-        # then propagated as a bogus ProductFamily scope and silently
-        # zeroed out resolve_skus's graph matches for the whole turn.
-        result.system = None
+    result = await _classify_intent(state["query"], [family.display_name for family in families])
+    family = _resolve_family(result.product_family, families, display_names)
 
-    if result.system is None and system_names:
+    if family is None and families:
+        # Everything above re-runs on resume (LangGraph replays the node
+        # from its start), the classifier call included.
         answer = interrupt(
-            {"question": "Which product system is this about?", "options": system_names}
+            {
+                "question": "Which product family is this about?",
+                "options": _clarification_options(result.candidate_families, families, display_names),
+            }
         )
-        result.system = _match_option(answer, system_names)
+        family = _resolve_family(answer, families, display_names)
 
-    system_id = next((system.id for system in systems if system.name == result.system), None)
     return {
-        "resolved_system": result.system,
-        "resolved_system_id": str(system_id) if system_id else None,
+        "resolved_family": family.display_name if family else None,
+        "resolved_family_id": str(family.id) if family else None,
         "resolved_question_type": result.question_type,
     }
 
@@ -424,14 +468,14 @@ def _allowed_document_type_ids(
 
 
 async def hybrid_retrieve(state: DeterministicState) -> dict:
-    # Deliberately NOT filtered by detect_intent's resolved_system_id --
-    # system_id is nullable on documents/chunks (ticket 05: tagging is
-    # optional, done separately from upload), so a hard filter would
-    # silently exclude every untagged document from an otherwise-answerable
-    # query. resolved_system stays informational (returned in the "done"
-    # payload, available for observability/future use) rather than wired
-    # into retrieval -- ticket 09's acceptance criteria only need the
-    # interrupt()/resume mechanic, not a filtering behavior change.
+    # Hard-filtered by detect_intent's resolved family (issue #18): a
+    # family-scoped turn only sees chunks of documents tagged with that
+    # family, and a document with no family is excluded -- accepted, since
+    # the legacy-tag migration (catalog/migrate_legacy_system_tags.py) is
+    # what gives existing documents their family. This replaced a
+    # deliberate "not filtered by system" rule that existed only because
+    # the old system tag was optional. No family resolved -> no family
+    # filter.
     search_query = state.get("search_query") or state["query"]
     # Canonical terms, not a flat canonical+alias mix -- see
     # resolve_synonyms' docstring.
@@ -447,9 +491,9 @@ async def hybrid_retrieve(state: DeterministicState) -> dict:
     # (a tiebreak among candidates already retrieved) can't promote a
     # passage that was never retrieved in the first place. Filtering here,
     # not just re-ranking after, is what actually keeps the wrong-shaped
-    # chunks out of contention. Still admits untagged chunks regardless
-    # (RetrievalFilters' own doc) -- this narrows the pool to relevant
-    # *and* unknown-type documents, never to relevant-only.
+    # chunks out of contention. Still admits chunks with no doc type
+    # regardless (RetrievalFilters' own doc) -- this narrows the pool to
+    # relevant *and* unknown-type documents, never to relevant-only.
     ranking = _ranked_document_type_ids(await list_hierarchy())
     allowed_document_type_ids = _allowed_document_type_ids(question_types, ranking)
     results = await vector_search.ainvoke(
@@ -457,6 +501,7 @@ async def hybrid_retrieve(state: DeterministicState) -> dict:
             "query": search_text,
             "top_k": RETRIEVE_TOP_K,
             "document_type_ids": allowed_document_type_ids,
+            "product_family_id": state.get("resolved_family_id"),
         }
     )
     retrieved: list[RetrievedPassage] = [
@@ -596,7 +641,7 @@ async def resolve_skus(state: DeterministicState) -> dict:
     Multiple candidate Parts for one term are never narrowed to one here --
     all matches are deduped by SKU and handed to generate labeled, which
     decides what the question actually needs. Disambiguating up front (or
-    interrupt()-ing like detect_intent does for system ambiguity) would
+    interrupt()-ing like detect_intent does for family ambiguity) would
     fire on completely ordinary questions, since one query legitimately
     matching several real SKUs is the common case, not the exception. (A
     genuinely ambiguous *word*, as opposed to an ordinary multi-match
@@ -614,7 +659,8 @@ async def resolve_skus(state: DeterministicState) -> dict:
     versus the ticket-24 shape; still per-term, still cheap.
     """
     question_types = state.get("resolved_question_type") or []
-    family = state.get("resolved_system")
+    # A display name -- part_lookup maps it back to the catalog name.
+    family = state.get("resolved_family")
 
     query_terms = with_singular_variants(
         [*extract_candidate_terms(state["query"]), *state.get("resolved_canonical_terms", [])]

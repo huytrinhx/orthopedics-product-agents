@@ -69,7 +69,7 @@ def _patch_fixed_nodes(monkeypatch, *, generate=None, self_eval=None) -> None:
     """
 
     async def fake_detect_intent(state):
-        return {"resolved_system": None, "resolved_system_id": None, "resolved_question_type": []}
+        return {"resolved_family": None, "resolved_family_id": None, "resolved_question_type": []}
 
     async def fake_resolve_synonyms(state):
         return {"resolved_canonical_terms": [], "synonym_ambiguity": None}
@@ -212,7 +212,7 @@ async def test_synonym_ambiguity_clarifies_before_retrieval_ever_runs(monkeypatc
     hybrid_retrieve_calls = 0
 
     async def fake_detect_intent(state):
-        return {"resolved_system": None, "resolved_system_id": None, "resolved_question_type": []}
+        return {"resolved_family": None, "resolved_family_id": None, "resolved_question_type": []}
 
     async def fake_hybrid_retrieve(state):
         nonlocal hybrid_retrieve_calls

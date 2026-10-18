@@ -55,6 +55,12 @@ class RetrievalFilters:
     # document_lookup -> vector_search path, searching inside a document the
     # rep named rather than across the whole corpus.
     document_ids: list[uuid.UUID] | None = None
+    # The Product Family the turn is about (issue #18) -- a HARD filter,
+    # unlike document_type_ids: a chunk with no family is excluded, not
+    # admitted. A family-scoped turn should only ever see that family's
+    # documents; an untagged document is reachable only on a turn that
+    # resolved no family. Combined with the other filters by AND.
+    product_family_id: uuid.UUID | None = None
 
 
 class VectorStoreClient:
@@ -116,6 +122,9 @@ class VectorStoreClient:
         if filters and filters.document_ids:
             conditions.append("c.document_id = ANY(%s)")
             condition_parameters.append(list(filters.document_ids))
+        if filters and filters.product_family_id:
+            conditions.append("c.product_family_id = %s")
+            condition_parameters.append(filters.product_family_id)
         filter_sql = f"AND {' AND '.join(conditions)}" if conditions else ""
 
         async with self._connection.cursor(row_factory=dict_row) as cursor:

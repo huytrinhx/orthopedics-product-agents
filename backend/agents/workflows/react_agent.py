@@ -18,9 +18,13 @@ landing first -- see ticket 23's own file for why that's intentional, not an
 oversight.
 
 detect_intent is imported and reused as-is from deterministic.py, not
-reimplemented -- same system-disambiguation classifier, same interrupt()/
-resume suspend pattern (ticket 09), so ticket 14's admin workflow picker and
-ticket 09's clarification UI both work here unchanged.
+reimplemented -- same Product Family classifier and clarification (issue
+#18), same interrupt()/resume suspend pattern (ticket 09), so ticket 14's
+admin workflow picker and ticket 09's clarification UI both work here
+unchanged. The resolved family reaches the model as a note in its system
+prompt (for part_lookup's product_family); its vector_search calls are the
+model's own and aren't family-filtered the way deterministic's
+hybrid_retrieve is.
 
 `generate` here does double duty as both the reasoning step (deciding which
 tool to call next) and the final-answer step (once it stops requesting
@@ -107,8 +111,9 @@ _AGENT_SYSTEM_PROMPT = (
     "construct, indication, ...). The precise, authoritative source for a "
     "specific item's specs -- prefer this over vector_search once you know "
     "roughly what part you're looking for. Pass product_family (the "
-    "product system you resolved, e.g. \"MIS - Foot Recon\") when you know "
-    "it, to avoid cross-system noise. Some parts "
+    "product family the question was classified as about, e.g. \"MIS - "
+    "Foot Recon System\") when you know it, to avoid cross-family noise. "
+    "Some parts "
     "carry an indication property naming the specific procedure/clinical "
     "intent they're for (e.g. \"Bunion (Hallux Valgus) correction\" vs. "
     "\"Fusion / Akin osteotomy\") -- when present, this is the authoritative "
@@ -160,8 +165,9 @@ _AGENT_SYSTEM_PROMPT = (
 
 class ReactAgentState(BaseAgentState, total=False):
     search_query: str
-    resolved_system: str | None
-    resolved_system_id: str | None
+    # Set by detect_intent -- see DeterministicState for their meaning.
+    resolved_family: str | None
+    resolved_family_id: str | None
     resolved_question_type: list[str]
     # The tool-calling loop's own transcript -- see module docstring for why
     # this is a separate channel from `messages`, never merged into it
@@ -186,8 +192,12 @@ async def generate(state: ReactAgentState) -> dict:
     existing = state.get("scratchpad") or []
     seed: list = []
     if not existing:
-        system = state.get("resolved_system")
-        context_note = f" The rep's question has been classified as about the {system!r} system." if system else ""
+        family = state.get("resolved_family")
+        context_note = (
+            f" The rep's question has been classified as about the {family!r} product family."
+            if family
+            else ""
+        )
         seed = [
             SystemMessage(content=_AGENT_SYSTEM_PROMPT + context_note),
             HumanMessage(content=state["query"]),

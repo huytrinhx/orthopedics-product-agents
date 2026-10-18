@@ -13,9 +13,10 @@ vectors from a prior run would otherwise pollute a later run's ranking pool.
 import uuid
 
 from auth.repository import create_user
+from catalog.repository import list_families_with_trays, upsert_families_and_trays
 from documents.repository import create_document, delete_document
 from retrieval.vector_store import RetrievalFilters, get_vector_store
-from tags.repository import create_system
+from tags.repository import create_document_type, create_system
 
 _EMBEDDING_DIM = 1536
 
@@ -160,6 +161,65 @@ async def test_hybrid_search_respects_system_filter():
         assert non_matching == []
     finally:
         await delete_document(document_id)
+
+
+async def test_family_filter_is_hard_and_ands_with_the_document_type_filter():
+    """Issue #18: a family-scoped search returns only that family's chunks
+    -- never another family's, and never a chunk with no family (unlike
+    document_type_ids, which admits untyped chunks) -- and composes with
+    the doc-type filter by AND.
+    """
+    family_name, other_family_name = _unique("Family"), _unique("OtherFamily")
+    await upsert_families_and_trays({family_name: [], other_family_name: []})
+    families_by_name = {family.name: family for family in await list_families_with_trays()}
+    family_id = families_by_name[family_name].id
+    other_family_id = families_by_name[other_family_name].id
+    wanted_type = await create_document_type(_unique("WantedType"))
+    other_type = await create_document_type(_unique("OtherType"))
+    query_vector = _unit_vector(40)
+    # (family, document type) per document -- every chunk an exact vector
+    # and keyword match, so only the filters decide what comes back.
+    shapes = {
+        "family, wanted type": (family_id, wanted_type.id),
+        "family, untyped": (family_id, None),
+        "family, other type": (family_id, other_type.id),
+        "other family": (other_family_id, wanted_type.id),
+        "no family": (None, wanted_type.id),
+    }
+    document_ids = {label: await _create_document(document_type_id=type_id) for label, (_, type_id) in shapes.items()}
+    labels_by_document_id = {str(document_id): label for label, document_id in document_ids.items()}
+    try:
+        async with get_vector_store() as store:
+            for label, (shape_family_id, shape_type_id) in shapes.items():
+                await store.upsert_chunks(
+                    document_ids[label],
+                    [
+                        {
+                            "chunk_index": 0,
+                            "content": "family scoped torque guidance",
+                            "embedding": query_vector,
+                            "document_type_id": shape_type_id,
+                            "product_family_id": shape_family_id,
+                        }
+                    ],
+                )
+
+            async def search(filters: RetrievalFilters) -> set[str]:
+                results = await store.hybrid_search(
+                    "family scoped torque guidance", query_vector, top_k=10, filters=filters
+                )
+                return {labels_by_document_id.get(result["document_id"]) for result in results}
+
+            family_only = await search(RetrievalFilters(product_family_id=family_id))
+            family_and_type = await search(
+                RetrievalFilters(product_family_id=family_id, document_type_ids=[wanted_type.id])
+            )
+
+        assert family_only == {"family, wanted type", "family, untyped", "family, other type"}
+        assert family_and_type == {"family, wanted type", "family, untyped"}
+    finally:
+        for document_id in document_ids.values():
+            await delete_document(document_id)
 
 
 async def test_hybrid_search_respects_document_ids_filter():

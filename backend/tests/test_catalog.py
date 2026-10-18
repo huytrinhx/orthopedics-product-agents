@@ -1,8 +1,8 @@
 """The families-with-trays endpoints (api/routes/catalog.py) -- the tree and
 its display-name edits -- the chat tools' display-name translation
 (catalog/display_names.py), and the legacy system-tag -> family map
-family-scoped graph lookups go through (catalog/legacy_systems.py) --
-against real Postgres/Neo4j, no mocking.
+(catalog/legacy_systems.py), which family-scoped graph lookups no longer go
+through -- against real Postgres/Neo4j, no mocking.
 """
 import uuid
 
@@ -177,7 +177,9 @@ def test_real_family_names_pass_through_the_legacy_map_unchanged():
 
 
 @pytest.mark.parametrize(("legacy_tag", "family"), sorted(LEGACY_SYSTEM_FAMILIES.items()))
-async def test_chat_part_lookup_resolves_each_legacy_system_tag(legacy_tag, family):
+async def test_chat_part_lookup_scopes_by_the_real_family_not_a_legacy_tag(legacy_tag, family):
+    # detect_intent resolves a real family since issue #18, so chat's
+    # family-scoped lookup no longer goes through the legacy map either.
     suffix = uuid.uuid4().hex[:8]
     tray, sku = f"Legacy Lookup Tray {suffix}", f"LGL-{suffix}"
     graph = get_graph_client()
@@ -185,10 +187,11 @@ async def test_chat_part_lookup_resolves_each_legacy_system_tag(legacy_tag, fami
     await graph.upsert_tray(tray, family)
     await graph.upsert_part(sku, tray, description=f"LEGACY LOOKUP PART {suffix}")
 
-    found = await graph.find_parts(sku, product_family=legacy_tag)
+    found = await graph.find_parts(sku, product_family=family)
 
     assert [part["sku"] for part in found][:1] == [sku]
     assert found[0]["product_family"] == family
+    assert await graph.find_parts(sku, product_family=legacy_tag) == []
 
 
 async def test_ingestion_lookups_take_the_documents_real_family_not_a_legacy_tag():
