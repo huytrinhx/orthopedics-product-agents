@@ -24,7 +24,13 @@ from pydantic import ValidationError
 
 from config.llm_clients import configured_chat_model
 from model_assignments.repository import cached_assignments
-from model_assignments.slots import CHAT_SLOTS, Slot
+from model_assignments.slots import (
+    CHAT_SLOTS,
+    DEFAULT_FAMILY_CONFIDENCE_THRESHOLD,
+    DEFAULT_QUESTION_TYPE_MARGIN,
+    ModelKind,
+    Slot,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -40,16 +46,28 @@ class SlotModel:
     """One slot's model for one call. `model_id` None means the default:
     `CHAT_MODEL` at the model's own reasoning default. `source` says where
     the choice came from: "default", "setting" or "override".
+
+    `model_kind` "decision" (issue #23) means `model_id` is a decision
+    model, called through config/llm_clients.py's DecisionClient rather
+    than get_chat_model, at its two thresholds; it never has a reasoning
+    effort. A chat model's thresholds are None.
     """
 
     slot: Slot
     model_id: str | None = None
     reasoning_effort: str | None = None
     source: str = "default"
+    model_kind: str = ModelKind.CHAT.value
+    family_confidence_threshold: float | None = None
+    question_type_margin: float | None = None
 
     @property
     def is_default(self) -> bool:
         return self.model_id is None
+
+    @property
+    def is_decision_model(self) -> bool:
+        return self.model_id is not None and self.model_kind == ModelKind.DECISION.value
 
     @property
     def chat_model_arguments(self) -> tuple:
@@ -67,17 +85,68 @@ class SlotModel:
             "model_id": self.model_id,
             "reasoning_effort": self.reasoning_effort,
             "source": self.source,
+            "model_kind": self.model_kind,
+            "family_confidence_threshold": self.family_confidence_threshold,
+            "question_type_margin": self.question_type_margin,
         }
 
     def describe(self) -> dict:
         """For logs and the rerun's "ran on" line: the model actually
-        called, with the default spelled out as CHAT_MODEL.
+        called, with the default spelled out as CHAT_MODEL. A decision
+        model also says so, with the thresholds it ran at.
         """
-        return {
+        described = {
             "model_id": self.model_id or configured_chat_model(),
             "reasoning_effort": self.reasoning_effort,
             "source": self.source,
         }
+        if self.is_decision_model:
+            described.update(
+                model_kind=self.model_kind,
+                family_confidence_threshold=self.family_confidence_threshold,
+                question_type_margin=self.question_type_margin,
+            )
+        return described
+
+
+def decision_slot_model(
+    slot: Slot,
+    model_id: str,
+    source: str,
+    family_confidence_threshold: float | None = None,
+    question_type_margin: float | None = None,
+) -> SlotModel:
+    """A decision model for `slot`, with slots.py's defaults standing in for
+    a threshold that wasn't given.
+    """
+    return SlotModel(
+        slot,
+        model_id,
+        None,
+        source,
+        ModelKind.DECISION.value,
+        DEFAULT_FAMILY_CONFIDENCE_THRESHOLD
+        if family_confidence_threshold is None
+        else family_confidence_threshold,
+        DEFAULT_QUESTION_TYPE_MARGIN if question_type_margin is None else question_type_margin,
+    )
+
+
+def _slot_model_from_choice(slot: Slot, choice: Mapping[str, Any], source: str) -> SlotModel:
+    """A saved row, an override, or a run-config entry: any mapping with
+    model_id and reasoning_effort, plus the decision fields when it's a
+    decision model. One written before decision models existed has none of
+    those, and is a chat model.
+    """
+    if choice.get("model_kind") == ModelKind.DECISION.value:
+        return decision_slot_model(
+            slot,
+            choice["model_id"],
+            source,
+            choice.get("family_confidence_threshold"),
+            choice.get("question_type_margin"),
+        )
+    return SlotModel(slot, choice["model_id"], choice.get("reasoning_effort"), source)
 
 
 def gateway_configured() -> bool:
@@ -93,7 +162,7 @@ async def configured_slot_model(slot: Slot) -> SlotModel:
     assignment = (await cached_assignments()).get(slot.value)
     if assignment is None:
         return SlotModel(slot)
-    return SlotModel(slot, assignment.model_id, assignment.reasoning_effort, "setting")
+    return _slot_model_from_choice(slot, vars(assignment), "setting")
 
 
 async def resolve_turn_slot_models(
@@ -101,16 +170,15 @@ async def resolve_turn_slot_models(
 ) -> dict[str, SlotModel]:
     """Every chat slot for one turn: saved settings, then `overrides` (the
     conversation's admin-only per-slot choices, slot -> {model_id,
-    reasoning_effort}) on top.
+    reasoning_effort}, plus model_kind and thresholds for a decision model)
+    on top.
     """
     slot_models = {slot.value: await configured_slot_model(slot) for slot in CHAT_SLOTS}
     if not gateway_configured():
         return slot_models
     for slot_name, choice in (overrides or {}).items():
         slot = Slot(slot_name)
-        slot_models[slot.value] = SlotModel(
-            slot, choice["model_id"], choice.get("reasoning_effort"), "override"
-        )
+        slot_models[slot.value] = _slot_model_from_choice(slot, choice, "override")
     return slot_models
 
 
@@ -126,7 +194,7 @@ def slot_model_for_run(slot: Slot) -> SlotModel:
     choice = (configurable.get(SLOT_MODELS_CONFIG_KEY) or {}).get(slot.value)
     if not choice:
         return SlotModel(slot)
-    return SlotModel(slot, choice["model_id"], choice["reasoning_effort"], choice["source"])
+    return _slot_model_from_choice(slot, choice, choice["source"])
 
 
 def slot_models_config(slot_models: Mapping[str, SlotModel]) -> dict:
@@ -138,13 +206,22 @@ def slot_models_config(slot_models: Mapping[str, SlotModel]) -> dict:
     }
 
 
+def _effort_or_kind(description: dict) -> str:
+    if description.get("model_kind") == ModelKind.DECISION.value:
+        return (
+            f"decision(family>={description['family_confidence_threshold']},"
+            f"margin={description['question_type_margin']})"
+        )
+    return description["reasoning_effort"] or "default"
+
+
 def log_slot_models(event: str, slot_models: Mapping[str, SlotModel], **context: Any) -> None:
     """One structured line naming the model and effort each slot ran on --
     per chat turn, per ingested document.
     """
     described = {slot_name: slot_model.describe() for slot_name, slot_model in slot_models.items()}
     summary = " ".join(
-        f"{slot_name}={description['model_id']}@{description['reasoning_effort'] or 'default'}"
+        f"{slot_name}={description['model_id']}@{_effort_or_kind(description)}"
         for slot_name, description in described.items()
     )
     context_text = " ".join(f"{key}={value}" for key, value in context.items())
@@ -164,6 +241,31 @@ OUTPUT_FAILURES: tuple[type[Exception], ...] = (OutputParserException, Validatio
 
 def _always_usable(result: Any) -> bool:
     return True
+
+
+def log_slot_output_fallback(slot_model: SlotModel, reason: str) -> None:
+    """The `slot_output_fallback` line: the slot's model gave nothing usable
+    and the call is about to run on `CHAT_MODEL`. Also logged when a
+    decision model's call fails, for any reason, and the slot's default
+    chat path runs instead (agents/intent_decisions.py).
+    """
+    logger.warning(
+        "slot_output_fallback slot=%s model=%s reasoning_effort=%s fallback_model=%s reason=%s",
+        slot_model.slot.value,
+        slot_model.model_id,
+        slot_model.reasoning_effort,
+        configured_chat_model(),
+        reason,
+        extra={
+            "event": "slot_output_fallback",
+            "slot": slot_model.slot.value,
+            "model": slot_model.model_id,
+            "model_kind": slot_model.model_kind,
+            "reasoning_effort": slot_model.reasoning_effort,
+            "fallback_model": configured_chat_model(),
+            "reason": reason,
+        },
+    )
 
 
 async def invoke_with_output_fallback(
@@ -194,20 +296,5 @@ async def invoke_with_output_fallback(
             return result
         reason = "no output" if result is None else "unusable output"
 
-    logger.warning(
-        "slot_output_fallback slot=%s model=%s reasoning_effort=%s fallback_model=%s reason=%s",
-        slot_model.slot.value,
-        slot_model.model_id,
-        slot_model.reasoning_effort,
-        configured_chat_model(),
-        reason,
-        extra={
-            "event": "slot_output_fallback",
-            "slot": slot_model.slot.value,
-            "model": slot_model.model_id,
-            "reasoning_effort": slot_model.reasoning_effort,
-            "fallback_model": configured_chat_model(),
-            "reason": reason,
-        },
-    )
+    log_slot_output_fallback(slot_model, reason)
     return await call(get_chat_model())

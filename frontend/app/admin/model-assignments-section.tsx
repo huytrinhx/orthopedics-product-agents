@@ -7,11 +7,14 @@ import {
   saveModelAssignment,
   testModelAssignment,
 } from "../../lib/model-assignments/api";
-import type {
-  ModelAssignments,
-  ModelChoice,
-  ModelSlot,
-  ProbeResult,
+import {
+  DEFAULT_FAMILY_CONFIDENCE_THRESHOLD,
+  DEFAULT_QUESTION_TYPE_MARGIN,
+  type ModelAssignment,
+  type ModelAssignments,
+  type ModelChoice,
+  type ModelSlot,
+  type ProbeResult,
 } from "../../lib/model-assignments/types";
 import { ModelPicker } from "./model-picker";
 
@@ -27,7 +30,28 @@ const NEED_LABELS: Record<string, string> = {
 };
 
 function describeChoice(choice: ModelChoice): string {
+  if (choice.model_kind === "decision") {
+    return (
+      `${choice.model_id} · decision model · family confidence threshold: ` +
+      `${choice.family_confidence_threshold ?? DEFAULT_FAMILY_CONFIDENCE_THRESHOLD} · ` +
+      `question-type margin: ${choice.question_type_margin ?? DEFAULT_QUESTION_TYPE_MARGIN}`
+    );
+  }
   return `${choice.model_id} · reasoning effort: ${choice.reasoning_effort ?? "model default"}`;
+}
+
+// What the editor starts from: the saved choice, decision fields included.
+function choiceFromAssignment(assignment: ModelAssignment): ModelChoice {
+  if (assignment.model_kind === "decision") {
+    return {
+      model_id: assignment.model_id,
+      reasoning_effort: null,
+      model_kind: "decision",
+      family_confidence_threshold: assignment.family_confidence_threshold,
+      question_type_margin: assignment.question_type_margin,
+    };
+  }
+  return { model_id: assignment.model_id, reasoning_effort: assignment.reasoning_effort };
 }
 
 // One slot: what it runs now, who changed it, and (unless read-only) an
@@ -50,11 +74,7 @@ function SlotCard({
   const [probeResult, setProbeResult] = useState<ProbeResult | null>(null);
 
   function startEditing() {
-    setDraft(
-      slot.assignment
-        ? { model_id: slot.assignment.model_id, reasoning_effort: slot.assignment.reasoning_effort }
-        : null
-    );
+    setDraft(slot.assignment ? choiceFromAssignment(slot.assignment) : null);
     setError(null);
     setProbeResult(null);
     setEditing(true);
@@ -205,7 +225,9 @@ export function ModelAssignmentsSection() {
       <h2>Models</h2>
       <p className="settings-section-lede">
         Choose the model and reasoning effort for each part of the pipeline. A slot left on the
-        default runs the deployment&rsquo;s chat model. Saving first tests the model against that
+        default runs the deployment&rsquo;s chat model. Intent classification can also run a
+        decision model, which picks from fixed options with a probability for each; its two
+        thresholds decide when the rep is asked to clarify. Saving first tests the model against that
         slot&rsquo;s real call and refuses it if the test fails; a saved change takes effect within
         30 seconds. Extraction changes only affect documents ingested afterwards.
       </p>

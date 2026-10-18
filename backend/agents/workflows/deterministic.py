@@ -75,6 +75,7 @@ from pydantic import BaseModel, Field
 
 from agents.citations import extract_citations
 from agents.fact_check import check_answer, format_issues_for_correction
+from agents.intent_decisions import decide_intent, decide_or_fall_back, decide_question_type_reply
 from agents.question_types import QUESTION_TYPE_NAMES, QUESTION_TYPES, UNCLASSIFIED, QuestionType
 from agents.registry import register
 from agents.state import BaseAgentState, RetrievedPassage
@@ -359,8 +360,33 @@ async def _classify_intent(
 ) -> _IntentClassification:
     """`slot_model` defaults to the intent-classification slot of the graph
     run this is called from (issue #24); the intent eval passes its own.
+
+    A decision model in the slot (issue #23) answers through
+    agents/intent_decisions.py instead, in the same shape. If that call
+    fails, the slot's default chat path below runs.
     """
     slot_model = slot_model or slot_model_for_run(Slot.INTENT_CLASSIFICATION)
+    if slot_model.is_decision_model:
+        decision = await decide_or_fall_back(
+            slot_model,
+            lambda client: decide_intent(
+                client,
+                slot_model,
+                query,
+                family_names,
+                previous_family,
+                previous_message,
+                MAX_FAMILY_CANDIDATES,
+            ),
+        )
+        if decision is not None:
+            return _IntentClassification(
+                product_family=decision.product_family,
+                candidate_families=decision.candidate_families,
+                mentions_family=decision.mentions_family,
+                question_type=decision.question_types,
+            )
+        slot_model = SlotModel(slot_model.slot)
     question_type_listing = "\n".join(f"- {question_type.name}: {question_type.description}" for question_type in QUESTION_TYPES)
     # Hints only (issue #22): product_family still comes from what the new
     # question itself says, and detect_intent -- not the model -- decides
@@ -556,8 +582,18 @@ async def _classify_question_type_reply(query: str, reply: str) -> str:
     """Free text that doesn't name a question type outright ("I need the
     steps") still has to come back as exactly one, so the model picks it --
     from every question type, not only the offered ones, like the family
-    clarification's free text. Only runs on that free-text path.
+    clarification's free text. Only runs on that free-text path. A decision
+    model in the slot answers it as a Choice (issue #23).
     """
+    slot_model = slot_model_for_run(Slot.INTENT_CLASSIFICATION)
+    if slot_model.is_decision_model:
+        decided = await decide_or_fall_back(
+            slot_model,
+            lambda client: decide_question_type_reply(client, slot_model, query, reply),
+        )
+        if decided is not None:
+            return decided
+        slot_model = SlotModel(slot_model.slot)
     question_type_listing = "\n".join(f"- {question_type.name}: {question_type.description}" for question_type in QUESTION_TYPES)
     prompt = [
         SystemMessage(
@@ -570,7 +606,7 @@ async def _classify_question_type_reply(query: str, reply: str) -> str:
         {"role": "user", "content": f"Question: {query}\nWhat they meant: {reply}"},
     ]
     result = await invoke_with_output_fallback(
-        slot_model_for_run(Slot.INTENT_CLASSIFICATION),
+        slot_model,
         get_chat_model,
         lambda chat_model: chat_model.with_structured_output(_QuestionTypeReply).ainvoke(prompt),
     )

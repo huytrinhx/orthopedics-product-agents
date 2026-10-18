@@ -13,7 +13,11 @@ a save is rejected with the reason when any check fails:
 - the deterministic answer streams, and the result must have non-empty
   `.text`;
 - tray-layout extraction runs the structured-output check with an image
-  fixture kept beside this module (probe_fixtures/tray_layout.png).
+  fixture kept beside this module (probe_fixtures/tray_layout.png);
+- a decision model (issue #23, intent classification only) gets its own
+  checks instead: detect_intent's family and question-type Choices must
+  each come back as one of their own option keys, with probabilities, and
+  so must the question-type reply's.
 
 The checks are also backend/evals/openrouter_spike.py's, which runs them
 under both APIs. No database, graph or tool execution: tool results are
@@ -31,14 +35,23 @@ from typing import Any
 from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
 from pydantic import BaseModel
 
+from agents.intent_decisions import (
+    FAMILY_QUESTION_ID,
+    QUESTION_TYPE_QUESTION_ID,
+    decide_question_type_reply,
+    family_option_keys,
+    family_question,
+    question_type_question,
+)
 from agents.judge import _JudgeScores
 from agents.workflows.deterministic import _IntentClassification, _QuestionTypeReply
 from agents.workflows.react_agent import _AGENT_SYSTEM_PROMPT, _TOOLS
-from config.llm_clients import openrouter_chat_model
+from config.llm_clients import DecisionClient, get_decision_client, openrouter_chat_model
 from ingestion.entity_extraction import _ExtractionOutput
 from ingestion.tray_layout_extraction import _SYSTEM_PROMPT as _TRAY_SYSTEM_PROMPT
 from ingestion.tray_layout_extraction import _TrayLayoutExtraction
-from model_assignments.slots import Slot
+from model_assignments.runtime import SlotModel, decision_slot_model
+from model_assignments.slots import ModelKind, Slot
 
 # Generous: a reasoning model reading the tray image can take a while, but
 # an admin is waiting on the Save button.
@@ -216,6 +229,56 @@ SLOT_CHECKS: dict[Slot, dict[str, Check]] = {
 }
 
 
+_PROBE_FAMILIES = ["MIS - Foot Recon System", "REFLEX HYBRID"]
+
+
+def _probe_decision_slot_model(model_id: str) -> SlotModel:
+    return decision_slot_model(Slot.INTENT_CLASSIFICATION, model_id, "probe")
+
+
+async def check_family_choice(model: tuple[DecisionClient, str]) -> str:
+    """detect_intent's real request, through intent_decisions: the family
+    Choice has to come back as one of its own keys (the client raises
+    otherwise) with probabilities, and so does the question type's.
+    """
+    client, model_id = model
+    family_keys = family_option_keys(_PROBE_FAMILIES)
+    response = await client.decide(
+        model_id,
+        {"question": "What thread type is the 3.5mm MIS screw?"},
+        {
+            FAMILY_QUESTION_ID: family_question(family_keys, follow_up=False),
+            QUESTION_TYPE_QUESTION_ID: question_type_question(),
+        },
+    )
+    family_answer = response.answers[FAMILY_QUESTION_ID]
+    if not family_answer.probabilities:
+        raise ProbeFailure("the family choice came back with no probabilities")
+    return (
+        f"family={family_answer.choice!r} "
+        f"p={family_answer.probabilities.get(family_answer.choice, 0.0):.2f} "
+        f"type={response.answers[QUESTION_TYPE_QUESTION_ID].choice}; answered by {response.model}"
+    )
+
+
+async def check_question_type_reply_choice(model: tuple[DecisionClient, str]) -> str:
+    client, model_id = model
+    question_type = await decide_question_type_reply(
+        client, _probe_decision_slot_model(model_id), "bunion steps?", "I need the steps"
+    )
+    return f"question_type={question_type}"
+
+
+# A decision model's checks (issue #23), for the slots that accept one.
+# Each check gets (client, model_id) instead of a chat model.
+DECISION_SLOT_CHECKS: dict[Slot, dict[str, Check]] = {
+    Slot.INTENT_CLASSIFICATION: {
+        "detect_intent (family + question type choices)": check_family_choice,
+        "question-type reply (choice)": check_question_type_reply_choice,
+    },
+}
+
+
 @dataclass(frozen=True)
 class ProbeResult:
     passed: bool
@@ -240,11 +303,28 @@ def build_probe_model(model_id: str, reasoning_effort: str | None) -> Any:
     return openrouter_chat_model(model_id, reasoning_effort=reasoning_effort)
 
 
-async def probe_slot(slot: Slot, model_id: str, reasoning_effort: str | None) -> ProbeResult:
-    model = build_probe_model(model_id, reasoning_effort)
+def build_probe_decision_client() -> DecisionClient:
+    """The decision provider, which has no fallback to hide behind. Tests
+    replace this with a fake.
+    """
+    return get_decision_client()
+
+
+async def probe_slot(
+    slot: Slot,
+    model_id: str,
+    reasoning_effort: str | None,
+    model_kind: str = ModelKind.CHAT.value,
+) -> ProbeResult:
+    if model_kind == ModelKind.DECISION.value:
+        model: Any = (build_probe_decision_client(), model_id)
+        checks = DECISION_SLOT_CHECKS[slot]
+    else:
+        model = build_probe_model(model_id, reasoning_effort)
+        checks = SLOT_CHECKS[slot]
     details: list[str] = []
     passed = True
-    for check_name, check in SLOT_CHECKS[slot].items():
+    for check_name, check in checks.items():
         try:
             check_passed, detail = await asyncio.wait_for(
                 run_check(check, model), timeout=PROBE_TIMEOUT_SECONDS

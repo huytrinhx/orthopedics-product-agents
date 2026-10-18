@@ -63,7 +63,7 @@ from model_assignments.runtime import (
     resolve_turn_slot_models,
     slot_models_config,
 )
-from model_assignments.slots import CHAT_SLOTS
+from model_assignments.slots import CHAT_SLOTS, SLOT_DEFINITIONS, ModelKind, Slot
 from observability.langfuse_setup import get_trace_url, new_callback_handler, score_trace
 from settings.repository import get_settings
 
@@ -329,6 +329,18 @@ def _validated_model_overrides(
             status.HTTP_400_BAD_REQUEST,
             f"Not a chat model slot: {', '.join(unknown)} (expected one of "
             f"{', '.join(sorted(chat_slot_names))})",
+        )
+    # Only intent classification can run a decision model (issue #23).
+    decision_refused = sorted(
+        slot_name
+        for slot_name, choice in model_overrides.items()
+        if choice.model_kind == ModelKind.DECISION.value
+        and not SLOT_DEFINITIONS[Slot(slot_name)].accepts_decision_models
+    )
+    if decision_refused:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            f"Can't run a decision model: {', '.join(decision_refused)}",
         )
     return {slot_name: choice.model_dump() for slot_name, choice in model_overrides.items()}
 

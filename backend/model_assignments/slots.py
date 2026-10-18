@@ -8,6 +8,12 @@ probe proves on save (probe.py).
 
 An unset slot runs `CHAT_MODEL` at the model's own reasoning default:
 `get_chat_model()` with no arguments, exactly as before slots existed.
+
+A slot that accepts decision models (issue #23; only intent
+classification) can hold either kind: a chat model, as above, or a
+decision model (config/llm_clients.py's DecisionClient), which answers
+Choices with probabilities instead of writing structured output. A decision
+model's two thresholds are saved with it.
 """
 from dataclasses import dataclass
 from enum import StrEnum
@@ -22,6 +28,11 @@ class Slot(StrEnum):
     TRAY_LAYOUT_EXTRACTION = "tray_layout_extraction"
 
 
+class ModelKind(StrEnum):
+    CHAT = "chat"
+    DECISION = "decision"
+
+
 class Need(StrEnum):
     STRUCTURED_OUTPUT = "structured_output"
     STREAMED_TEXT = "streamed_text"
@@ -32,6 +43,16 @@ class Need(StrEnum):
 # What `reasoning_effort` may be set to. "none" turns reasoning off on a
 # model that supports it; an unset effort leaves the model's own default.
 REASONING_EFFORTS = ("none", "low", "medium", "high")
+
+# A decision model's thresholds when none were saved (issue #23). Starting
+# points, not tuned values: tune both on the intent eval
+# (`python -m evals.harness intent --model intent_classification=<id>
+# --family-confidence-threshold ... --question-type-margin ...`).
+# The family pick needs at least this probability, or the rep is asked.
+DEFAULT_FAMILY_CONFIDENCE_THRESHOLD = 0.6
+# Two question types whose probabilities are within this of each other
+# both count as detected, so the rep is asked which they mean (issue #19).
+DEFAULT_QUESTION_TYPE_MARGIN = 0.15
 
 
 @dataclass(frozen=True)
@@ -45,6 +66,8 @@ class SlotDefinition:
     default_reasoning_effort: str
     # Shown beside the slot in Settings.
     warning: str | None = None
+    # Whether a decision model may run this slot instead of a chat model.
+    accepts_decision_models: bool = False
 
 
 SLOT_DEFINITIONS: dict[Slot, SlotDefinition] = {
@@ -56,6 +79,7 @@ SLOT_DEFINITIONS: dict[Slot, SlotDefinition] = {
             "deterministic._classify_intent, _classify_question_type_reply",
             (Need.STRUCTURED_OUTPUT,),
             "none",
+            accepts_decision_models=True,
         ),
         SlotDefinition(
             Slot.DETERMINISTIC_ANSWER,

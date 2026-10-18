@@ -15,13 +15,21 @@
 
 Not run in CI: a real model call costs money, so an admin runs it by hand
 (issue #25 comment; agents.md). Results are a CLI report, optionally also
-written as JSON with --output; nothing is persisted.
+written as JSON with --output; nothing is persisted. It reads the nearest
+.env above the working directory, without overriding the shell's variables.
 
 Each slot (model_assignments/slots.py, issue #24) runs what production
 runs -- its saved setting, or CHAT_MODEL when unset -- unless `--model
 <slot>=<model_id>[@<reasoning_effort>]` overrides it for this run. The
 report starts with every slot's model and effort, and `--output` records
 them too. A non-OpenAI model id needs OPENROUTER_API_KEY.
+
+A `--model intent_classification=<id>` that OpenRouter lists as a decision
+model (issue #23) runs as one, under its dated id -- so the same command
+compares the chat path against a decision model. Its thresholds are
+slots.py's defaults unless `--family-confidence-threshold` and
+`--question-type-margin` say otherwise; those two also apply to a saved
+decision model, which is how they get tuned.
 
 Usage (from backend/):
     python -m evals.harness intent
@@ -32,13 +40,17 @@ Usage (from backend/):
         --dataset evals/golden_datasets/reflex-hybrid.jsonl --output answer-results.json
     python -m evals.harness intent --model intent_classification=openai/gpt-5-mini@low
     python -m evals.harness answers --workflow deterministic --model deterministic_answer=openai/gpt-5-mini
+    python -m evals.harness intent --model intent_classification=typesafe/jev-1.13-20260917 \\
+        --family-confidence-threshold 0.5 --question-type-margin 0.1
 """
 import argparse
 import asyncio
 import os
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from functools import partial
 from pathlib import Path
+
+from dotenv import find_dotenv, load_dotenv
 
 from agents.registry import is_functional, list_workflows
 from agents.workflows.deterministic import _classify_intent
@@ -53,8 +65,20 @@ from evals.intent_eval import (
     summarize,
     write_results,
 )
-from model_assignments.runtime import SlotModel, configured_slot_model, gateway_configured
-from model_assignments.slots import REASONING_EFFORTS, SLOT_DEFINITIONS, Slot
+from model_assignments.catalog import CatalogUnavailable, find_decision_model
+from model_assignments.runtime import (
+    SlotModel,
+    configured_slot_model,
+    decision_slot_model,
+    gateway_configured,
+)
+from model_assignments.slots import (
+    DEFAULT_FAMILY_CONFIDENCE_THRESHOLD,
+    DEFAULT_QUESTION_TYPE_MARGIN,
+    REASONING_EFFORTS,
+    SLOT_DEFINITIONS,
+    Slot,
+)
 
 DEFAULT_INTENT_DATASET = Path(__file__).parent / "golden_datasets" / "intent_detection.jsonl"
 # A directory: every per-family QA file in it (answer_eval.qa_dataset_paths).
@@ -99,13 +123,60 @@ def parse_model_override(value: str) -> tuple[Slot, str, str | None]:
     return slot, model_id, reasoning_effort or None
 
 
+class EvalModelError(ValueError):
+    pass
+
+
+async def _listed_decision_model(slot: Slot, model_id: str) -> str | None:
+    """The dated id `model_id` names in OpenRouter's decision model listing
+    (issue #23), or None when it isn't a decision model -- or can't be,
+    without the gateway or on a slot that takes none.
+    """
+    if not gateway_configured() or not SLOT_DEFINITIONS[slot].accepts_decision_models:
+        return None
+    try:
+        decision_model = await find_decision_model(model_id)
+    except CatalogUnavailable as error:
+        raise EvalModelError(f"can't tell whether {model_id} is a decision model: {error}")
+    return decision_model.model_id if decision_model else None
+
+
 async def resolve_eval_slot_models(
     overrides: list[tuple[Slot, str, str | None]],
+    family_confidence_threshold: float | None = None,
+    question_type_margin: float | None = None,
 ) -> dict[Slot, SlotModel]:
-    """Every slot's model for this run: production's, then `--model`."""
+    """Every slot's model for this run: production's, then `--model`. A
+    `--model` id OpenRouter lists as a decision model runs as one, under
+    its dated id. The two thresholds, when given, replace the intent
+    slot's decision model's (saved or `--model`) for this run.
+    """
     slot_models = {slot: await configured_slot_model(slot) for slot in SLOT_DEFINITIONS}
     for slot, model_id, reasoning_effort in overrides:
-        slot_models[slot] = SlotModel(slot, model_id, reasoning_effort, "override")
+        decision_model_id = await _listed_decision_model(slot, model_id)
+        if decision_model_id is None:
+            slot_models[slot] = SlotModel(slot, model_id, reasoning_effort, "override")
+            continue
+        if reasoning_effort:
+            raise EvalModelError(f"{model_id} is a decision model, which takes no reasoning effort")
+        slot_models[slot] = decision_slot_model(slot, decision_model_id, "override")
+
+    if family_confidence_threshold is not None or question_type_margin is not None:
+        intent_model = slot_models[Slot.INTENT_CLASSIFICATION]
+        if not intent_model.is_decision_model:
+            raise EvalModelError(
+                "--family-confidence-threshold and --question-type-margin only apply to a "
+                "decision model in intent_classification"
+            )
+        slot_models[Slot.INTENT_CLASSIFICATION] = replace(
+            intent_model,
+            family_confidence_threshold=family_confidence_threshold
+            if family_confidence_threshold is not None
+            else intent_model.family_confidence_threshold,
+            question_type_margin=question_type_margin
+            if question_type_margin is not None
+            else intent_model.question_type_margin,
+        )
     return slot_models
 
 
@@ -113,17 +184,20 @@ def format_slot_models(slot_models: dict[Slot, SlotModel]) -> str:
     lines = ["Models:"]
     for slot, slot_model in slot_models.items():
         description = slot_model.describe()
-        lines.append(
-            f"  {slot.value}: {description['model_id']} "
-            f"(reasoning effort: {description['reasoning_effort'] or 'provider default'}; "
-            f"{description['source']})"
-        )
+        if slot_model.is_decision_model:
+            settings = (
+                f"decision model: family confidence threshold "
+                f"{slot_model.family_confidence_threshold}, question-type margin "
+                f"{slot_model.question_type_margin}"
+            )
+        else:
+            settings = f"reasoning effort: {description['reasoning_effort'] or 'provider default'}"
+        lines.append(f"  {slot.value}: {description['model_id']} ({settings}; {description['source']})")
     return "\n".join(lines)
 
 
-async def _run_intent(
-    dataset_path: Path, output_path: Path | None, overrides: list[tuple[Slot, str, str | None]]
-) -> None:
+async def _run_intent(dataset_path: Path, output_path: Path | None, model_selection: dict) -> None:
+    """`model_selection` is resolve_eval_slot_models' keyword arguments."""
     rows = load_intent_dataset(dataset_path)
     families = await list_families_with_trays()
     if not families:
@@ -134,7 +208,7 @@ async def _run_intent(
             "every family will resolve to None and never clarify"
         )
 
-    slot_models = await resolve_eval_slot_models(overrides)
+    slot_models = await resolve_eval_slot_models(**model_selection)
     print(format_slot_models(slot_models))
     print(f"Dataset: {dataset_path} ({len(rows)} rows), {len(families)} families mirrored")
     print()
@@ -154,7 +228,7 @@ async def _run_answers(
     workflow_name: str,
     dataset_path: Path,
     output_path: Path | None,
-    overrides: list[tuple[Slot, str, str | None]],
+    model_selection: dict,
 ) -> None:
     rows = answer_eval.load_qa_dataset(dataset_path)
     documents = await _ingested_documents()
@@ -164,7 +238,7 @@ async def _run_answers(
             "citation can match"
         )
 
-    slot_models = await resolve_eval_slot_models(overrides)
+    slot_models = await resolve_eval_slot_models(**model_selection)
     print(f"Workflow: {workflow_name}")
     print(format_slot_models(slot_models))
     dataset_names = ", ".join(path.name for path in answer_eval.qa_dataset_paths(dataset_path))
@@ -192,7 +266,20 @@ def _add_model_argument(command_parser) -> None:
         default=[],
         metavar="SLOT=MODEL_ID[@EFFORT]",
         help="Run a slot on this model for this eval (repeatable), e.g. "
-        "intent_classification=openai/gpt-5-mini@low",
+        "intent_classification=openai/gpt-5-mini@low. A decision model OpenRouter lists "
+        "(intent_classification only) runs as one, with no @EFFORT",
+    )
+    command_parser.add_argument(
+        "--family-confidence-threshold",
+        type=float,
+        help="The intent decision model's family confidence threshold for this run "
+        f"(default: the saved one, or {DEFAULT_FAMILY_CONFIDENCE_THRESHOLD})",
+    )
+    command_parser.add_argument(
+        "--question-type-margin",
+        type=float,
+        help="The intent decision model's question-type margin for this run "
+        f"(default: the saved one, or {DEFAULT_QUESTION_TYPE_MARGIN})",
     )
 
 
@@ -229,6 +316,11 @@ def main(argv: list[str] | None = None) -> None:
     _add_model_argument(intent_parser)
     arguments = parser.parse_args(argv)
 
+    # The admin runs this from a shell, not the server, so nothing else has
+    # loaded backend/.env. Searched upward from the working directory (the
+    # usage above runs from backend/); variables already set in the shell
+    # (e.g. under `railway run`) win.
+    load_dotenv(find_dotenv(usecwd=True))
     if not os.environ.get("OPENAI_API_KEY"):
         parser.exit(2, "OPENAI_API_KEY is not set -- the evals make real model calls\n")
     gateway_only = [
@@ -241,17 +333,25 @@ def main(argv: list[str] | None = None) -> None:
             2,
             f"{', '.join(gateway_only)} can only run through OpenRouter -- set OPENROUTER_API_KEY\n",
         )
-    if arguments.command == "answers":
-        if arguments.workflow not in list_workflows() or not is_functional(arguments.workflow):
-            functional = ", ".join(name for name in list_workflows() if is_functional(name))
-            parser.exit(2, f"No runnable workflow {arguments.workflow!r} (choose from: {functional})\n")
-        asyncio.run(
-            _run_answers(
-                arguments.workflow, arguments.dataset, arguments.output, arguments.model_overrides
+    model_selection = {
+        "overrides": arguments.model_overrides,
+        "family_confidence_threshold": arguments.family_confidence_threshold,
+        "question_type_margin": arguments.question_type_margin,
+    }
+    try:
+        if arguments.command == "answers":
+            if arguments.workflow not in list_workflows() or not is_functional(arguments.workflow):
+                functional = ", ".join(name for name in list_workflows() if is_functional(name))
+                parser.exit(
+                    2, f"No runnable workflow {arguments.workflow!r} (choose from: {functional})\n"
+                )
+            asyncio.run(
+                _run_answers(arguments.workflow, arguments.dataset, arguments.output, model_selection)
             )
-        )
-        return
-    asyncio.run(_run_intent(arguments.dataset, arguments.output, arguments.model_overrides))
+            return
+        asyncio.run(_run_intent(arguments.dataset, arguments.output, model_selection))
+    except EvalModelError as error:
+        parser.exit(2, f"{error}\n")
 
 
 if __name__ == "__main__":
