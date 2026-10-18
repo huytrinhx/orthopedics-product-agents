@@ -12,9 +12,14 @@ docs/adr/0007-openrouter-chat-gateway.md.
 """
 import logging
 import os
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
+from dataclasses import dataclass
 from functools import lru_cache
-from typing import Any
+from typing import Any, Protocol
 
+import httpx
 import openai
 from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.language_models import BaseChatModel
@@ -234,6 +239,183 @@ def get_chat_model(
             configured_chat_model(), reasoning_effort=reasoning_effort, store=False
         ),
     )
+
+
+# ---------------------------------------------------------------- decision models
+#
+# A decision model (issue #23) writes no text: given a state and typed
+# questions it answers each in one forward pass, a Choice with a probability
+# for every option. OpenRouter carries them on its Decisions API, a separate
+# endpoint from chat, with the same key -- so, like chat, there's no second
+# vendor account, and trying Jev or Microsoft Decision-1 is a model id
+# change. Only the intent-classification slot offers them
+# (model_assignments/slots.py); agents/intent_decisions.py turns its
+# questions into Choices. See docs/adr/0008-decision-models-for-intent.md.
+#
+# There's no OpenAI-direct counterpart, so no gateway-outage fallback here:
+# a decision call that fails for any reason raises DecisionModelError, and
+# the caller runs the slot's default chat path instead.
+
+OPENROUTER_DECISIONS_URL = "https://openrouter.ai/api/alpha/decisions"
+# A decision is one forward pass (about 255 ms over the WAN in one
+# independent run); anything near this means the call is better answered
+# by the chat fallback.
+DECISION_TIMEOUT_SECONDS = 15.0
+
+
+class DecisionModelError(RuntimeError):
+    """Any decision call whose answer can't be used: the request failed
+    (HTTP error, timeout, no gateway key) or the response didn't answer
+    every question with one of its own options.
+    """
+
+
+@dataclass(frozen=True)
+class ChoiceAnswer:
+    # One of the question's own option keys.
+    choice: str
+    # Option key -> probability, covering every option the model scored.
+    probabilities: dict[str, float]
+
+
+@dataclass(frozen=True)
+class DecisionUsage:
+    input_tokens: int = 0
+    output_tokens: int = 0
+    # US dollars, as the provider reports it; 0 when it reports none.
+    cost: float = 0.0
+
+
+@dataclass(frozen=True)
+class DecisionResponse:
+    # The exact build that answered, which can be more specific than the
+    # requested id.
+    model: str
+    answers: dict[str, ChoiceAnswer]
+    usage: DecisionUsage
+
+
+class DecisionClient(Protocol):
+    """The one interface a decision provider implements. Only Choice
+    questions are asked today: `questions` maps a question id to
+    `{"type": "choice", "instructions": ..., "criteria": {option: description}}`.
+    """
+
+    async def decide(self, model_id: str, state: dict, questions: dict) -> DecisionResponse: ...
+
+
+# Every decision response's usage within a `collect_decision_usage()`
+# block, keyed by the model that answered -- the intent eval's tokens and
+# cost per turn. LangChain's usage callback never sees these calls.
+_decision_usage: ContextVar[dict[str, list[DecisionUsage]] | None] = ContextVar(
+    "decision_usage", default=None
+)
+
+
+@contextmanager
+def collect_decision_usage() -> Iterator[dict[str, list[DecisionUsage]]]:
+    collected: dict[str, list[DecisionUsage]] = {}
+    token = _decision_usage.set(collected)
+    try:
+        yield collected
+    finally:
+        _decision_usage.reset(token)
+
+
+def record_decision_usage(response: DecisionResponse) -> None:
+    """Called with every response a node acts on, whichever provider
+    answered it; a no-op outside `collect_decision_usage()`.
+    """
+    collected = _decision_usage.get()
+    if collected is not None:
+        collected.setdefault(response.model, []).append(response.usage)
+
+
+def _parse_choice_answer(question_id: str, question: dict, raw_answer: object) -> ChoiceAnswer:
+    options = set(question["criteria"])
+    if not isinstance(raw_answer, dict) or raw_answer.get("type") != "choice":
+        raise DecisionModelError(f"no choice answer for {question_id!r}: {str(raw_answer)[:200]}")
+    choice = raw_answer.get("choice")
+    if choice not in options:
+        raise DecisionModelError(f"{question_id!r} answered {choice!r}, which isn't one of its options")
+    raw_probabilities = raw_answer.get("probabilities")
+    if isinstance(raw_probabilities, dict):
+        probabilities = {
+            option: float(probability)
+            for option, probability in raw_probabilities.items()
+            if option in options and isinstance(probability, int | float)
+        }
+    elif isinstance(raw_answer.get("confidence"), int | float):
+        # Probabilities are optional in the schema; the confidence is the
+        # chosen option's, which is all a threshold needs.
+        probabilities = {choice: float(raw_answer["confidence"])}
+    else:
+        raise DecisionModelError(f"{question_id!r} came back with no probabilities")
+    return ChoiceAnswer(choice=choice, probabilities=probabilities)
+
+
+class OpenRouterDecisionClient:
+    """OpenRouter's Decisions API: `POST /api/alpha/decisions` with the
+    gateway's key. `transport` is for tests (an httpx.MockTransport).
+    """
+
+    def __init__(
+        self,
+        api_key: str,
+        url: str = OPENROUTER_DECISIONS_URL,
+        transport: httpx.AsyncBaseTransport | None = None,
+    ) -> None:
+        self.api_key = api_key
+        self.url = url
+        self.transport = transport
+
+    async def decide(self, model_id: str, state: dict, questions: dict) -> DecisionResponse:
+        # A client per call: the eval harness and the tests each run their
+        # own event loops, which a shared connection pool can't span.
+        try:
+            async with httpx.AsyncClient(
+                timeout=DECISION_TIMEOUT_SECONDS, transport=self.transport
+            ) as client:
+                response = await client.post(
+                    self.url,
+                    headers={"Authorization": f"Bearer {self.api_key}"},
+                    json={"model": model_id, "state": state, "questions": questions},
+                )
+                response.raise_for_status()
+                body = response.json()
+        except httpx.HTTPStatusError as error:
+            raise DecisionModelError(
+                f"decisions request failed with {error.response.status_code}: "
+                f"{error.response.text[:200]}"
+            ) from error
+        except (httpx.HTTPError, ValueError) as error:
+            raise DecisionModelError(f"decisions request failed: {type(error).__name__}: {error}") from error
+
+        raw_answers = body.get("answers") if isinstance(body, dict) else None
+        if not isinstance(raw_answers, dict):
+            raise DecisionModelError(f"decisions response has no answers: {str(body)[:200]}")
+        answers = {
+            question_id: _parse_choice_answer(question_id, question, raw_answers.get(question_id))
+            for question_id, question in questions.items()
+        }
+        raw_usage = body.get("usage") or {}
+        usage = DecisionUsage(
+            input_tokens=int(raw_usage.get("input_tokens") or 0),
+            output_tokens=int(raw_usage.get("output_tokens") or 0),
+            cost=float(raw_usage.get("cost") or 0.0),
+        )
+        return DecisionResponse(model=str(body.get("model") or model_id), answers=answers, usage=usage)
+
+
+def get_decision_client() -> DecisionClient:
+    """The decision provider: OpenRouter, the same gateway and key as chat.
+    A second provider (TypeSafe's own API, a self-hosted /v1/systemone)
+    would be another DecisionClient chosen here; nothing else changes.
+    """
+    api_key = os.environ.get("OPENROUTER_API_KEY")
+    if not api_key:
+        raise DecisionModelError("decision models run through OpenRouter: set OPENROUTER_API_KEY")
+    return OpenRouterDecisionClient(api_key)
 
 
 @lru_cache

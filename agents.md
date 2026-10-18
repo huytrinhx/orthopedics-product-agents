@@ -98,11 +98,30 @@ picking this repo up cold, read this before making structural changes.
       gateway-outage fallback, and a default slot never retries.
     - Changing the judge's slot breaks score comparison with earlier runs;
       Settings says so.
+    - **Intent classification can also hold a decision model** (issue #23,
+      `docs/adr/0008-decision-models-for-intent.md`): a second kind of
+      option in the same slot (`model_kind` "decision"), not a separate
+      config path. It runs on OpenRouter's Decisions API with the same
+      `OPENROUTER_API_KEY`, through `get_decision_client()` beside
+      `get_chat_model()`; don't call the Decisions API anywhere else.
+      `agents/intent_decisions.py` asks one Choice per decision (family
+      with `unclear`/`no_family` options, question type with a top-two
+      margin rule, the question-type reply) and returns the chat path's
+      shape, so the pause conditions stay the single place the decisions
+      live. The family confidence threshold and question-type margin are
+      saved with the slot (defaults 0.6 / 0.15 in `slots.py`, untuned).
+      Only slots with `accepts_decision_models` offer one; decision ids
+      are saved as their dated `canonical_slug`. Its own probe
+      (`DECISION_SLOT_CHECKS`) must get valid option keys back. Any
+      decision failure logs `slot_output_fallback` and runs the slot's
+      default chat call.
     - The Eval tab's "Rerun with models" sends admin-only per-slot
       overrides with the chat request (`model_overrides`; a non-admin gets
       a 403). They're kept in that conversation's state only, and its
       answers show what they ran on. The harness takes the same choice as
-      `--model <slot>=<model_id>[@<effort>]`.
+      `--model <slot>=<model_id>[@<effort>]`; an id OpenRouter lists as
+      a decision model runs as one, and `--family-confidence-threshold` /
+      `--question-type-margin` tune its thresholds for that run.
 - **Uploaded/ingested documents live on local disk (`INGEST_DATA_DIR`), not
   object storage.** No Azure Blob Storage/Azurite — a Railway volume covers
   persistence in production. See

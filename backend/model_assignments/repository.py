@@ -32,11 +32,17 @@ class ModelAssignmentRecord:
     updated_by: uuid.UUID | None
     updated_by_email: str | None
     updated_at: datetime
+    # "chat" or "decision" (slots.ModelKind, issue #23). The thresholds are
+    # only ever set on a decision model; None there means the default.
+    model_kind: str = "chat"
+    family_confidence_threshold: float | None = None
+    question_type_margin: float | None = None
 
 
 _SELECT = (
     "SELECT assignment.slot, assignment.model_id, assignment.reasoning_effort, "
-    "assignment.updated_by, users.email, assignment.updated_at "
+    "assignment.updated_by, users.email, assignment.updated_at, assignment.model_kind, "
+    "assignment.family_confidence_threshold, assignment.question_type_margin "
     "FROM model_assignments AS assignment LEFT JOIN users ON users.id = assignment.updated_by"
 )
 
@@ -69,18 +75,37 @@ def invalidate_cache() -> None:
 
 
 async def save_assignment(
-    slot: str, model_id: str, reasoning_effort: str | None, updated_by: uuid.UUID
+    slot: str,
+    model_id: str,
+    reasoning_effort: str | None,
+    updated_by: uuid.UUID | None,
+    *,
+    model_kind: str = "chat",
+    family_confidence_threshold: float | None = None,
+    question_type_margin: float | None = None,
 ) -> None:
     connection = await get_connection()
     try:
         async with connection.cursor() as cursor:
             await cursor.execute(
-                "INSERT INTO model_assignments (slot, model_id, reasoning_effort, updated_by) "
-                "VALUES (%s, %s, %s, %s) "
+                "INSERT INTO model_assignments (slot, model_id, reasoning_effort, updated_by, "
+                "model_kind, family_confidence_threshold, question_type_margin) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s) "
                 "ON CONFLICT (slot) DO UPDATE SET model_id = EXCLUDED.model_id, "
                 "reasoning_effort = EXCLUDED.reasoning_effort, "
+                "model_kind = EXCLUDED.model_kind, "
+                "family_confidence_threshold = EXCLUDED.family_confidence_threshold, "
+                "question_type_margin = EXCLUDED.question_type_margin, "
                 "updated_by = EXCLUDED.updated_by, updated_at = now()",
-                (slot, model_id, reasoning_effort, updated_by),
+                (
+                    slot,
+                    model_id,
+                    reasoning_effort,
+                    updated_by,
+                    model_kind,
+                    family_confidence_threshold,
+                    question_type_margin,
+                ),
             )
         await connection.commit()
     finally:

@@ -39,6 +39,7 @@ from agents.workflows.deterministic import (
 )
 from catalog.display_names import catalog_display_names_for
 from catalog.repository import ProductFamilyRecord
+from config.llm_clients import DecisionUsage, collect_decision_usage
 
 # Called like deterministic._classify_intent: (query, family_names) plus
 # the previous_family/previous_message keyword hints (issue #22).
@@ -50,11 +51,15 @@ class TokenUsage:
     input_tokens: int = 0
     output_tokens: int = 0
     total_tokens: int = 0
+    # US dollars. Only a decision model (issue #23) reports one: its
+    # response carries the cost, while LangChain's chat usage doesn't.
+    cost: float = 0.0
 
     def add(self, other: "TokenUsage") -> None:
         self.input_tokens += other.input_tokens
         self.output_tokens += other.output_tokens
         self.total_tokens += other.total_tokens
+        self.cost += other.cost
 
 
 @dataclass
@@ -129,6 +134,22 @@ def _token_usage_by_model(usage_metadata: dict) -> dict[str, TokenUsage]:
     }
 
 
+def _add_decision_usage(
+    token_usage: dict[str, TokenUsage], decision_usage: dict[str, list[DecisionUsage]]
+) -> dict[str, TokenUsage]:
+    for model_name, usages in decision_usage.items():
+        for usage in usages:
+            token_usage.setdefault(model_name, TokenUsage()).add(
+                TokenUsage(
+                    input_tokens=usage.input_tokens,
+                    output_tokens=usage.output_tokens,
+                    total_tokens=usage.input_tokens + usage.output_tokens,
+                    cost=usage.cost,
+                )
+            )
+    return token_usage
+
+
 async def evaluate_row(
     row: dict, families: list[ProductFamilyRecord], classify: IntentClassifier = _classify_intent
 ) -> IntentRowResult:
@@ -158,7 +179,7 @@ async def evaluate_row(
         previous_message = earlier_message
 
     started = time.perf_counter()
-    with get_usage_metadata_callback() as usage_callback:
+    with get_usage_metadata_callback() as usage_callback, collect_decision_usage() as decision_usage:
         classification = await classify(
             query,
             family_names,
@@ -195,7 +216,9 @@ async def evaluate_row(
         would_clarify_question_type=_needs_question_type_clarification(detected_question_types),
         expects_question_type_clarification=row["expects_question_type_clarification"],
         latency_seconds=latency_seconds,
-        token_usage=_token_usage_by_model(usage_callback.usage_metadata),
+        token_usage=_add_decision_usage(
+            _token_usage_by_model(usage_callback.usage_metadata), decision_usage
+        ),
     )
 
 
@@ -305,14 +328,20 @@ def format_report(report: IntentReport, results: list[IntentRowResult]) -> str:
     ]
     if report.token_usage:
         for model_name, usage in report.token_usage.items():
+            cost = (
+                f", ${usage.cost:.4f} (${usage.cost / report.row_count:.5f} per turn)"
+                if usage.cost and report.row_count
+                else ""
+            )
             lines.append(
                 f"  Tokens ({model_name}): {usage.input_tokens} in / "
-                f"{usage.output_tokens} out / {usage.total_tokens} total"
+                f"{usage.output_tokens} out / {usage.total_tokens} total{cost}"
             )
     else:
         lines.append("  Tokens: not reported by the provider")
-    # Cost isn't computed: LangChain's usage metadata carries token counts
-    # but no prices, and this repo keeps no price table to multiply by.
+    # A chat model's cost isn't computed: LangChain's usage metadata carries
+    # token counts but no prices, and this repo keeps no price table to
+    # multiply by. A decision model's response reports its own cost.
     if report.rows_expecting_unmirrored_family:
         lines.append(
             f"  WARNING: {report.rows_expecting_unmirrored_family} row(s) expect a family the "
