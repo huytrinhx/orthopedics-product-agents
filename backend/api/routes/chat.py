@@ -252,7 +252,10 @@ async def _stream_chat(
         # otherwise silently carry over (e.g. a prior turn's already-spent
         # clarification round, or its fact-check issues turning this turn's
         # first generate into a "correction") -- explicitly reset them all
-        # for every new turn.
+        # for every new turn. resolved_family/resolved_family_id are
+        # deliberately not reset: detect_intent reads them back as the
+        # thread's previous family, so a follow-up naming no family stays
+        # on it (issue #22).
         "search_query": body.message,
         "clarification_rounds": 0,
         "clarification_reply": None,

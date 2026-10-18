@@ -35,7 +35,9 @@ Single-context repo — see `docs/agents/domain.md` for how this file and
   `detect_intent` can't tell which `Product Family` a question is about, it
   pauses the turn and asks, offering at most 4 candidate families (every
   family when the classifier has none) plus free text. At most once per
-  turn. Retrieval is then **hard-filtered** to the resolved family:
+  turn. A follow-up that names no family silently stays on the thread's
+  previous family instead of asking; one naming a different family
+  ambiguously asks, offering the previous family first (issue #22). Retrieval is then **hard-filtered** to the resolved family:
   documents without a family are excluded from family-scoped turns, and
   only a turn that resolved no family retrieves across all of them.
 - **Complete** *(document)* — tagged with a `Product Family`, at least one

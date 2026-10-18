@@ -13,7 +13,9 @@ query -> detect_intent -> clarify_question_type -> resolve_synonyms
 detect_intent classifies which Product Family the query is about and,
   when it can't tell confidently, calls interrupt() to ask -- offering the
   classifier's few candidate families (or every family, if it had none)
-  plus free text. hybrid_retrieve then hard-filters to that family.
+  plus free text. hybrid_retrieve then hard-filters to that family. A
+  follow-up naming no family stays on the thread's previous one instead of
+  asking again (issue #22).
 
 clarify_question_type (issue #19) narrows detect_intent's classified
   question types to exactly one: when the classifier returned several, it
@@ -163,6 +165,10 @@ class DeterministicState(BaseAgentState, total=False):
     # rerank's bonus, and generate's procedural branch. Always one of
     # agents/question_types.py's QUESTION_TYPE_NAMES -- the classifier's
     # Literal field and _resolve_question_type_reply both enforce it.
+    # Unlike search_query and the clarification fields, the API layer doesn't
+    # reset resolved_family/resolved_family_id: the next turn's
+    # detect_intent reads them back as the thread's previous family (issue
+    # #22), so a follow-up naming no family doesn't ask again.
     resolved_family: str | None
     resolved_family_id: str | None
     detected_question_types: list[str]
@@ -195,6 +201,20 @@ class _IntentClassification(BaseModel):
             f"Only when product_family is null: up to {MAX_FAMILY_CANDIDATES} "
             "allowed product family names the query could plausibly be "
             "about, most likely first. Empty if none is plausible."
+        ),
+    )
+    # What lets detect_intent tell a follow-up that names no family (stay on
+    # the previous one) from one naming a different family ambiguously (ask)
+    # -- both come back with product_family null (issue #22). Defaults to
+    # False, but that only matters with a previous family to stay on: a
+    # first turn asks exactly as before whatever this says.
+    mentions_family: bool = Field(
+        default=False,
+        description=(
+            "True if the question itself names or points at any product "
+            "family or brand, even ambiguously (e.g. 'the REFLEX tray'); "
+            "false if it names none at all, like a follow-up 'what about "
+            "the 3.5 PT?'."
         ),
     )
     # A Literal built from QUESTION_TYPE_NAMES, not a bare `list[str]` --
@@ -233,23 +253,74 @@ def _resolve_family(
 
 
 def _clarification_options(
-    candidate_names: list[str], families: list[ProductFamilyRecord], display_names: CatalogDisplayNames
+    candidate_names: list[str],
+    families: list[ProductFamilyRecord],
+    display_names: CatalogDisplayNames,
+    previous_family: ProductFamilyRecord | None = None,
 ) -> list[str]:
     """The family display names a clarification offers: the classifier's
     candidates that are real families, deduped and capped at
-    MAX_FAMILY_CANDIDATES -- or every family when none of them is.
+    MAX_FAMILY_CANDIDATES -- or every family when none of them is. The
+    thread's previous family, when there is one, always comes first (issue
+    #22): a follow-up naming another family ambiguously may still mean it.
     """
-    options: dict[str, None] = {}
+    leading = [previous_family.display_name] if previous_family else []
+    candidates: dict[str, None] = {}
     for name in candidate_names:
         family = _resolve_family(name, families, display_names)
         if family is not None:
-            options.setdefault(family.display_name, None)
-    return list(options)[:MAX_FAMILY_CANDIDATES] or [family.display_name for family in families]
+            candidates.setdefault(family.display_name, None)
+    if candidates:
+        return list(dict.fromkeys([*leading, *candidates]))[:MAX_FAMILY_CANDIDATES]
+    return list(dict.fromkeys([*leading, *(family.display_name for family in families)]))
 
 
-async def _classify_intent(query: str, family_names: list[str]) -> _IntentClassification:
+def _previous_family(
+    state: DeterministicState, families: list[ProductFamilyRecord]
+) -> ProductFamilyRecord | None:
+    """The family the thread's last turn resolved to (issue #22): the
+    checkpointed resolved_family_id, which the API layer doesn't reset
+    between turns, looked up by id so an admin rename since then shows its
+    current display name. None on a thread's first turn, after a turn that
+    ran unscoped, or if that family is no longer mirrored.
+    """
+    previous_family_id = state.get("resolved_family_id")
+    return next((family for family in families if str(family.id) == previous_family_id), None)
+
+
+def _previous_user_message(state: DeterministicState) -> str | None:
+    """The rep's message from the turn before this one: the last
+    HumanMessage before this turn's own, which the API layer has already
+    appended to `messages`. Resuming a clarification adds no HumanMessage,
+    so this is always the previous turn's question.
+    """
+    user_messages = [message for message in state.get("messages") or [] if isinstance(message, HumanMessage)]
+    return user_messages[-2].text if len(user_messages) >= 2 else None
+
+
+async def _classify_intent(
+    query: str,
+    family_names: list[str],
+    previous_family: str | None = None,
+    previous_message: str | None = None,
+) -> _IntentClassification:
     model = get_chat_model().with_structured_output(_IntentClassification)
     question_type_listing = "\n".join(f"- {question_type.name}: {question_type.description}" for question_type in QUESTION_TYPES)
+    # Hints only (issue #22): product_family still comes from what the new
+    # question itself says, and detect_intent -- not the model -- decides
+    # that a question naming no family stays on the previous one.
+    follow_up_context = ""
+    if previous_message:
+        follow_up_context += f"\n\nThe rep's previous question in this conversation: {previous_message}"
+    if previous_family:
+        follow_up_context += f"\nThat question was about the {previous_family} product family."
+    if follow_up_context:
+        follow_up_context += (
+            "\nUse this only to understand what a follow-up refers to. "
+            "Classify product_family from what the new question names or "
+            "implies, and set mentions_family to false if it names or points "
+            "at no product family at all."
+        )
     return await model.ainvoke(
         [
             SystemMessage(
@@ -278,6 +349,7 @@ async def _classify_intent(query: str, family_names: list[str]) -> _IntentClassi
                     "type; if a question can be interpreted as more than one "
                     "type, output multiple types; if none of the types "
                     "clearly fits, output unclassified alone."
+                    f"{follow_up_context}"
                 )
             ),
             {"role": "user", "content": query},
@@ -300,6 +372,16 @@ async def detect_intent(state: DeterministicState) -> dict:
     just an offered one. At most one family clarification per turn: a
     reply that names no real family leaves the turn unscoped (retrieval
     unfiltered by family) rather than asking again.
+
+    On a follow-up turn (issue #22), the thread's previous family
+    (_previous_family) and the rep's previous message go to the classifier
+    as hints. A follow-up the classifier says names no family at all
+    (mentions_family false) silently stays on the previous family: no
+    interrupt and no "still on X" note, since the answer's sources already
+    show which family it's about. One clearly naming a different family
+    switches to it; one naming a family ambiguously still asks, offering
+    the previous family first. The question type is always classified
+    fresh. #7's thread memory (Ticket A) may subsume this carry-over.
 
     Families come from the Postgres catalog mirror (catalog.repository),
     by display name, so an admin rename shows up here with no code change.
@@ -325,8 +407,16 @@ async def detect_intent(state: DeterministicState) -> dict:
             state["query"],
         )
 
-    result = await _classify_intent(state["query"], [family.display_name for family in families])
+    previous_family = _previous_family(state, families)
+    result = await _classify_intent(
+        state["query"],
+        [family.display_name for family in families],
+        previous_family=previous_family.display_name if previous_family else None,
+        previous_message=_previous_user_message(state),
+    )
     family = _resolve_family(result.product_family, families, display_names)
+    if family is None and previous_family is not None and not result.mentions_family:
+        family = previous_family
 
     if family is None and families:
         # Everything above re-runs on resume (LangGraph replays the node
@@ -334,7 +424,9 @@ async def detect_intent(state: DeterministicState) -> dict:
         answer = interrupt(
             {
                 "question": "Which product family is this about?",
-                "options": _clarification_options(result.candidate_families, families, display_names),
+                "options": _clarification_options(
+                    result.candidate_families, families, display_names, previous_family
+                ),
             }
         )
         family = _resolve_family(answer, families, display_names)
