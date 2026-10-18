@@ -89,8 +89,10 @@ picking this repo up cold, read this before making structural changes.
     backend** (`backend/agents/`, or anything a workflow node calls into,
     such as `retrieval/` or `config/llm_clients.py`), whoever makes it —
     human or AI agent — tells the admin before it's merged or deployed
-    that the evals should be run, and gives the command. A manual CI
-    trigger (`workflow_dispatch`) is allowed; a per-PR job isn't.
+    that the evals should be run, and gives the command. Evals run
+    locally only. There's no CI job for them, not even a manual one: a
+    real answer eval needs a database with ingested documents, and the
+    production credentials that implies stay out of GitHub.
 - **Inline self-eval is a deterministic fact check, not the judge.** Every
   workflow's `self_eval` node runs `backend/agents/fact_check.py` — citation
   ids, SKUs, thread types, and trays checked against the turn's own retrieved
