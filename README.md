@@ -78,7 +78,7 @@ backend/            FastAPI + LangGraph service (Python)
   memory/             Postgres-backed checkpointer (conversation) + store (user)
   api/                FastAPI app: chat (streaming/resume), documents, feedback routes;
                        also serves the built frontend in production (see main.py)
-  evals/              golden-dataset harness, run against any registered workflow
+  evals/              golden datasets + offline eval harness (intent eval only so far)
   observability/      Langfuse tracing setup (OTel is a stub, see decision 7)
   tests/
 frontend/            Next.js app: /chat, /documents, /evals (static export)
@@ -291,9 +291,29 @@ re-run whenever they apply:
 1. Add `backend/agents/workflows/<name>.py` building on `agents.state.BaseAgentState`,
    ending with `register("<name>", build_graph)`.
 2. Import it from `backend/agents/workflows/__init__.py`.
-3. It's now selectable via `/chat/<name>/stream` and runnable through
-   `backend/evals/harness.py` against the golden datasets — no other code
-   changes required.
+3. It's now selectable via `/chat/<name>/stream` — no other code changes
+   required. (Running it through `backend/evals/harness.py` against the QA
+   golden datasets is issue #25 Slice 2, not built yet.)
+
+## Offline evals
+
+Only the intent eval exists so far (issue #25 Slice 1). It runs each
+query in `backend/evals/golden_datasets/intent_detection.jsonl` through the
+deterministic workflow's own intent classifier and reports family accuracy,
+question-type accuracy (exact set and any-overlap), family-clarification
+precision/recall, the question-type-clarification rate against expected,
+p50/p95 latency, and token usage. It needs `OPENAI_API_KEY` and a
+`DATABASE_URL` whose catalog mirror is seeded (step 6 above); no documents.
+From `backend/`:
+
+```bash
+.venv/bin/python -m evals.harness intent
+# a different dataset, plus the report and per-row results as JSON:
+.venv/bin/python -m evals.harness intent --dataset evals/golden_datasets/intent_detection.jsonl --output intent-results.json
+```
+
+It uses `OPENAI_CHAT_MODEL`, like the app. Cost isn't computed (no price
+table), and nothing runs in CI.
 
 ## Status
 
