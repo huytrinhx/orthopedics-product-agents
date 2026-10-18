@@ -12,6 +12,7 @@ from fastapi.staticfiles import StaticFiles
 
 from agents import workflows  # noqa: F401  (registers all workflows)
 from api.routes import admin, auth, catalog, chat, documents, feedback, question_types, tags, users
+from config.llm_clients import configured_chat_model
 from memory.checkpointer import get_checkpointer
 from observability.langfuse_setup import configure_langfuse
 
@@ -37,6 +38,10 @@ class CleanUrlStaticFiles(StaticFiles):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Raises on a CHAT_MODEL the OpenAI-direct fallback couldn't run, so a
+    # bad value fails the deploy's healthcheck instead of the first chat
+    # turn -- see config/llm_clients.py.
+    configured_chat_model()
     # Initializes (and logs a warning if unconfigured) up front, rather than
     # silently on the first chat request -- see langfuse_setup.py.
     configure_langfuse()

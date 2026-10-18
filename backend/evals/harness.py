@@ -10,8 +10,9 @@
   (agents/judge.py). Blocked on a pause policy for turns that stop on a
   clarification interrupt() -- see the issue.
 
-Not run in CI: a real model call costs money, and whether a CI job should
-spend it is one of #25's open questions.
+Not run in CI: a real model call costs money, so an admin runs it by hand
+(issue #25 comment; agents.md). Slice 2's pause policy is settled: a row
+that pauses resumes with a scripted reply stored on the row.
 
 Usage (from backend/):
     python -m evals.harness intent

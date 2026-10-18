@@ -42,6 +42,10 @@ export default defineRailway(() => {
     },
     env: {
       ADMIN_EMAILS: preserve(),
+      // An OpenRouter model id (e.g. openai/gpt-5.6-luna). Replaced
+      // OPENAI_CHAT_MODEL, which startup rejects if it's still set on its
+      // own -- see backend/config/llm_clients.py.
+      CHAT_MODEL: preserve(),
       DATABASE_URL: preserve(),
       FRONTEND_PUBLIC_URL: preserve(),
       GOOGLE_CLIENT_ID: preserve(),
@@ -57,8 +61,8 @@ export default defineRailway(() => {
       NEO4J_URI: preserve(),
       NEO4J_USER: preserve(),
       OPENAI_API_KEY: preserve(),
-      OPENAI_CHAT_MODEL: preserve(),
       OPENAI_EMBEDDING_MODEL: preserve(),
+      OPENROUTER_API_KEY: preserve(),
     },
   });
 

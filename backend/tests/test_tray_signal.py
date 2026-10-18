@@ -358,7 +358,7 @@ async def test_generate_sees_the_tray_and_a_wrong_tray_earns_a_correction(monkey
     async def fake_list_families_with_trays():
         return [family]
 
-    async def fake_classify_intent(query, family_names):
+    async def fake_classify_intent(query, family_names, previous_family=None, previous_message=None):
         return det._IntentClassification(product_family="REFLEX", question_type=["system_contents"])
 
     async def fake_resolve_synonyms(state):

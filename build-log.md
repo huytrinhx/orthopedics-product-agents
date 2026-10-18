@@ -480,3 +480,16 @@ feedback-promotion workflow), worked one at a time in dependency order.
   stripping a ` - ` suffix, which `MIS - Foot Recon System` would break.
   Also fixed: compatibility-matrix headers that lost their closing paren in
   this file (`(MMSN20xx`) no longer silently drop their COMPATIBLE_WITH edges.
+- **Chat through OpenRouter, OpenAI direct as fallback (GitHub issue #8).**
+  With `OPENROUTER_API_KEY` set, `get_chat_model()` sends every chat call
+  through OpenRouter, and retries a gateway failure (5xx, timeout, rejected
+  key) against OpenAI direct with a `chat_gateway_fallback` log line.
+  `CHAT_MODEL` (an `openai/...` OpenRouter id, validated at startup)
+  replaces `OPENAI_CHAT_MODEL`. `get_chat_model()` gained a
+  `reasoning_effort` argument for #24. The gateway client sets
+  `store=False` because OpenRouter's Responses API is stateless. The
+  Responses-vs-Chat-Completions spike (`backend/evals/openrouter_spike.py`)
+  is written but not yet run against the production model. ADR 0007
+  supersedes 0003's chat half. The CI `evals` job is deleted: it passed
+  without evaluating anything. Evals are now run by an admin by hand
+  (issue #25 comment), never as a per-PR job.
