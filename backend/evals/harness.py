@@ -15,7 +15,8 @@
 
 Not run in CI: a real model call costs money, so an admin runs it by hand
 (issue #25 comment; agents.md). Results are a CLI report, optionally also
-written as JSON with --output; nothing is persisted.
+written as JSON with --output; nothing is persisted. It reads the nearest
+.env above the working directory, without overriding the shell's variables.
 
 Each slot (model_assignments/slots.py, issue #24) runs what production
 runs -- its saved setting, or CHAT_MODEL when unset -- unless `--model
@@ -48,6 +49,8 @@ import os
 from dataclasses import asdict, replace
 from functools import partial
 from pathlib import Path
+
+from dotenv import find_dotenv, load_dotenv
 
 from agents.registry import is_functional, list_workflows
 from agents.workflows.deterministic import _classify_intent
@@ -313,6 +316,11 @@ def main(argv: list[str] | None = None) -> None:
     _add_model_argument(intent_parser)
     arguments = parser.parse_args(argv)
 
+    # The admin runs this from a shell, not the server, so nothing else has
+    # loaded backend/.env. Searched upward from the working directory (the
+    # usage above runs from backend/); variables already set in the shell
+    # (e.g. under `railway run`) win.
+    load_dotenv(find_dotenv(usecwd=True))
     if not os.environ.get("OPENAI_API_KEY"):
         parser.exit(2, "OPENAI_API_KEY is not set -- the evals make real model calls\n")
     gateway_only = [

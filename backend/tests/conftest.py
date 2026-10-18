@@ -28,6 +28,11 @@ import asyncio
 import os
 from pathlib import Path
 
+# evals.harness.main() loads the nearest .env, which on a developer's machine
+# holds real API keys and production's DATABASE_URL. The tests that call it
+# must never see those, so dotenv is switched off for the whole run.
+os.environ["PYTHON_DOTENV_DISABLED"] = "1"
+
 if not os.environ.get("CI"):
     os.environ["DATABASE_URL"] = (
         "postgresql://orthopedics:orthopedics-dev@localhost:5433/orthopedics_agents_test"
