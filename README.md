@@ -58,8 +58,9 @@ Agentic retrieval over an orthopedics product/clinical knowledge base
 10. **Model provider: OpenRouter for chat, OpenAI for embeddings.** With
     `OPENROUTER_API_KEY` set, every chat call goes through OpenRouter's
     OpenAI-compatible API, so trying a different model means changing
-    `CHAT_MODEL`, not code. A gateway outage (5xx, timeout, rejected key)
-    falls back to OpenAI direct for that call. Without the key (local dev,
+    `CHAT_MODEL`, not code. A gateway failure (5xx, timeout, rejected
+    key, out of credit, rate limit or quota) falls back to OpenAI direct
+    for that call. Without the key (local dev,
     CI), chat goes to OpenAI direct. Embeddings always use OpenAI direct
     (`OPENAI_API_KEY`). See `backend/config/llm_clients.py` and
     `docs/adr/0007-openrouter-chat-gateway.md`.

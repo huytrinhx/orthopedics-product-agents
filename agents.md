@@ -37,8 +37,9 @@ picking this repo up cold, read this before making structural changes.
     and the fallback.
   - **`CHAT_MODEL` is an OpenRouter id and must be `openai/...`.** OpenAI
     direct runs it with the prefix stripped, and so does the outage
-    fallback, which retries a 5xx, timeout, or rejected-key failure against
-    OpenAI direct and logs `chat_gateway_fallback`. Startup
+    fallback, which retries a 5xx, timeout, rejected key, out-of-credit
+    402, or rate-limit/quota 429 against OpenAI direct and logs
+    `chat_gateway_fallback`. Startup
     (`configured_chat_model()` in the lifespan) refuses anything else, and
     refuses a leftover `OPENAI_CHAT_MODEL` set on its own. Model output
     errors never trigger the fallback.

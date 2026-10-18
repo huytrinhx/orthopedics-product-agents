@@ -36,21 +36,47 @@ OPENAI_MODEL_PREFIX = "openai/"
 # models reject function tools alongside reasoning on
 # /v1/chat/completions, and react_agent's tool-bound `generate` call is
 # exactly where the reasoning matters (tool choice and when to stop).
-# Whether OpenRouter's Chat Completions handles that combination is what
-# backend/evals/openrouter_spike.py checks; until it has run against the
-# production model this stays on. Responses-API messages carry content as a
-# list of blocks, so read model output with `.text`, not `.content`.
+# OpenRouter's Chat Completions handled every node, reasoning and tools
+# included (backend/evals/openrouter_spike.py, 2026-10-17, ADR 0007), but
+# the OpenAI-direct fallback below shares this setting and still rejects
+# that combination there -- so Responses stays the single path. Responses-API
+# messages carry content as a list of blocks, so read model output with
+# `.text`, not `.content`.
 USE_RESPONSES_API = True
 
-# The failures that mean the gateway itself is down or misconfigured: a 5xx,
-# a timeout or dropped connection (APITimeoutError is an
-# APIConnectionError), or a rejected key. A 4xx about the request, or a
-# model output that doesn't parse, would fail the same way on OpenAI
-# direct, so those still raise.
+class OpenRouterOutOfCredits(openai.APIStatusError):
+    """The 402 OpenRouter returns when the account is out of credit. The
+    openai SDK has no class of its own for a 402 (it raises a plain
+    APIStatusError), and with_fallbacks matches with an `except` clause, so
+    openrouter_chat_model's clients raise this instead (_raise_out_of_credits_distinctly).
+    """
+
+
+def _raise_out_of_credits_distinctly(client: Any) -> None:
+    make_status_error = client._make_status_error
+
+    def make_status_error_with_402(err_msg: str, *, body: object, response: Any) -> openai.APIStatusError:
+        if response.status_code == 402:
+            return OpenRouterOutOfCredits(err_msg, response=response, body=body)
+        return make_status_error(err_msg, body=body, response=response)
+
+    client._make_status_error = make_status_error_with_402
+
+
+# The failures that mean the gateway itself is down, misconfigured, or out
+# of capacity for us: a 5xx, a timeout or dropped connection
+# (APITimeoutError is an APIConnectionError), a rejected key, a 402 (out of
+# credit), or a 429 (rate limit or quota reached -- the OpenAI client has
+# already retried it twice by then). OpenAI direct has its own, separate
+# limits, so it can still answer. Any other 4xx about the request (400,
+# 403), or a model output that doesn't parse, would fail the same way on
+# OpenAI direct, so those still raise.
 GATEWAY_FAILURES: tuple[type[Exception], ...] = (
     openai.InternalServerError,
     openai.APIConnectionError,
     openai.AuthenticationError,
+    openai.RateLimitError,
+    OpenRouterOutOfCredits,
 )
 
 
@@ -120,7 +146,7 @@ def openrouter_chat_model(
     """`use_responses_api` is only overridden by the spike script, which
     runs every call shape under both APIs.
     """
-    return ChatOpenAI(
+    gateway_model = ChatOpenAI(
         api_key=os.environ["OPENROUTER_API_KEY"],
         base_url=OPENROUTER_BASE_URL,
         model=model_id,
@@ -133,6 +159,10 @@ def openrouter_chat_model(
         # store is explicitly False.
         store=False if use_responses_api else None,
     )
+    for client in (gateway_model.root_client, gateway_model.root_async_client):
+        if client is not None:
+            _raise_out_of_credits_distinctly(client)
+    return gateway_model
 
 
 class _GatewayFailureLogger(BaseCallbackHandler):

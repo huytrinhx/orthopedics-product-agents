@@ -207,6 +207,10 @@ def _gateway_failures() -> list[Exception]:
         openai.APITimeoutError(request=request),
         openai.APIConnectionError(request=request),
         _status_error(openai.AuthenticationError, 401),
+        # Out of OpenRouter credit (see the 402 mapping test below).
+        _status_error(llm_clients.OpenRouterOutOfCredits, 402),
+        # Rate limit or quota reached on OpenRouter.
+        _status_error(openai.RateLimitError, 429),
     ]
 
 
@@ -242,7 +246,7 @@ async def test_gateway_failure_falls_back_to_openai_direct_and_logs(gateway_erro
     "request_error",
     [
         _status_error(openai.BadRequestError, 400),
-        _status_error(openai.RateLimitError, 429),
+        _status_error(openai.PermissionDeniedError, 403),
         OutputParserException("not the schema"),
     ],
     ids=lambda error: type(error).__name__,
@@ -313,3 +317,15 @@ def test_real_chat_model_keeps_the_fallback_through_tools_and_structured_output(
 
 def _tool_definitions(binding) -> list[dict]:
     return [tool.get("function", tool) for tool in binding.kwargs["tools"]]
+
+
+def test_the_gateway_client_raises_a_402_as_out_of_credits(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    gateway_model = llm_clients.openrouter_chat_model("openai/gpt-5.6-luna")
+    request = httpx.Request("POST", f"{OPENROUTER_BASE_URL}/responses")
+
+    for client in (gateway_model.root_client, gateway_model.root_async_client):
+        out_of_credits = client._make_status_error("no credit", body=None, response=httpx.Response(402, request=request))
+        forbidden = client._make_status_error("no", body=None, response=httpx.Response(403, request=request))
+        assert isinstance(out_of_credits, llm_clients.OpenRouterOutOfCredits)
+        assert isinstance(forbidden, openai.PermissionDeniedError)

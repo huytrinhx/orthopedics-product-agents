@@ -4,8 +4,9 @@
 
 Accepted. Supersedes the chat-provider half of
 [0003](0003-openai-direct-llm-provider.md); 0003's embeddings decision
-still stands. The API spike below is **pending**: it hasn't been run
-against the production model yet.
+still stands. The API spike below ran against the production model on
+2026-10-17: every node passed under both APIs, and the Responses API stays
+the single path.
 
 ## Context
 
@@ -64,7 +65,7 @@ ever matters.
 
 ## Spike: Responses API vs Chat Completions through OpenRouter
 
-**Result: pending.** `backend/evals/openrouter_spike.py` sends every node's
+`backend/evals/openrouter_spike.py` sends every node's
 call shape to OpenRouter under both APIs, using the production client
 settings, and prints a pass/fail table. The call shapes are
 `with_structured_output` with the real schemas for `detect_intent`, the
@@ -72,14 +73,32 @@ question-type reply classifier, the judge, entity extraction, and
 tray-layout extraction (with image input); `bind_tools` with
 `react_agent`'s tools over two rounds; and streamed text for deterministic
 `generate`. Run it with `OPENROUTER_API_KEY` and the production
-`CHAT_MODEL` set (`python -m evals.openrouter_spike` from `backend/`),
-then record the table here.
+`CHAT_MODEL` set (`python -m evals.openrouter_spike` from `backend/`).
 
-- If Chat Completions passes every check with reasoning on, set
-  `USE_RESPONSES_API = False` in `backend/config/llm_clients.py` and drop
-  the Responses-API-only handling.
-- If only the Responses API passes everything, nothing changes.
-- Only if neither passes every node does the API become a per-model flag.
+**Result (2026-10-17, `openai/gpt-5.6-luna`):** both APIs passed every
+check, run twice: at the model's default reasoning, and with
+`--reasoning-effort medium`. Calls took 1.3–4.2 s, with no meaningful
+difference between the two APIs.
+
+| Check | Responses | Chat Completions |
+|---|---|---|
+| detect_intent (structured) | PASS | PASS |
+| question-type reply (structured) | PASS | PASS |
+| judge (structured) | PASS | PASS |
+| entity extraction (structured) | PASS | PASS |
+| tray layout (structured + image) | PASS | PASS |
+| react_agent (bind_tools, 2 rounds) | PASS | PASS |
+| generate (streamed text) | PASS | PASS |
+
+**Decision: keep the Responses API** (`USE_RESPONSES_API = True`). The plan
+had been to drop it if Chat Completions passed everything, and it did. But
+the setting is shared by the gateway and the OpenAI-direct fallback. On
+OpenAI direct, Chat Completions still rejects function tools together with
+a reasoning effort: the original 400. Switching would break a fallback
+`react_agent` turn as soon as #24 gives that node a reasoning effort, or
+else need a second, per-provider setting, which is the kind of quirk this
+ADR exists to remove. The trade-off is that OpenRouter's Responses API is
+labelled beta. If it regresses, rerun the spike.
 
 ## Consequences
 
@@ -88,6 +107,10 @@ then record the table here.
   can't be the default, because the fallback couldn't run them.
 - Production needs `OPENROUTER_API_KEY` and `CHAT_MODEL` set, with
   `OPENAI_CHAT_MODEL` removed (README, `.railway/railway.ts`).
+- Running out of OpenRouter credit (a 402) or hitting its rate limit or
+  quota (a 429, after the OpenAI client's own two retries) also falls back
+  to OpenAI direct. OpenAI's limits are separate, so chat stays up while
+  OpenAI still works. Other 4xx responses (400, 403) don't fall back.
 - An OpenRouter outage costs latency (OpenAI client retries, then the
   fallback call), not answers. It shows up as `chat_gateway_fallback` log
   lines.
