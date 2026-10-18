@@ -17,6 +17,8 @@ from pydantic import BaseModel, Field
 
 from agents.state import EvalScores, RetrievedPassage
 from config.llm_clients import get_chat_model
+from model_assignments.runtime import SlotModel, configured_slot_model, invoke_with_output_fallback
+from model_assignments.slots import Slot
 
 _SYSTEM_PROMPT = """You are grading an AI assistant's answer to a product-knowledge
 question about orthopedic implant systems, against the context it was given.
@@ -74,23 +76,31 @@ async def judge_answer(
     retrieved: list[RetrievedPassage],
     answer: str,
     reference_answer: str | None = None,
+    *,
+    slot_model: SlotModel | None = None,
 ) -> EvalScores:
-    model = get_chat_model().with_structured_output(_JudgeScores)
+    """`slot_model` defaults to the judge slot's saved setting (issue #24).
+    Changing it breaks comparison with scores from before the change.
+    """
+    slot_model = slot_model or await configured_slot_model(Slot.JUDGE)
     system_prompt = _SYSTEM_PROMPT + (_REFERENCE_NOTE if reference_answer else "")
     reference = f"\n\nReviewer's preferred answer:\n{reference_answer}" if reference_answer else ""
-    result = await model.ainvoke(
-        [
-            {"role": "system", "content": system_prompt},
-            {
-                "role": "user",
-                "content": (
-                    f"Question: {query}\n\n"
-                    f"Context given to the assistant:\n{_format_context(retrieved)}\n\n"
-                    f"Assistant's answer:\n{answer}"
-                    f"{reference}"
-                ),
-            },
-        ]
+    prompt = [
+        {"role": "system", "content": system_prompt},
+        {
+            "role": "user",
+            "content": (
+                f"Question: {query}\n\n"
+                f"Context given to the assistant:\n{_format_context(retrieved)}\n\n"
+                f"Assistant's answer:\n{answer}"
+                f"{reference}"
+            ),
+        },
+    ]
+    result = await invoke_with_output_fallback(
+        slot_model,
+        get_chat_model,
+        lambda chat_model: chat_model.with_structured_output(_JudgeScores).ainvoke(prompt),
     )
     return EvalScores(
         faithfulness=result.faithfulness,

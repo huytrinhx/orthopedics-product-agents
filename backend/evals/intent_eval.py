@@ -351,11 +351,21 @@ def format_report(report: IntentReport, results: list[IntentRowResult]) -> str:
 
 
 def write_results(
-    output_path: str | Path, report: IntentReport, results: list[IntentRowResult]
+    output_path: str | Path,
+    report: IntentReport,
+    results: list[IntentRowResult],
+    models: dict[str, dict] | None = None,
 ) -> None:
+    """`models` is the harness's slot -> {model_id, reasoning_effort,
+    source} for the run (issue #24), so a results file says what it scored.
+    """
     with open(output_path, "w", encoding="utf-8") as file:
         json.dump(
-            {"report": asdict(report), "rows": [asdict(result) for result in results]},
+            {
+                "models": models or {},
+                "report": asdict(report),
+                "rows": [asdict(result) for result in results],
+            },
             file,
             indent=2,
             ensure_ascii=False,

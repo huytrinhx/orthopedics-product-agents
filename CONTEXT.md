@@ -86,6 +86,12 @@ Single-context repo — see `docs/agents/domain.md` for how this file and
   agent, supervisor/multi-agent), registered by name in
   `backend/agents/registry.py`. Selected per-request (`/chat/<workflow>/stream`)
   and by the eval harness.
+- **Model slot** — one of the six places a chat model is called (intent
+  classification, deterministic answer, ReAct agent, judge, entity
+  extraction, tray-layout extraction), each with its own admin-chosen
+  model and reasoning effort (issue #24, `backend/model_assignments/`). An
+  unset slot runs `CHAT_MODEL`. The **probe** is the slot's real LangChain
+  call run against a candidate model before it can be saved.
 - **Judge** — the shared LLM-based scorer (`backend/agents/judge.py`)
   producing four axis scores: faithfulness, relevance, style, citation. Used
   identically by the offline eval harness and the human feedback UI.

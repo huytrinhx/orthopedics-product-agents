@@ -16,6 +16,8 @@ dropped rather than merged in some fuzzy way.
 from pydantic import BaseModel, Field
 
 from config.llm_clients import get_chat_model
+from model_assignments.runtime import SlotModel, invoke_with_output_fallback
+from model_assignments.slots import Slot
 
 _SYSTEM_PROMPT = """You extract two kinds of facts from orthopedic product \
 documentation (brochures, surgical technique guides, launch presentations):
@@ -58,6 +60,7 @@ async def extract_entities(
     *,
     known_parts: list[dict],
     known_trays: list[str],
+    slot_model: SlotModel | None = None,
 ) -> list[dict]:
     """Returns a list of dicts, each one of:
 
@@ -72,6 +75,9 @@ async def extract_entities(
     Entries referencing anything outside those sets are dropped here as a
     defensive check — the graph write layer also refuses them, but failing
     fast avoids a wasted write attempt.
+
+    `slot_model` is the entity-extraction slot's model (issue #24), which
+    ingest_document resolves once per document; None runs the default.
     """
     if not known_parts:
         return []
@@ -82,19 +88,21 @@ async def extract_entities(
     catalog_listing = "\n".join(f"- {part['sku']}: {part['description']}" for part in known_parts)
     trays_listing = "\n".join(f"- {tray}" for tray in known_trays)
 
-    model = get_chat_model().with_structured_output(_ExtractionOutput)
-    result = await model.ainvoke(
-        [
-            ("system", _SYSTEM_PROMPT),
+    prompt = [
+        ("system", _SYSTEM_PROMPT),
+        (
+            "user",
             (
-                "user",
-                (
-                    f"Known parts:\n{catalog_listing}\n\n"
-                    f"Known trays:\n{trays_listing}\n\n"
-                    f"Text:\n{chunk_text}"
-                ),
+                f"Known parts:\n{catalog_listing}\n\n"
+                f"Known trays:\n{trays_listing}\n\n"
+                f"Text:\n{chunk_text}"
             ),
-        ]
+        ),
+    ]
+    result = await invoke_with_output_fallback(
+        slot_model or SlotModel(Slot.ENTITY_EXTRACTION),
+        get_chat_model,
+        lambda chat_model: chat_model.with_structured_output(_ExtractionOutput).ainvoke(prompt),
     )
 
     extracted: list[dict] = []

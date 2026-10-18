@@ -73,6 +73,8 @@ from agents.tools.synonym_resolve import synonym_resolve
 from agents.tools.vector_search import vector_search
 from agents.workflows.deterministic import detect_intent
 from config.llm_clients import get_chat_model
+from model_assignments.runtime import invoke_with_output_fallback, slot_model_for_run
+from model_assignments.slots import Slot
 
 # "Raw power" per the 2026-09-03 grilling session: generous, not tuned down
 # to match deterministic's own turn budget -- the point of this workflow is
@@ -185,6 +187,10 @@ class ReactAgentState(BaseAgentState, total=False):
     citations: list[str]
 
 
+def _is_usable_response(response: AIMessage) -> bool:
+    return not response.invalid_tool_calls and bool(response.tool_calls or response.text.strip())
+
+
 async def generate(state: ReactAgentState) -> dict:
     """Both the reasoning step (may request tools) and, once it stops
     requesting them, the final-answer step -- see module docstring for why
@@ -219,10 +225,17 @@ async def generate(state: ReactAgentState) -> dict:
         correction = [HumanMessage(content=format_issues_for_correction(issues))]
         update["correction_rounds"] = state.get("correction_rounds", 0) + 1
 
-    model = get_chat_model()
     budget_left = state.get("tool_calls_made", 0) < MAX_TOOL_CALLS
-    bound = model.bind_tools(_TOOLS) if budget_left else model
-    response = await bound.ainvoke(existing + seed + correction)
+
+    async def call(model):
+        bound = model.bind_tools(_TOOLS) if budget_left else model
+        return await bound.ainvoke(existing + seed + correction)
+
+    # An assigned model's malformed tool call, or a reply with neither a
+    # tool call nor text, gets one retry on CHAT_MODEL (issue #24).
+    response = await invoke_with_output_fallback(
+        slot_model_for_run(Slot.REACT_AGENT), get_chat_model, call, is_usable=_is_usable_response
+    )
 
     return {**update, "scratchpad": [*seed, *correction, response]}
 

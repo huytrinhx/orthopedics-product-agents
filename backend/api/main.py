@@ -11,7 +11,18 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from agents import workflows  # noqa: F401  (registers all workflows)
-from api.routes import admin, auth, catalog, chat, documents, feedback, question_types, tags, users
+from api.routes import (
+    admin,
+    auth,
+    catalog,
+    chat,
+    documents,
+    feedback,
+    model_assignments,
+    question_types,
+    tags,
+    users,
+)
 from config.llm_clients import configured_chat_model
 from memory.checkpointer import get_checkpointer
 from observability.langfuse_setup import configure_langfuse
@@ -75,6 +86,9 @@ app.include_router(catalog.router, prefix="/catalog", tags=["catalog"])
 app.include_router(chat.router, prefix="/chat", tags=["chat"])
 app.include_router(documents.router, prefix="/documents", tags=["documents"])
 app.include_router(feedback.router, prefix="/feedback", tags=["feedback"])
+app.include_router(
+    model_assignments.router, prefix="/admin/model-assignments", tags=["model-assignments"]
+)
 app.include_router(question_types.router, tags=["question-types"])
 app.include_router(tags.router, tags=["tags"])
 app.include_router(users.router, prefix="/users", tags=["users"])

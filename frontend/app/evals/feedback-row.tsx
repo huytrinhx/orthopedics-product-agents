@@ -5,10 +5,13 @@
 // Rerun/Delete. Clicking the row expands a second row underneath with the
 // full question and answer. Resolved is only offered on a flagged row --
 // it means "the flagged issue was confirmed fixed" (the backend 404s it on
-// anything else).
+// anything else). "Rerun with models" (issue #24) opens per-slot model
+// overrides for the rerun, when the gateway is configured.
 import { Fragment, useState } from "react";
 import { deleteFeedback, setFeedbackResolved } from "../../lib/feedback/api";
 import type { FeedbackListItem } from "../../lib/feedback/types";
+import type { ModelOverrides, ModelSlot } from "../../lib/model-assignments/types";
+import { RerunModelsPanel } from "./rerun-models-panel";
 
 const SCORE_AXES = ["faithfulness", "relevance", "style", "citation"] as const;
 
@@ -20,12 +23,15 @@ function formatScore(value: number | undefined): string {
 
 export function FeedbackRow({
   item,
+  chatSlots,
   onRerun,
   onResolvedChanged,
   onDeleted,
 }: {
   item: FeedbackListItem;
-  onRerun: (question: string) => void;
+  // Empty when model overrides aren't available (no OPENROUTER_API_KEY).
+  chatSlots: ModelSlot[];
+  onRerun: (question: string, modelOverrides?: ModelOverrides) => void;
   onResolvedChanged: (resolved: boolean) => void;
   onDeleted: () => void;
 }) {
@@ -33,6 +39,7 @@ export function FeedbackRow({
   const [resolving, setResolving] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [choosingModels, setChoosingModels] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
 
   async function toggleResolved() {
@@ -96,6 +103,11 @@ export function FeedbackRow({
           <button type="button" className="btn-text" onClick={() => onRerun(item.question)}>
             Rerun
           </button>
+          {chatSlots.length > 0 && (
+            <button type="button" className="btn-text" onClick={() => setChoosingModels((previous) => !previous)}>
+              Rerun with models…
+            </button>
+          )}
           {confirmingDelete ? (
             <span className="eval-delete-confirm">
               <button type="button" className="btn-text eval-delete" onClick={handleDelete} disabled={deleting}>
@@ -116,6 +128,17 @@ export function FeedbackRow({
         <tr>
           <td colSpan={COLUMN_COUNT}>
             <p className="alert" role="alert">{actionError}</p>
+          </td>
+        </tr>
+      )}
+      {choosingModels && (
+        <tr className="eval-detail">
+          <td colSpan={COLUMN_COUNT}>
+            <RerunModelsPanel
+              slots={chatSlots}
+              onRerun={(overrides) => onRerun(item.question, overrides)}
+              onCancel={() => setChoosingModels(false)}
+            />
           </td>
         </tr>
       )}

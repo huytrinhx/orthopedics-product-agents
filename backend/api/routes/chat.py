@@ -23,6 +23,13 @@ GET /threads (a user's threads, most-recent-first) and
 GET /threads/{thread_id} (one thread's transcript, read straight from the
 checkpointer rather than duplicated in chat_threads -- see
 chat_threads/repository.py's docstring).
+
+Every request (a fresh turn or a resume) resolves each chat slot's model
+once (issue #24, model_assignments/runtime.py) -- saved settings, then the
+conversation's admin-only overrides -- logs them as `chat_turn_models`, and
+hands them to the graph through the run config. A conversation with
+overrides (the Eval tab's rerun) also gets them in its "done" event, so the
+answer shows what it ran on.
 """
 import json
 import uuid
@@ -49,6 +56,14 @@ from chat_threads.repository import (
 from documents.repository import get_document
 from documents.repository import list_chunks as list_document_chunks
 from feedback.repository import get_feedback_for_thread, to_feedback_out
+from model_assignments.models import ModelChoice
+from model_assignments.runtime import (
+    gateway_configured,
+    log_slot_models,
+    resolve_turn_slot_models,
+    slot_models_config,
+)
+from model_assignments.slots import CHAT_SLOTS
 from observability.langfuse_setup import get_trace_url, new_callback_handler, score_trace
 from settings.repository import get_settings
 
@@ -104,6 +119,11 @@ class ChatStreamRequest(BaseModel):
     # thread_id resumes that thread's history via the checkpointer. Never
     # trust a client-supplied thread_id as-is -- see chat_threads.repository.owns_thread.
     thread_id: str | None = None
+    # Admin-only (issue #24, the Eval tab's rerun): per-slot models for this
+    # conversation, slot name -> model. A non-admin sending it gets a 403.
+    # Kept in the thread's state, so later turns and resumes in the same
+    # conversation use them too; production settings aren't touched.
+    model_overrides: dict[str, ModelChoice] | None = None
 
 
 class ChatResumeRequest(BaseModel):
@@ -224,6 +244,7 @@ async def _stream_chat(
     thread_id = body.thread_id or _new_thread_id(str(user.id))
     if body.thread_id and not owns_thread(str(user.id), body.thread_id):
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Not your thread")
+    requested_overrides = _validated_model_overrides(body.model_overrides, user)
 
     # Sidebar bookkeeping (ticket 10) -- a separate table from the
     # checkpointer's own (see chat_threads/repository.py), so this can't
@@ -234,11 +255,16 @@ async def _stream_chat(
         await touch_thread(thread_id)
 
     graph = get_workflow(workflow_name, request.app.state.checkpointer)
+    overrides = requested_overrides
+    if overrides is None and not is_new_thread:
+        thread_state = await graph.aget_state({"configurable": {"thread_id": thread_id}})
+        overrides = thread_state.values.get("model_overrides")
+    turn_models = await _turn_models(overrides, thread_id, workflow_name)
     handler, langfuse_config = new_callback_handler(
         user_id=str(user.id), session_id=thread_id, tags=[workflow_name]
     )
     config = {
-        "configurable": {"thread_id": thread_id},
+        "configurable": {"thread_id": thread_id, **slot_models_config(turn_models)},
         "recursion_limit": _RECURSION_LIMIT,
         **langfuse_config,
     }
@@ -262,11 +288,68 @@ async def _stream_chat(
         "correction_rounds": 0,
         "fact_check_issues": [],
     }
+    # Only written when this request carries overrides, so a later turn
+    # that doesn't keeps the conversation's.
+    if requested_overrides is not None:
+        inputs["model_overrides"] = requested_overrides
 
     return StreamingResponse(
-        _stream_graph(graph, workflow_name, thread_id, inputs, config, handler),
+        _stream_graph(
+            graph,
+            workflow_name,
+            thread_id,
+            inputs,
+            config,
+            handler,
+            shown_models=_shown_models(turn_models, overrides),
+        ),
         media_type="text/event-stream",
     )
+
+
+def _validated_model_overrides(
+    model_overrides: dict[str, ModelChoice] | None, user: UserRecord
+) -> dict[str, dict] | None:
+    """A chat request's per-slot overrides as plain data for the thread's
+    state, or None when it carries none. Admin-only, chat slots only, and
+    only with the gateway: without it every slot runs the default.
+    """
+    if model_overrides is None:
+        return None
+    if not user.is_admin:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Model overrides are admin-only")
+    if not gateway_configured():
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "Model overrides need OPENROUTER_API_KEY to be set"
+        )
+    chat_slot_names = {slot.value for slot in CHAT_SLOTS}
+    unknown = sorted(set(model_overrides) - chat_slot_names)
+    if unknown:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            f"Not a chat model slot: {', '.join(unknown)} (expected one of "
+            f"{', '.join(sorted(chat_slot_names))})",
+        )
+    return {slot_name: choice.model_dump() for slot_name, choice in model_overrides.items()}
+
+
+async def _turn_models(overrides: dict | None, thread_id: str, workflow_name: str) -> dict:
+    """Every chat slot's model for this request, read once (issue #24), and
+    the per-turn log line recording them.
+    """
+    turn_models = await resolve_turn_slot_models(overrides)
+    log_slot_models("chat_turn_models", turn_models, thread_id=thread_id, workflow=workflow_name)
+    return turn_models
+
+
+def _shown_models(turn_models: dict, overrides: dict | None) -> dict | None:
+    """What the answer shows it ran on: only in a conversation with
+    overrides (the Eval tab's rerun), so it can be compared against the
+    original answer. Other turns show nothing new.
+    """
+    if not overrides:
+        return None
+    return {slot_name: slot_model.describe() for slot_name, slot_model in turn_models.items()}
 
 
 async def _stream_graph(
@@ -276,6 +359,7 @@ async def _stream_graph(
     run_input,
     config: dict,
     handler,
+    shown_models: dict | None = None,
 ) -> AsyncIterator[str]:
     """Drives one graph run (a fresh turn's `inputs` dict, or a resume's
     `Command(resume=...)`) and turns its astream_events into SSE frames --
@@ -337,16 +421,16 @@ async def _stream_graph(
                 # off of.
                 final_messages = output.get("messages") or []
                 message_id = final_messages[-1].id if final_messages else None
-                yield _sse(
-                    "done",
-                    {
-                        "thread_id": thread_id,
-                        "message_id": message_id,
-                        "answer": output.get("answer"),
-                        "citations": [citation.model_dump(mode="json") for citation in citations],
-                        "trace_url": get_trace_url(handler.last_trace_id),
-                    },
-                )
+                done = {
+                    "thread_id": thread_id,
+                    "message_id": message_id,
+                    "answer": output.get("answer"),
+                    "citations": [citation.model_dump(mode="json") for citation in citations],
+                    "trace_url": get_trace_url(handler.last_trace_id),
+                }
+                if shown_models is not None:
+                    done["models"] = shown_models
+                yield _sse("done", done)
     except Exception as error:  # noqa: BLE001 - report over the stream rather than a bare 500 mid-stream
         yield _sse("error", {"message": str(error)})
 
@@ -394,13 +478,25 @@ async def _resume_chat(
 
     await touch_thread(body.thread_id)
 
+    overrides = state.values.get("model_overrides")
+    turn_models = await _turn_models(overrides, body.thread_id, workflow_name)
     handler, langfuse_config = new_callback_handler(
         user_id=str(user.id), session_id=body.thread_id, tags=[workflow_name]
     )
-    config = {**config, "recursion_limit": _RECURSION_LIMIT, **langfuse_config}
+    config = {
+        "configurable": {"thread_id": body.thread_id, **slot_models_config(turn_models)},
+        "recursion_limit": _RECURSION_LIMIT,
+        **langfuse_config,
+    }
     return StreamingResponse(
         _stream_graph(
-            graph, workflow_name, body.thread_id, Command(resume=body.human_input), config, handler
+            graph,
+            workflow_name,
+            body.thread_id,
+            Command(resume=body.human_input),
+            config,
+            handler,
+            shown_models=_shown_models(turn_models, overrides),
         ),
         media_type="text/event-stream",
     )

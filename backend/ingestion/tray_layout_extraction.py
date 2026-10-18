@@ -42,6 +42,13 @@ import pdfplumber
 from pydantic import BaseModel, Field
 
 from config.llm_clients import get_chat_model
+from model_assignments.runtime import (
+    SlotModel,
+    configured_slot_model,
+    invoke_with_output_fallback,
+    log_slot_models,
+)
+from model_assignments.slots import Slot
 from retrieval.graph_client import get_graph_client
 
 logger = logging.getLogger(__name__)
@@ -181,34 +188,41 @@ def _render_page_png_b64(storage_path: str | Path, page_number: int) -> str:
 
 
 async def _extract_page_groups(
-    image_b64: str, caption_text: str, *, known_parts: list[dict], known_trays: list[str]
+    image_b64: str,
+    caption_text: str,
+    *,
+    known_parts: list[dict],
+    known_trays: list[str],
+    slot_model: SlotModel | None = None,
 ) -> list[_TraySectionGroup]:
     catalog_listing = "\n".join(f"- {part['sku']}: {part['description']}" for part in known_parts)
     trays_listing = "\n".join(f"- {tray}" for tray in known_trays)
 
-    model = get_chat_model().with_structured_output(_TrayLayoutExtraction)
-    result = await model.ainvoke(
-        [
-            ("system", _SYSTEM_PROMPT),
-            (
-                "user",
-                [
-                    {
-                        "type": "text",
-                        "text": (
-                            f"Known trays:\n{trays_listing}\n\n"
-                            f"Known parts:\n{catalog_listing}\n\n"
-                            f"This page's own text (for context; the image is the "
-                            f"authoritative source for exact per-region labels):\n{caption_text}"
-                        ),
-                    },
-                    {
-                        "type": "image_url",
-                        "image_url": {"url": f"data:image/png;base64,{image_b64}"},
-                    },
-                ],
-            ),
-        ]
+    prompt = [
+        ("system", _SYSTEM_PROMPT),
+        (
+            "user",
+            [
+                {
+                    "type": "text",
+                    "text": (
+                        f"Known trays:\n{trays_listing}\n\n"
+                        f"Known parts:\n{catalog_listing}\n\n"
+                        f"This page's own text (for context; the image is the "
+                        f"authoritative source for exact per-region labels):\n{caption_text}"
+                    ),
+                },
+                {
+                    "type": "image_url",
+                    "image_url": {"url": f"data:image/png;base64,{image_b64}"},
+                },
+            ],
+        ),
+    ]
+    result = await invoke_with_output_fallback(
+        slot_model or SlotModel(Slot.TRAY_LAYOUT_EXTRACTION),
+        get_chat_model,
+        lambda chat_model: chat_model.with_structured_output(_TrayLayoutExtraction).ainvoke(prompt),
     )
     return result.groups
 
@@ -246,12 +260,24 @@ async def extract_tray_layout(
         known_skus = {part["sku"] for part in known_parts}
         known_tray_set = set(known_trays)
 
+        # Read once per document, like the entity-extraction slot (issue #24).
+        slot_model = await configured_slot_model(Slot.TRAY_LAYOUT_EXTRACTION)
+        log_slot_models(
+            "ingestion_models",
+            {Slot.TRAY_LAYOUT_EXTRACTION.value: slot_model},
+            document_id=document_id,
+        )
+
         written = 0
         all_valid_groups: list[_TraySectionGroup] = []
         for candidate in candidates:
             image_b64 = _render_page_png_b64(storage_path, candidate["page_number"])
             groups = await _extract_page_groups(
-                image_b64, candidate["text"], known_parts=known_parts, known_trays=known_trays
+                image_b64,
+                candidate["text"],
+                known_parts=known_parts,
+                known_trays=known_trays,
+                slot_model=slot_model,
             )
             for group in groups:
                 if group.tray not in known_tray_set:

@@ -66,6 +66,8 @@ from evals.intent_eval import (
     _seconds,
     _token_usage_by_model,
 )
+from model_assignments.runtime import SlotModel, slot_models_config
+from model_assignments.slots import Slot
 
 # Called like agents/judge.py's judge_answer: (query, retrieved, answer)
 # plus the reference_answer keyword.
@@ -310,7 +312,13 @@ async def evaluate_row(
     workflow_name: str,
     documents: list[DocumentRecord],
     judge: AnswerJudge | None = None,
+    slot_models: dict[Slot, SlotModel] | None = None,
 ) -> AnswerRowResult:
+    """`slot_models` (issue #24, the harness's `--model`) runs the
+    workflow's nodes and the judge on those models, through the same run
+    config the chat route uses. Without it, every slot runs what production
+    runs.
+    """
     # Looked up at call time rather than bound as the default, so a test can
     # swap the module's judge_answer under harness.run_eval.
     judge = judge or judge_answer
@@ -318,7 +326,13 @@ async def evaluate_row(
     # leaves behind can reach the next one.
     graph = get_workflow(workflow_name, InMemorySaver())
     thread_id = f"eval:{uuid.uuid4().hex}"
-    config = {"configurable": {"thread_id": thread_id}, "recursion_limit": _RECURSION_LIMIT}
+    configurable = {"thread_id": thread_id}
+    if slot_models:
+        configurable.update(
+            slot_models_config({slot.value: model for slot, model in slot_models.items()})
+        )
+    config = {"configurable": configurable, "recursion_limit": _RECURSION_LIMIT}
+    judge_slot_model = {"slot_model": slot_models[Slot.JUDGE]} if slot_models else {}
     query = row["query"]
 
     pauses: list[Pause] = []
@@ -380,6 +394,7 @@ async def evaluate_row(
                         judge_context(state_values),
                         answer,
                         reference_answer=row.get("expected_answer") or None,
+                        **judge_slot_model,
                     )
                 )
             judge_token_usage = _token_usage_by_model(judge_usage_callback.usage_metadata)
@@ -412,10 +427,11 @@ async def run_answer_eval(
     workflow_name: str,
     documents: list[DocumentRecord],
     judge: AnswerJudge | None = None,
+    slot_models: dict[Slot, SlotModel] | None = None,
 ) -> list[AnswerRowResult]:
     # One row at a time, like the intent eval: latency is part of the
     # report, and concurrent turns would measure rate limiting too.
-    return [await evaluate_row(row, workflow_name, documents, judge) for row in rows]
+    return [await evaluate_row(row, workflow_name, documents, judge, slot_models) for row in rows]
 
 
 def _mean(values: list[float]) -> float | None:
@@ -567,11 +583,21 @@ def format_report(report: AnswerReport, results: list[AnswerRowResult]) -> str:
 
 
 def write_results(
-    output_path: str | Path, report: AnswerReport, results: list[AnswerRowResult]
+    output_path: str | Path,
+    report: AnswerReport,
+    results: list[AnswerRowResult],
+    models: dict[str, dict] | None = None,
 ) -> None:
+    """`models` is the harness's slot -> {model_id, reasoning_effort,
+    source} for the run (issue #24), as in the intent eval's results file.
+    """
     with open(output_path, "w", encoding="utf-8") as file:
         json.dump(
-            {"report": asdict(report), "rows": [asdict(result) for result in results]},
+            {
+                "models": models or {},
+                "report": asdict(report),
+                "rows": [asdict(result) for result in results],
+            },
             file,
             indent=2,
             ensure_ascii=False,
