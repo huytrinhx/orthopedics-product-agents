@@ -14,7 +14,7 @@ import uuid
 
 from auth.repository import create_user
 from catalog.repository import list_families_with_trays, upsert_families_and_trays
-from documents.repository import create_document, delete_document
+from documents.repository import create_document, delete_document, set_tags
 from retrieval.vector_store import RetrievalFilters, get_vector_store
 from tags.repository import create_document_type
 
@@ -246,3 +246,39 @@ async def test_hybrid_search_respects_document_ids_filter():
     finally:
         await delete_document(wanted_document_id)
         await delete_document(other_document_id)
+
+
+async def test_hybrid_search_returns_each_chunks_document_tray_ids():
+    """Issue #21: rerank's tray bonus reads the tray ids of the chunk's
+    document, straight from document_trays -- a document with no trays
+    comes back with none, and still comes back (never a filter)."""
+    family_name = _unique("Family")
+    first_tray, second_tray = _unique("Tray"), _unique("Tray")
+    await upsert_families_and_trays({family_name: [first_tray, second_tray]})
+    [family] = [family for family in await list_families_with_trays() if family.name == family_name]
+    tray_ids = sorted(tray.id for tray in family.trays)
+    tagged_document_id = await _create_document()
+    untagged_document_id = await _create_document()
+    query_vector = _unit_vector(50)
+    try:
+        await set_tags(tagged_document_id, None, family.id, tray_ids)
+        async with get_vector_store() as store:
+            for document_id in (tagged_document_id, untagged_document_id):
+                await store.upsert_chunks(
+                    document_id,
+                    [{"chunk_index": 0, "content": "tray tagged torque guidance", "embedding": query_vector}],
+                )
+
+            results = await store.hybrid_search(
+                "tray tagged torque guidance", query_vector, top_k=5,
+                filters=RetrievalFilters(document_ids=[tagged_document_id, untagged_document_id]),
+            )
+
+        tray_ids_by_document = {result["document_id"]: result["tray_ids"] for result in results}
+        assert tray_ids_by_document == {
+            str(tagged_document_id): [str(tray_id) for tray_id in tray_ids],
+            str(untagged_document_id): [],
+        }
+    finally:
+        await delete_document(tagged_document_id)
+        await delete_document(untagged_document_id)

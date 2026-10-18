@@ -3,8 +3,8 @@
 query -> detect_intent -> clarify_question_type -> resolve_synonyms
        -> (if a term is genuinely ambiguous between canonical concepts:
            request_clarification, then back to resolve_synonyms)
-       -> hybrid_retrieve -> rerank -> resolve_skus -> aggregate_facts
-       -> generate -> self_eval
+       -> hybrid_retrieve -> resolve_query_parts -> rerank -> resolve_skus
+       -> aggregate_facts -> generate -> self_eval
        -> (if the fact check found problems and no correction pass has
            run yet this turn: generate again with the problems listed,
            then self_eval again)
@@ -54,6 +54,13 @@ rerank scores that retrieval pool with BM25 (a classic keyword-overlap
 ranking replacing an LLM relevance-scoring pass -- see its own
 docstring) plus the same doctype-priority bonus, so picking among an
 already-retrieved candidate pool costs no model round-trip.
+
+Tray (issue #21) is a soft signal only: resolve_query_parts derives the
+turn's trays from the Parts the rep's own words match and, for Cannulated
+Screws, from a stated screw diameter; rerank gives documents tagged with
+one of them a small bonus, and each resolved Part's tray reaches generate
+in the catalog facts. Never asked for, and never a retrieval filter --
+most families have one tray, and real questions span trays.
 """
 import asyncio
 import logging
@@ -75,7 +82,7 @@ from agents.tools.part_lookup import part_lookup
 from agents.tools.term_extraction import extract_candidate_terms, with_singular_variants
 from agents.tools.vector_search import vector_search
 from catalog.display_names import CatalogDisplayNames, catalog_display_names_for
-from catalog.repository import ProductFamilyRecord, list_families_with_trays
+from catalog.repository import ProductFamilyRecord, TrayRecord, list_families_with_trays
 from config.llm_clients import get_chat_model
 from doc_type_hierarchy.repository import RankedDocumentType, list_hierarchy
 from retrieval.graph_client import get_graph_client
@@ -136,6 +143,19 @@ class DeterministicState(BaseAgentState, total=False):
     # to one here -- see resolve_skus's docstring for why.
     resolved_parts: list[dict]
     aggregated_facts: str
+    # Set by resolve_query_parts (issue #21), which runs before rerank:
+    # query_parts is the Part lookup for the rep's own query terms --
+    # resolve_skus starts from it rather than looking those terms up again
+    # -- and turn_tray_ids is the ids of the trays those Parts belong to,
+    # plus any tray a stated screw diameter names. rerank's tray bonus
+    # reads turn_tray_ids; nothing filters on it.
+    query_parts: list[dict]
+    turn_tray_ids: list[str]
+    # Also set by resolve_query_parts: the display name of every tray in
+    # the resolved family (every family's, on an unscoped turn), so
+    # self_eval's tray check recognizes a tray the answer names even when
+    # no resolved Part is in it.
+    family_tray_names: list[str]
     answer: str
     citations: list[str]
     # Set by request_clarification when resolve_synonyms finds an ambiguous
@@ -666,6 +686,15 @@ def _should_clarify_synonyms(
 # favors a more-authoritative source on close calls rather than overriding
 # a much more keyword-relevant passage from a lower-tier doctype.
 _DOCTYPE_BONUS_STEP = 0.05
+# rerank's bonus for a chunk whose document is tagged with one of the
+# turn's trays (issue #21) -- the same size as the *lowest* doc-type rank's
+# bonus (1 * _DOCTYPE_BONUS_STEP), never more, so the doc-type order still
+# dominates: tray only breaks ties among otherwise-close passages. It's a
+# soft signal because most families have a single tray and real questions
+# span trays (a Lapidus back table needs the Nitinol and the MINI tray).
+# Flat, not per matching tray: a document carrying all of a family's trays
+# shouldn't outrank one carrying just the right one.
+_TRAY_BONUS = _DOCTYPE_BONUS_STEP
 
 
 def _ranked_document_type_ids(
@@ -708,7 +737,11 @@ async def hybrid_retrieve(state: DeterministicState) -> dict:
     # family-scoped turn only sees chunks of documents tagged with that
     # family, and a document with no family is excluded -- accepted, since
     # the indexing gate (issue #14) requires a family before a document is
-    # indexed. No family resolved -> no family filter.
+    # indexed. No family resolved -> no family filter. That also drops a
+    # document describing the identical Part under another family (174
+    # SKUs sit in several families' trays); relaxing the filter to every
+    # family holding the turn's resolved SKUs was left out of issue #21 as
+    # a candidate follow-up ticket. Never filtered by tray -- see rerank.
     search_query = state.get("search_query") or state["query"]
     # Canonical terms, not a flat canonical+alias mix -- see
     # resolve_synonyms' docstring.
@@ -745,12 +778,130 @@ async def hybrid_retrieve(state: DeterministicState) -> dict:
             "score": result["score"],
             "document_type": result.get("document_type"),
             "document_type_id": result.get("document_type_id"),
+            "tray_ids": result.get("tray_ids") or [],
         }
         for result in results
     ]
     return {
         "retrieved": retrieved,
         "document_type_bonuses": _document_type_bonuses(question_type, ranking),
+    }
+
+
+# Issue #21's stated-diameter rule applies to this one family (its catalog
+# name): Cannulated Screws' four trays split cleanly by screw diameter
+# (Forefoot Fixation 2.0-3.5, 4.0/4.5, 5.5, 6.5/7.0), so a diameter the rep
+# states names the tray outright. Other families mix screw sizes within a
+# tray, where a stated size says nothing about which one.
+_DIAMETER_RULE_FAMILY = "Cannulated Screws"
+# A size as a rep writes it: "4.0", "4.5mm", "Ø6.5", "7 mm". The number
+# can't touch a letter or digit on either side, so a SKU (MSD14020) never
+# yields one, and "4.0/4.5" yields both. A length ("40mm") matches too, but
+# no screw has a 40mm diameter, so it names no tray.
+_STATED_SIZE_PATTERN = re.compile(r"(?<![A-Za-z0-9.])(\d{1,2}(?:\.\d+)?)(?:\s*mm)?(?![A-Za-z0-9])")
+# A screw's diameter is the number before the first " X " in its catalog
+# description: "SCREW, CANN, HEADED (T15), 4.0 X 20MM" -> 4.0, and
+# "SCREW, CANN, HEADLESS, 6.5 X 40 X 16MM" -> 6.5.
+_SCREW_DIAMETER_PATTERN = re.compile(r"^SCREW\b.*?\b(\d+(?:\.\d+)?) X ", re.IGNORECASE)
+
+
+def _screw_diameters(descriptions: list[str]) -> set[float]:
+    matches = (_SCREW_DIAMETER_PATTERN.match(description) for description in descriptions)
+    return {float(match.group(1)) for match in matches if match}
+
+
+def _trays_for_stated_diameters(query: str, descriptions_by_tray: dict[str, list[str]]) -> list[str]:
+    """The trays holding a screw in a diameter the query states, read off
+    each tray's own Part descriptions (graph_client.
+    list_part_descriptions_by_tray) -- the rule is data-driven, so there's
+    no diameter -> tray table in code to fall out of step with the catalog.
+    Empty when the query states no size, or none any tray's screws come in.
+    """
+    stated = {float(size) for size in _STATED_SIZE_PATTERN.findall(query)}
+    if not stated:
+        return []
+    return sorted(
+        tray for tray, descriptions in descriptions_by_tray.items() if stated & _screw_diameters(descriptions)
+    )
+
+
+def _turn_tray_ids(parts: list[dict], diameter_tray_names: list[str], trays: list[TrayRecord]) -> list[str]:
+    """The ids of the trays in `trays` (the resolved family's, or every
+    family's on an unscoped turn) that this turn points at: each matched
+    Part's trays (display names, as part_lookup returns them) plus the
+    stated-diameter rule's (catalog names, straight from the graph). Order
+    follows the Parts', deduped; a name with no mirrored tray is dropped.
+    """
+    ids_by_display_name = {tray.display_name: str(tray.id) for tray in trays}
+    ids_by_catalog_name = {tray.name: str(tray.id) for tray in trays}
+    tray_ids = [
+        ids_by_display_name.get(tray_name)
+        for part in parts
+        for tray_name in part.get("trays") or []
+    ] + [ids_by_catalog_name.get(tray_name) for tray_name in diameter_tray_names]
+    return list(dict.fromkeys(tray_id for tray_id in tray_ids if tray_id))
+
+
+def _query_terms(state: DeterministicState) -> list[str]:
+    """The rep's own query terms plus this turn's canonical terms -- e.g. a
+    query that says "wire" already resolved "guidepin", the term that
+    actually substring-matches Part descriptions."""
+    return with_singular_variants(
+        [*extract_candidate_terms(state["query"]), *state.get("resolved_canonical_terms", [])]
+    )[:MAX_TERMS_PER_TURN]
+
+
+async def _lookup_parts(terms: list[str], family: str | None) -> list[dict]:
+    """Every Part `terms` match, deduped by SKU in term order."""
+    results = await asyncio.gather(
+        *(part_lookup.ainvoke({"term": term, "product_family": family}) for term in terms)
+    )
+    matched: dict[str, dict] = {}
+    for parts in results:
+        for part in parts:
+            sku = part.get("sku")
+            if sku:
+                matched.setdefault(sku, part)
+    return list(matched.values())
+
+
+async def resolve_query_parts(state: DeterministicState) -> dict:
+    """Issue #21: looks up the Parts the rep's own query terms match, and
+    derives the turn's trays from them, before rerank -- which runs ahead
+    of resolve_skus, so the trays have to be known earlier than that node
+    could tell it. resolve_skus then starts from these query_parts and
+    only adds the passage-derived lookup technique_procedural turns get.
+
+    A turn's trays are each matched Part's trays (the graph's
+    BELONGS_TO_TRAY, via part_lookup) plus, for Cannulated Screws only, any
+    tray a stated screw diameter names (_trays_for_stated_diameters -- a
+    rule, not a model call). They only feed rerank's _TRAY_BONUS: tray is
+    never asked for and never filters retrieval, since most families have
+    one tray and a real question can span several.
+
+    Part lookup stays scoped to the resolved family, so a Part shared with
+    another family (MPSN3522 sits in 7 families' trays) only contributes
+    that family's trays here -- relaxing #18's family scoping for shared
+    Parts is a candidate follow-up ticket, not part of this one.
+    """
+    # A display name -- part_lookup maps it back to the catalog name.
+    family_name = state.get("resolved_family")
+    query_parts = await _lookup_parts(_query_terms(state), family_name)
+
+    families = await list_families_with_trays()
+    family = next(
+        (candidate for candidate in families if str(candidate.id) == state.get("resolved_family_id")), None
+    )
+    trays = family.trays if family else [tray for every_family in families for tray in every_family.trays]
+    diameter_tray_names: list[str] = []
+    if family is not None and family.name == _DIAMETER_RULE_FAMILY and _STATED_SIZE_PATTERN.search(state["query"]):
+        descriptions_by_tray = await get_graph_client().list_part_descriptions_by_tray(family.name)
+        diameter_tray_names = _trays_for_stated_diameters(state["query"], descriptions_by_tray)
+
+    return {
+        "query_parts": query_parts,
+        "turn_tray_ids": _turn_tray_ids(query_parts, diameter_tray_names, trays),
+        "family_tray_names": [tray.display_name for tray in trays],
     }
 
 
@@ -807,6 +958,10 @@ def _normalize_to_unit_range(scores: list[float]) -> list[float]:
     return [(score - lowest) / (highest - lowest) for score in scores]
 
 
+def _tray_bonus(passage_tray_ids: list[str], turn_tray_ids: set[str]) -> float:
+    return _TRAY_BONUS if turn_tray_ids.intersection(passage_tray_ids) else 0.0
+
+
 async def rerank(state: DeterministicState) -> dict:
     """Ranks hybrid_retrieve's candidate pool by BM25 keyword relevance
     plus the doctype-priority bonus -- no LLM call (2026-09-05, replacing
@@ -827,6 +982,10 @@ async def rerank(state: DeterministicState) -> dict:
     output), so leaving it unnormalized would make _DOCTYPE_BONUS_STEP's
     calibration (tuned to matter at 0-1 scale) meaningless noise by
     comparison on some turns and dominant on others.
+
+    Issue #21 adds _TRAY_BONUS on top for a passage whose document is
+    tagged with one of resolve_query_parts' turn_tray_ids -- a tiebreak,
+    not a filter.
     """
     passages = state["retrieved"]
     if not passages:
@@ -838,16 +997,31 @@ async def rerank(state: DeterministicState) -> dict:
     # table for this turn's question type. An untagged chunk (no id) or a
     # type that question type doesn't rank gets no bonus.
     document_type_bonuses = state.get("document_type_bonuses") or {}
+    turn_tray_ids = set(state.get("turn_tray_ids") or [])
     # score is overwritten with the combined (BM25 + doctype priority
-    # bonus) value, not left at hybrid_retrieve's original RRF fusion
+    # bonus + tray bonus) value, not left at hybrid_retrieve's original RRF fusion
     # score -- that's the number that actually decided this passage's
     # rank, and a trace/debugging view showing the old, pre-rerank score
     # here would misrepresent why a given passage made the cut.
     combined = [
-        {**passage, "score": score + document_type_bonuses.get(passage.get("document_type_id") or "", 0.0)}
+        {
+            **passage,
+            "score": score
+            + document_type_bonuses.get(passage.get("document_type_id") or "", 0.0)
+            + _tray_bonus(passage.get("tray_ids") or [], turn_tray_ids),
+        }
         for passage, score in zip(passages, bm25)
     ]
-    scored = sorted(combined, key=lambda passage: passage["score"], reverse=True)
+    # Ties broken by the doc-type bonus alone: _TRAY_BONUS can lift a
+    # passage level with the next doc-type rank up, never past it.
+    scored = sorted(
+        combined,
+        key=lambda passage: (
+            passage["score"],
+            document_type_bonuses.get(passage.get("document_type_id") or "", 0.0),
+        ),
+        reverse=True,
+    )
     return {"reranked": scored[:RERANK_TOP_N]}
 
 
@@ -890,41 +1064,49 @@ async def resolve_skus(state: DeterministicState) -> dict:
     ran one, so folding both concerns into one upfront node was no longer
     worth the coupling. Costs one extra round of Neo4j lookups per turn
     versus the ticket-24 shape; still per-term, still cheap.
+
+    Issue #21 moved the query-term half of that lookup upstream again, to
+    resolve_query_parts -- rerank needs those Parts' trays and runs before
+    this node. It's still only a Part lookup, not search-text enrichment,
+    so the 2026-09-04 problem doesn't come back. This node starts from its
+    query_parts and adds only the passage-derived lookup, so no query term
+    is looked up twice, and the two together stay within
+    MAX_TERMS_PER_TURN, query terms first.
     """
-    question_type = state.get("resolved_question_type")
+    if state.get("resolved_question_type") != "technique_procedural":
+        return {"resolved_parts": list(state.get("query_parts") or [])}
+
+    query_terms = _query_terms(state)
+    passage_text = " ".join(passage["text"] for passage in (state.get("reranked") or []))
+    passage_terms = [
+        term
+        for term in with_singular_variants(extract_candidate_terms(passage_text))
+        if term not in query_terms
+    ][: MAX_TERMS_PER_TURN - len(query_terms)]
     # A display name -- part_lookup maps it back to the catalog name.
-    family = state.get("resolved_family")
+    passage_parts = await _lookup_parts(passage_terms, state.get("resolved_family"))
 
-    query_terms = with_singular_variants(
-        [*extract_candidate_terms(state["query"]), *state.get("resolved_canonical_terms", [])]
-    )
-    all_terms = query_terms
-    if question_type == "technique_procedural":
-        passage_text = " ".join(passage["text"] for passage in (state.get("reranked") or []))
-        all_terms = with_singular_variants([*query_terms, *extract_candidate_terms(passage_text)])
-    all_terms = all_terms[:MAX_TERMS_PER_TURN]
-
-    results = await asyncio.gather(
-        *(part_lookup.ainvoke({"term": term, "product_family": family}) for term in all_terms)
-    )
-    matched: dict[str, dict] = {}
-    for parts in results:
-        for part in parts:
-            sku = part.get("sku")
-            if sku:
-                matched.setdefault(sku, part)
-
+    matched = {part["sku"]: part for part in state.get("query_parts") or []}
+    for part in passage_parts:
+        matched.setdefault(part["sku"], part)
     return {"resolved_parts": list(matched.values())}
 
 
 def _format_part(part: dict) -> str:
     sku = part.get("sku", "?")
     description = part.get("description", "")
-    extra = ", ".join(
-        f"{key}={value}"
+    properties = {
+        key: value
         for key, value in part.items()
-        if key not in ("sku", "description") and value not in (None, "")
-    )
+        if key not in ("sku", "description", "trays") and value not in (None, "")
+    }
+    # Issue #21: the Part's tray, so an answer can say "in the REFLEX MINI
+    # tray" -- and the fact check can hold it to that. A part in several of
+    # the family's trays lists each; "; " because a tray name can itself
+    # contain " | " ("Soft Tissue | Comprehensive Instrument Tray").
+    if part.get("trays"):
+        properties["tray"] = "; ".join(part["trays"])
+    extra = ", ".join(f"{key}={value}" for key, value in properties.items())
     line = f"- {sku}: {description}"
     return f"{line} ({extra})" if extra else line
 
@@ -984,6 +1166,9 @@ _GENERATE_SYSTEM_PROMPT = (
     "line. Only list genuine contradictions about the same item -- not a "
     "passage that's merely less complete, a different item, or a value the "
     "catalog doesn't record. Leave the section out when there are none.\n"
+    "- When the question asks where an item is, or which tray or set it's "
+    "in, name its tray from the known catalog facts (their tray= value), "
+    "exactly as written there.\n"
     "- Don't answer beyond what the context passages and known catalog "
     "facts actually support -- if a specific item asked about isn't among "
     "either, say so plainly rather than guessing, and, when the known "
@@ -1093,6 +1278,7 @@ async def self_eval(state: DeterministicState) -> dict:
             [*(passage["text"] for passage in passages), state.get("aggregated_facts") or ""]
         ),
         parts=state.get("resolved_parts") or [],
+        tray_names=set(state.get("family_tray_names") or []),
     )
     return {"fact_check_issues": issues}
 
@@ -1181,6 +1367,7 @@ def build_graph(checkpointer):
     graph.add_node("clarify_question_type", clarify_question_type)
     graph.add_node("resolve_synonyms", resolve_synonyms)
     graph.add_node("hybrid_retrieve", hybrid_retrieve)
+    graph.add_node("resolve_query_parts", resolve_query_parts)
     graph.add_node("rerank", rerank)
     graph.add_node("resolve_skus", resolve_skus)
     graph.add_node("aggregate_facts", aggregate_facts)
@@ -1193,7 +1380,8 @@ def build_graph(checkpointer):
     graph.add_edge("detect_intent", "clarify_question_type")
     graph.add_edge("clarify_question_type", "resolve_synonyms")
     graph.add_conditional_edges("resolve_synonyms", _should_clarify_synonyms)
-    graph.add_edge("hybrid_retrieve", "rerank")
+    graph.add_edge("hybrid_retrieve", "resolve_query_parts")
+    graph.add_edge("resolve_query_parts", "rerank")
     graph.add_edge("rerank", "resolve_skus")
     graph.add_edge("resolve_skus", "aggregate_facts")
     graph.add_edge("aggregate_facts", "generate")

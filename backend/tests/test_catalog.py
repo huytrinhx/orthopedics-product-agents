@@ -157,6 +157,7 @@ async def test_chat_tools_show_display_names_and_accept_them_back(monkeypatch, t
     found = await part_lookup.ainvoke({"term": sku, "product_family": family_display})
     assert [part["sku"] for part in found][:1] == [sku]
     assert found[0]["product_family"] == family_display
+    assert found[0]["trays"] == [tray_display]
 
     related = await graph_query.ainvoke({"entity": sku, "relationship": "BELONGS_TO_TRAY"})
     assert [row["related_entity"] for row in related] == [tray_display]

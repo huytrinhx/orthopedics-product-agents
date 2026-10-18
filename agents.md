@@ -76,7 +76,7 @@ picking this repo up cold, read this before making structural changes.
     trigger (`workflow_dispatch`) is allowed; a per-PR job isn't.
 - **Inline self-eval is a deterministic fact check, not the judge.** Every
   workflow's `self_eval` node runs `backend/agents/fact_check.py` — citation
-  ids, SKUs, and thread types checked against the turn's own retrieved
+  ids, SKUs, thread types, and trays checked against the turn's own retrieved
   passages and catalog Part records, no model call — and a failed check
   earns one correction pass (`MAX_CORRECTION_ROUNDS`) with the specific
   problems listed. This replaced a per-turn LLM-judge call: it costs nothing

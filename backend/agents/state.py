@@ -36,6 +36,10 @@ class RetrievedPassage(TypedDict):
     # -- rerank matches it against the question type -> doc type hierarchy
     # table (issue #17), which is keyed by id, not name.
     document_type_id: str | None
+    # The ids (as strings) of every tray the chunk's document is tagged
+    # with, possibly none -- issue #21: rerank gives a small bonus to a
+    # document tagged with one of the turn's trays. Never a filter.
+    tray_ids: list[str]
 
 
 class BaseAgentState(TypedDict):

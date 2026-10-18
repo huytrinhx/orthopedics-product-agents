@@ -73,6 +73,9 @@ class _Harness:
         async def fake_resolve_synonyms(state):
             return {"resolved_canonical_terms": [], "synonym_ambiguity": None}
 
+        async def fake_resolve_query_parts(state):
+            return {"query_parts": [], "turn_tray_ids": []}
+
         async def fake_resolve_skus(state):
             return {"resolved_parts": []}
 
@@ -90,6 +93,7 @@ class _Harness:
         monkeypatch.setattr(det, "list_hierarchy", fake_list_hierarchy)
         monkeypatch.setattr(det, "vector_search", self.search)
         monkeypatch.setattr(det, "resolve_synonyms", fake_resolve_synonyms)
+        monkeypatch.setattr(det, "resolve_query_parts", fake_resolve_query_parts)
         monkeypatch.setattr(det, "resolve_skus", fake_resolve_skus)
         monkeypatch.setattr(det, "aggregate_facts", fake_aggregate_facts)
         monkeypatch.setattr(det, "generate", fake_generate)

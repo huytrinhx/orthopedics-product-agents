@@ -126,6 +126,33 @@ async def test_procedure_requires_tray_noops_for_unknown_tray():
     assert await client.attach_procedure(procedure, unknown_tray, document_id) is False
 
 
+async def test_find_parts_returns_each_parts_trays_once_per_part():
+    """Issue #21: a Part in two trays of its family comes back as one row
+    carrying both trays, not one row per tray."""
+    client = get_graph_client()
+    family = _unique("FAMILY")
+    first_tray, second_tray = sorted([_unique("TRAY"), _unique("TRAY")])
+    sku = _unique("SKU")
+    await client.upsert_tray(first_tray, family)
+    await client.upsert_tray(second_tray, family)
+    await client.upsert_part(sku, first_tray, description="PICKUPS")
+    await client.upsert_part(sku, second_tray, description="PICKUPS")
+
+    found = await client.find_parts(sku, product_family=family)
+
+    assert [(part["sku"], part["trays"]) for part in found] == [(sku, [first_tray, second_tray])]
+
+
+async def test_list_part_descriptions_by_tray_groups_one_familys_parts():
+    client = get_graph_client()
+    family = _unique("FAMILY")
+    tray = _unique("TRAY")
+    await client.upsert_tray(tray, family)
+    await client.upsert_part(_unique("SKU"), tray, description="SCREW, CANN, HEADED, 5.5 X 40MM")
+
+    assert await client.list_part_descriptions_by_tray(family) == {tray: ["SCREW, CANN, HEADED, 5.5 X 40MM"]}
+
+
 async def test_synonym_groups_include_canonical_and_both_edge_types():
     client = get_graph_client()
     canonical = _unique("CANONICAL")
