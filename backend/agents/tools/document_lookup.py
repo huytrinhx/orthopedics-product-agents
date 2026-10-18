@@ -30,6 +30,40 @@ def _words(text: str) -> list[str]:
     return [word for word in re.split(r"[^a-z0-9]+", text.lower()) if word]
 
 
+def _name_words(name: str) -> list[str]:
+    return [word for word in _words(name) if word not in _STOPWORDS]
+
+
+def _document_words(document: DocumentRecord) -> list[str]:
+    """What a document is known by: its filename, Product Family (catalog
+    and display name), and document-type tag, together.
+    """
+    return _words(
+        " ".join(
+            filter(
+                None,
+                [
+                    document.filename,
+                    document.product_family_name,
+                    document.product_family_display_name,
+                    document.document_type_name,
+                ],
+            )
+        )
+    )
+
+
+def names_document(name: str, document: DocumentRecord) -> bool:
+    """True when every meaningful word of `name` is one of the document's
+    words -- the strict form of rank_documents_by_name's match, for the
+    answer eval (evals/answer_eval.py) to tell whether a golden dataset's
+    expected citation ("MIS Inventory Control Form") is a document an
+    answer cited, without one shared word like "MIS" counting.
+    """
+    query_words = _name_words(name)
+    return bool(query_words) and set(query_words) <= set(_document_words(document))
+
+
 def rank_documents_by_name(name: str, documents: list[DocumentRecord]) -> list[DocumentRecord]:
     """Documents matching `name`, best first: the whole name appearing in
     order beats scattered word hits, then more matched words beat fewer.
@@ -38,25 +72,13 @@ def rank_documents_by_name(name: str, documents: list[DocumentRecord]) -> list[D
     tagged with the MIS Foot Recon family. A document matching none of the
     name's meaningful words is left out.
     """
-    query_words = [word for word in _words(name) if word not in _STOPWORDS]
+    query_words = _name_words(name)
     if not query_words:
         return []
     query_phrase = " ".join(query_words)
     scored: list[tuple[bool, int, DocumentRecord]] = []
     for document in documents:
-        haystack_words = _words(
-            " ".join(
-                filter(
-                    None,
-                    [
-                        document.filename,
-                        document.product_family_name,
-                        document.product_family_display_name,
-                        document.document_type_name,
-                    ],
-                )
-            )
-        )
+        haystack_words = _document_words(document)
         haystack = " ".join(haystack_words)
         matched_word_count = sum(1 for word in query_words if word in haystack_words)
         if matched_word_count:

@@ -71,19 +71,38 @@ picking this repo up cold, read this before making structural changes.
   the offline eval harness (`backend/evals/harness.py`) and the human
   feedback UI — on the same schema, so human and automated scores stay
   directly comparable. Don't fork the rubric per call site.
-  - **The harness only runs the intent eval so far** (issue #25 Slice 1):
-    `python -m evals.harness intent` (from `backend/`, needs
-    `OPENAI_API_KEY` and a seeded catalog mirror) scores family accuracy,
-    question-type accuracy, clarification precision/recall/rate, latency
-    and tokens on `intent_detection.jsonl`. It calls the deterministic
-    workflow's own `_classify_intent`, `_resolve_family` and pause
-    conditions (`_needs_family_clarification`,
-    `_needs_question_type_clarification`) rather than copies, so keep
-    those the single place the decisions live. `run_eval` (Slice 2: full
-    answers scored by the judge) still raises `NotImplementedError`. Its
-    pause policy is settled (issue #25 comment): a row that pauses resumes
-    with a scripted reply stored on the row. Results are a CLI report,
-    not persisted.
+  - **The harness has two evals** (issue #25), both run from `backend/`
+    with `OPENAI_API_KEY`, both a CLI report (plus `--output` JSON), with
+    nothing persisted.
+    - `python -m evals.harness intent` (Slice 1, needs a seeded catalog
+      mirror) scores family accuracy, question-type accuracy,
+      clarification precision/recall/rate, latency and tokens on
+      `intent_detection.jsonl`. It calls the deterministic workflow's own
+      `_classify_intent`, `_resolve_family` and pause conditions
+      (`_needs_family_clarification`, `_needs_question_type_clarification`)
+      rather than copies, so keep those the single place the decisions live.
+    - `python -m evals.harness answers --workflow <name>` (Slice 2,
+      `evals/answer_eval.py`, needs ingested documents, the catalog mirror
+      and Neo4j) runs every per-family QA row through a registered workflow
+      as one fresh thread on an in-memory checkpointer, so it writes no
+      checkpoints or chat threads. It reports the judge's per-axis
+      averages (with the row's `expected_answer` passed as the judge's
+      `reference_answer`), the workflow's own fact-check issue rate,
+      citation recall (an expected citation counts when a document the
+      answer cited carries every word of it, `names_document`), pause rate
+      by kind, p50/p95 latency, tokens per model, and a table of failures
+      and low scores.
+    - **Pause policy (b): a paused row resumes with a scripted reply,**
+      chosen by the node that paused: the row's `product_family` for the
+      family question, its first `question_type` (as the offered option
+      text) for the question-type one, and the first option for the
+      synonym one (taken from `synonym_ambiguity`, since that interrupt
+      offers none). A row's `clarification_replies` overrides these; it's
+      written by `build_dataset.py`'s `CLARIFICATION_REPLY_OVERRIDES`, not
+      by hand. At most 3 resumes per row (`MAX_RESUMES_PER_ROW`); a row
+      still paused after that is a failure. If you add an interrupt() to
+      a workflow, give its node a pause kind in `answer_eval.py`, or it
+      gets its first option.
   - **Evals are run by an admin, by hand — never automatically in CI.**
     They cost real model calls. **Whenever a change touches the agent
     backend** (`backend/agents/`, or anything a workflow node calls into,

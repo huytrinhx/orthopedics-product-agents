@@ -307,14 +307,22 @@ re-run whenever they apply:
 1. Add `backend/agents/workflows/<name>.py` building on `agents.state.BaseAgentState`,
    ending with `register("<name>", build_graph)`.
 2. Import it from `backend/agents/workflows/__init__.py`.
-3. It's now selectable via `/chat/<name>/stream` — no other code changes
-   required. (Running it through `backend/evals/harness.py` against the QA
-   golden datasets is issue #25 Slice 2, not built yet.)
+3. It's now selectable via `/chat/<name>/stream`, and the answer eval runs
+   it with `python -m evals.harness answers --workflow <name>` (see Offline
+   evals below) — no other code changes required. If it calls
+   `interrupt()` from a new node, give that node a pause kind in
+   `backend/evals/answer_eval.py`.
 
 ## Offline evals
 
-Only the intent eval exists so far (issue #25 Slice 1). It runs each
-query in `backend/evals/golden_datasets/intent_detection.jsonl` through the
+There are two evals (issue #25). Both are run by an admin by hand: they
+make real model calls, so nothing runs in CI. Both print a report and,
+with `--output`, also write it with per-row results as JSON. Nothing is
+persisted. Both use `CHAT_MODEL`, like the app. Cost isn't computed (no
+price table).
+
+**Intent eval** (Slice 1). It runs each query in
+`backend/evals/golden_datasets/intent_detection.jsonl` through the
 deterministic workflow's own intent classifier and reports family accuracy,
 question-type accuracy (exact set and any-overlap), family-clarification
 precision/recall, the question-type-clarification rate against expected,
@@ -328,8 +336,50 @@ From `backend/`:
 .venv/bin/python -m evals.harness intent --dataset evals/golden_datasets/intent_detection.jsonl --output intent-results.json
 ```
 
-It uses `OPENAI_CHAT_MODEL`, like the app. Cost isn't computed (no price
-table), and nothing runs in CI.
+**Answer eval** (Slice 2, `backend/evals/answer_eval.py`). It runs every
+row of the per-family QA files (`mis-foot-recon-system.jsonl`, ...) through
+a registered workflow, one fresh thread per row, and scores each final
+answer. It reports:
+
+- the judge's averages for faithfulness, relevance, style and citation
+  (`backend/agents/judge.py`, the rubric human feedback uses, given the
+  row's `expected_answer` as a reference);
+- the fact-check issue rate (the workflow's own `self_eval` on the final
+  answer);
+- citation recall against `expected_citations`, which name documents. An
+  expected citation counts when a document the answer cited has every word
+  of it in its filename, family or document type;
+- the pause rate by kind, p50/p95 latency, and tokens per model (workflow
+  and judge apart);
+- a table of failed rows and rows with any judge score under 0.6.
+
+It needs `OPENAI_API_KEY`, a `DATABASE_URL` with ingested documents and
+the catalog mirror, and Neo4j. It only reads them: threads live on an
+in-memory checkpointer, so a run writes no checkpoints or chat threads.
+From `backend/`:
+
+```bash
+.venv/bin/python -m evals.harness answers --workflow deterministic
+# one family's file (or a directory of them), plus per-row results as JSON:
+.venv/bin/python -m evals.harness answers --workflow react_agent --dataset evals/golden_datasets/reflex-hybrid.jsonl --output answer-results.json
+```
+
+When a turn pauses on a clarification, the eval resumes it with a scripted
+reply, chosen by which question it is:
+
+| Question | Reply |
+| --- | --- |
+| Family (`detect_intent`) | the row's `product_family` |
+| Question type (`clarify_question_type`) | the row's first `question_type`, as the offered option text ("Something else" if it has none) |
+| Synonym (`request_clarification`) | the first option: the first canonical term of the ambiguous word |
+
+A row's `clarification_replies` (`{"family": ..., "question_type": ...,
+"synonym": ...}`) overrides any of these. Add it through
+`CLARIFICATION_REPLY_OVERRIDES` in `golden_datasets/build_dataset.py` and
+rerun that script, rather than editing the JSONL. A row resumes at most 3
+times. One still paused after that counts as a failure, with the question
+it stopped on. Every pause, its question and the reply used are in the
+`--output` JSON.
 
 ## Status
 

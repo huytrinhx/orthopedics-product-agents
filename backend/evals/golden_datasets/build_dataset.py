@@ -6,7 +6,9 @@ type and clarification eval, ticket 09 / issues #18 and #19) -- the latter
 also gets a few hand-authored rows appended after the CSV-derived ones:
 family-clarification cases (_AMBIGUOUS_FIXTURES), extra documents_lookup
 examples (_DOCUMENTS_LOOKUP_FIXTURES, the rarest question type in the CSV),
-and multi-turn follow-ups (_FOLLOW_UP_FIXTURES, issue #22).
+and multi-turn follow-ups (_FOLLOW_UP_FIXTURES, issue #22). A QA row whose
+query is in CLARIFICATION_REPLY_OVERRIDES also gets clarification_replies,
+the answer eval's per-row replies to a clarification (issue #25 Slice 2).
 Rerun this after new rows land in feedback-notes.csv.
 
 feedback-notes.csv stays exactly as reviewers wrote it, so its "Indexed
@@ -93,7 +95,7 @@ def load_rows() -> list[list[str]]:
 
 def build_qa_record(row: list[str]) -> dict:
     prompt = row[COL_PROMPT].strip()
-    return {
+    record = {
         "query": prompt,
         "expected_answer": row[COL_PREFERRED_ANSWER].strip(),
         "expected_citations": [
@@ -105,6 +107,37 @@ def build_qa_record(row: list[str]) -> dict:
         "content_feedback": row[COL_CONTENT_FEEDBACK].strip(),
         "formatting_feedback": row[COL_FORMATTING_FEEDBACK].strip(),
     }
+    if prompt in CLARIFICATION_REPLY_OVERRIDES:
+        record["clarification_replies"] = CLARIFICATION_REPLY_OVERRIDES[prompt]
+    return record
+
+
+# The pause kinds the answer eval scripts a reply for (evals/answer_eval.py's
+# PAUSE_KINDS): the family, question-type and synonym clarifications.
+CLARIFICATION_PAUSE_KINDS = ("family", "question_type", "synonym")
+
+# Per-query replies the answer eval (evals/answer_eval.py, issue #25 Slice
+# 2) uses instead of its defaults when that query's turn pauses: pause kind
+# -> the reply, as a rep would type or click it. The defaults come from the
+# row's own labels (its product_family, its first question type, the
+# synonym question's first option), so add an entry only where a default
+# reply would steer the turn wrong -- e.g. a term whose first canonical
+# option isn't what the reviewer meant. Keyed by the CSV's prompt; written
+# to the row's clarification_replies so the JSONL is never hand-edited.
+CLARIFICATION_REPLY_OVERRIDES: dict[str, dict[str, str]] = {}
+
+
+def check_clarification_reply_overrides(prompts: set[str]) -> None:
+    """Raises on an override for a prompt no longer in the CSV, or for a
+    pause kind the eval doesn't have, so a stale entry fails loudly rather
+    than silently never applying.
+    """
+    for prompt, replies in CLARIFICATION_REPLY_OVERRIDES.items():
+        if prompt not in prompts:
+            raise ValueError(f"Clarification reply override for a prompt not in the CSV: {prompt!r}")
+        unknown_kinds = set(replies) - set(CLARIFICATION_PAUSE_KINDS)
+        if unknown_kinds:
+            raise ValueError(f"Unknown pause kind(s) {sorted(unknown_kinds)} for {prompt!r}")
 
 
 def build_intent_record(row: list[str]) -> dict:
@@ -230,6 +263,7 @@ def write_jsonl(path: Path, records: list[dict]) -> None:
 
 def main() -> None:
     rows = load_rows()
+    check_clarification_reply_overrides({row[COL_PROMPT].strip() for row in rows})
 
     by_family: dict[str, list[dict]] = defaultdict(list)
     intent_records = []

@@ -328,11 +328,6 @@ def test_the_real_intent_dataset_has_every_field_the_eval_reads():
         } <= row.keys()
 
 
-async def test_the_full_answer_eval_is_still_not_built():
-    with pytest.raises(NotImplementedError):
-        await harness.run_eval("deterministic", "evals/golden_datasets/reflex-hybrid.jsonl")
-
-
 def test_the_cli_refuses_to_run_without_an_openai_key(monkeypatch):
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 

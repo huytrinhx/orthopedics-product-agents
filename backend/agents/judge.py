@@ -6,6 +6,12 @@ Used by the inline self-eval node, the offline eval harness
 (backend/evals/harness.py), and to calibrate against human feedback
 (backend/api/routes/feedback.py) — all three share this module so automated
 and human scores stay directly comparable.
+
+The answer eval (evals/answer_eval.py, issue #25 Slice 2) also passes the
+golden dataset's reviewer-preferred answer as `reference_answer`. It's
+extra evidence for the same four axes, not a fifth one: what a complete,
+well-formatted answer covers informs relevance and style, while
+faithfulness and citation are still judged against the context alone.
 """
 from pydantic import BaseModel, Field
 
@@ -39,6 +45,16 @@ faithful and should not be penalized just for being unhelpful -- score
 relevance/citation based on whether that's actually the right call given the
 context provided."""
 
+_REFERENCE_NOTE = """
+
+A reviewer's preferred answer to this question is also given. Use it as
+evidence for relevance (did the answer cover what the reviewer expected a
+complete answer to cover?) and style (is it formatted the way the reviewer
+preferred?). Faithfulness and citation are still judged against the context
+alone: don't penalize a claim the context supports just because the
+reference leaves it out, and don't credit a claim the context doesn't
+support just because the reference makes it."""
+
 
 class _JudgeScores(BaseModel):
     faithfulness: float = Field(ge=0, le=1)
@@ -57,17 +73,21 @@ async def judge_answer(
     query: str,
     retrieved: list[RetrievedPassage],
     answer: str,
+    reference_answer: str | None = None,
 ) -> EvalScores:
     model = get_chat_model().with_structured_output(_JudgeScores)
+    system_prompt = _SYSTEM_PROMPT + (_REFERENCE_NOTE if reference_answer else "")
+    reference = f"\n\nReviewer's preferred answer:\n{reference_answer}" if reference_answer else ""
     result = await model.ainvoke(
         [
-            {"role": "system", "content": _SYSTEM_PROMPT},
+            {"role": "system", "content": system_prompt},
             {
                 "role": "user",
                 "content": (
                     f"Question: {query}\n\n"
                     f"Context given to the assistant:\n{_format_context(retrieved)}\n\n"
                     f"Assistant's answer:\n{answer}"
+                    f"{reference}"
                 ),
             },
         ]
