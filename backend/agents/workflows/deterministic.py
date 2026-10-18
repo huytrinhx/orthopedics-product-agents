@@ -232,6 +232,17 @@ def _resolve_family(
     return next((family for family in families if family.name.lower() == catalog_name), None)
 
 
+def _needs_family_clarification(
+    family: ProductFamilyRecord | None, families: list[ProductFamilyRecord]
+) -> bool:
+    """detect_intent's pause condition: the classifier named no real family
+    while there are families to choose between. Its own function so the
+    intent eval (evals/intent_eval.py, issue #25) scores the same decision
+    the graph makes rather than a copy of it.
+    """
+    return family is None and bool(families)
+
+
 def _clarification_options(
     candidate_names: list[str], families: list[ProductFamilyRecord], display_names: CatalogDisplayNames
 ) -> list[str]:
@@ -328,7 +339,7 @@ async def detect_intent(state: DeterministicState) -> dict:
     result = await _classify_intent(state["query"], [family.display_name for family in families])
     family = _resolve_family(result.product_family, families, display_names)
 
-    if family is None and families:
+    if _needs_family_clarification(family, families):
         # Everything above re-runs on resume (LangGraph replays the node
         # from its start), the classifier call included.
         answer = interrupt(
@@ -360,6 +371,13 @@ def _detected_question_types(classified: list[str]) -> list[str]:
         question_type for question_type in dict.fromkeys(classified) if question_type != UNCLASSIFIED
     ]
     return detected or [UNCLASSIFIED]
+
+
+def _needs_question_type_clarification(detected_question_types: list[str]) -> bool:
+    """clarify_question_type's pause condition: more than one detected type.
+    Shared with the intent eval, like _needs_family_clarification.
+    """
+    return len(detected_question_types) > 1
 
 
 def _question_type_option(question_type: QuestionType) -> str:
@@ -438,7 +456,7 @@ async def clarify_question_type(state: DeterministicState) -> dict:
     clarification_rounds doesn't count it, and it doesn't count that.
     """
     detected = state.get("detected_question_types") or [UNCLASSIFIED]
-    if len(detected) == 1:
+    if not _needs_question_type_clarification(detected):
         return {"resolved_question_type": detected[0]}
 
     question_types_by_name = {question_type.name: question_type for question_type in QUESTION_TYPES}

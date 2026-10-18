@@ -54,6 +54,18 @@ picking this repo up cold, read this before making structural changes.
   the offline eval harness (`backend/evals/harness.py`) and the human
   feedback UI — on the same schema, so human and automated scores stay
   directly comparable. Don't fork the rubric per call site.
+  - **The harness only runs the intent eval so far** (issue #25 Slice 1):
+    `python -m evals.harness intent` (from `backend/`, needs
+    `OPENAI_API_KEY` and a seeded catalog mirror) scores family accuracy,
+    question-type accuracy, clarification precision/recall/rate, latency
+    and tokens on `intent_detection.jsonl`. It calls the deterministic
+    workflow's own `_classify_intent`, `_resolve_family` and pause
+    conditions (`_needs_family_clarification`,
+    `_needs_question_type_clarification`) rather than copies, so keep
+    those the single place the decisions live. `run_eval` (Slice 2: full
+    answers scored by the judge) still raises `NotImplementedError`,
+    pending a policy for turns that pause on a clarification. Nothing runs
+    in CI.
 - **Inline self-eval is a deterministic fact check, not the judge.** Every
   workflow's `self_eval` node runs `backend/agents/fact_check.py` — citation
   ids, SKUs, and thread types checked against the turn's own retrieved
