@@ -252,6 +252,24 @@ def _resolve_family(
     return next((family for family in families if family.name.lower() == catalog_name), None)
 
 
+def _family_for_turn(
+    result: "_IntentClassification",
+    families: list[ProductFamilyRecord],
+    display_names: CatalogDisplayNames,
+    previous_family: ProductFamilyRecord | None,
+) -> ProductFamilyRecord | None:
+    """detect_intent's family pick before any clarification: the
+    classifier's family if it's a real one, else the thread's previous
+    family when the new question names no family at all (issue #22). Shared
+    with the intent eval, which replays a multi-turn row's earlier turns
+    through it.
+    """
+    family = _resolve_family(result.product_family, families, display_names)
+    if family is None and previous_family is not None and not result.mentions_family:
+        return previous_family
+    return family
+
+
 def _needs_family_clarification(
     family: ProductFamilyRecord | None, families: list[ProductFamilyRecord]
 ) -> bool:
@@ -425,9 +443,7 @@ async def detect_intent(state: DeterministicState) -> dict:
         previous_family=previous_family.display_name if previous_family else None,
         previous_message=_previous_user_message(state),
     )
-    family = _resolve_family(result.product_family, families, display_names)
-    if family is None and previous_family is not None and not result.mentions_family:
-        family = previous_family
+    family = _family_for_turn(result, families, display_names, previous_family)
 
     if _needs_family_clarification(family, families):
         # Everything above re-runs on resume (LangGraph replays the node

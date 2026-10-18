@@ -58,9 +58,17 @@ class _FakeClassifier:
     def __init__(self, classifications: dict[str, _IntentClassification]):
         self.classifications = classifications
         self.calls: list[tuple[str, list[str]]] = []
+        self.hints: list[tuple[str | None, str | None]] = []
 
-    async def __call__(self, query: str, family_names: list[str]) -> _IntentClassification:
+    async def __call__(
+        self,
+        query: str,
+        family_names: list[str],
+        previous_family: str | None = None,
+        previous_message: str | None = None,
+    ) -> _IntentClassification:
         self.calls.append((query, family_names))
+        self.hints.append((previous_family, previous_message))
         return self.classifications[query]
 
 
@@ -184,7 +192,7 @@ async def test_token_usage_is_read_from_langchain_usage_metadata():
         )
     )
 
-    async def classify(query: str, family_names: list[str]) -> _IntentClassification:
+    async def classify(query: str, family_names: list[str], **hints) -> _IntentClassification:
         await fake_model.ainvoke(query)
         return _IntentClassification(product_family="Reflex Hybrid")
 
@@ -332,3 +340,24 @@ def test_the_cli_refuses_to_run_without_an_openai_key(monkeypatch):
         harness.main(["intent"])
 
     assert exit_info.value.code == 2
+
+
+async def test_a_follow_up_row_replays_earlier_turns_and_carries_the_family():
+    # Issue #22: the scored turn names no family, so it stays on the one the
+    # earlier turn resolved to -- given the same hints detect_intent gets.
+    classifier = _FakeClassifier(
+        {
+            "What screws are in the MIS set?": _IntentClassification(
+                product_family="MIS Foot Recon", mentions_family=True, question_type=["system_contents"]
+            ),
+            "What about the 3.5 PT?": _IntentClassification(question_type=["system_contents"]),
+        }
+    )
+    row = _row("What about the 3.5 PT?", "MIS - Foot Recon System", ["system_contents"])
+    row["turns"] = [{"role": "user", "content": "What screws are in the MIS set?"}, *row["turns"]]
+
+    result = await evaluate_row(row, _FAMILIES, classifier)
+
+    assert result.family_correct
+    assert not result.would_clarify_family
+    assert classifier.hints == [(None, None), ("MIS Foot Recon", "What screws are in the MIS set?")]

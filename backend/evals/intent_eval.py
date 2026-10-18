@@ -31,6 +31,7 @@ from langchain_core.callbacks import get_usage_metadata_callback
 from agents.workflows.deterministic import (
     _classify_intent,
     _detected_question_types,
+    _family_for_turn,
     _IntentClassification,
     _needs_family_clarification,
     _needs_question_type_clarification,
@@ -39,7 +40,9 @@ from agents.workflows.deterministic import (
 from catalog.display_names import catalog_display_names_for
 from catalog.repository import ProductFamilyRecord
 
-IntentClassifier = Callable[[str, list[str]], Awaitable[_IntentClassification]]
+# Called like deterministic._classify_intent: (query, family_names) plus
+# the previous_family/previous_message keyword hints (issue #22).
+IntentClassifier = Callable[..., Awaitable[_IntentClassification]]
 
 
 @dataclass
@@ -111,6 +114,10 @@ def last_user_turn(row: dict) -> str:
     return next(turn["content"] for turn in reversed(row["turns"]) if turn["role"] == "user")
 
 
+def _display_name(family: ProductFamilyRecord | None) -> str | None:
+    return family.display_name if family else None
+
+
 def _token_usage_by_model(usage_metadata: dict) -> dict[str, TokenUsage]:
     return {
         model_name: TokenUsage(
@@ -126,14 +133,41 @@ async def evaluate_row(
     row: dict, families: list[ProductFamilyRecord], classify: IntentClassifier = _classify_intent
 ) -> IntentRowResult:
     display_names = catalog_display_names_for(families)
-    query = last_user_turn(row)
+    family_names = [family.display_name for family in families]
+    user_messages = [turn["content"] for turn in row["turns"] if turn["role"] == "user"]
+    query = user_messages[-1]
+
+    # A multi-turn row (issue #22) replays its earlier turns first, so the
+    # scored turn gets the same hints detect_intent would: the previous
+    # family and the previous user message. An earlier turn that would have
+    # asked for its family carries none forward -- the eval can't answer a
+    # clarification, the same as a reply naming no real family. Only the
+    # scored turn counts toward latency and token usage.
+    previous_family: ProductFamilyRecord | None = None
+    previous_message: str | None = None
+    for earlier_message in user_messages[:-1]:
+        earlier_classification = await classify(
+            earlier_message,
+            family_names,
+            previous_family=_display_name(previous_family),
+            previous_message=previous_message,
+        )
+        previous_family = _family_for_turn(
+            earlier_classification, families, display_names, previous_family
+        )
+        previous_message = earlier_message
 
     started = time.perf_counter()
     with get_usage_metadata_callback() as usage_callback:
-        classification = await classify(query, [family.display_name for family in families])
+        classification = await classify(
+            query,
+            family_names,
+            previous_family=_display_name(previous_family),
+            previous_message=previous_message,
+        )
     latency_seconds = time.perf_counter() - started
 
-    family = _resolve_family(classification.product_family, families, display_names)
+    family = _family_for_turn(classification, families, display_names, previous_family)
     detected_question_types = _detected_question_types(classification.question_type)
 
     expected_family_name = row["expected_product_family"]
