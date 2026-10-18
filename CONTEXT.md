@@ -58,9 +58,9 @@ Single-context repo — see `docs/agents/domain.md` for how this file and
   mention in a document's prose without a resolvable SKU does not become a
   `Part` node.
 - **Procedure** — a named surgical procedure (bunion, Akin, lapidus, MTP
-  fusion, ...) as a graph entity, distinct from "Technique/procedural"
-  question types in the golden datasets, which are about the same concept
-  but expressed as free text rather than a graph node.
+  fusion, ...) as a graph entity, distinct from the `technique_procedural`
+  question type, which is about the same concept but classifies a question
+  rather than naming a graph node.
 - **Question type** — what kind of thing a rep's question asks about
   (`product_characteristics`, `technique_procedural`, `features_benefits`,
   ..., `unclassified`), classified per turn by the deterministic workflow.

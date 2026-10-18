@@ -108,14 +108,17 @@ picking this repo up cold, read this before making structural changes.
   surviving type (`tags.repository.merge_document_type`). If you add a
   table that references `document_types`, make merge handle it too. See
   `docs/adr/0006-doc-type-hierarchy-is-data.md`.
-- **Golden datasets are per product line, not generic.** `mis.jsonl` /
-  `reflex.jsonl` correspond to the real MIS and REFLEX implant lines (each
-  spanning several Product Families). The intent-detection dataset's
-  `expected_system` labels (MIS/REFLEX) predate Product Families and nothing
-  reads them yet; relabelling them to families is open work, not a reason to
-  bring back a system tag. `backend/evals/golden_datasets/build_dataset.py` regenerates
-  these from `feedback-notes.csv` (human-reviewed Q&A) — rerun it after new
-  rows land there, don't hand-edit the JSONL.
+- **Golden datasets are per Product Family, not generic.** There's one QA
+  file per family a reviewed question is about
+  (`mis-foot-recon-system.jsonl`, `reflex-foot-recon-systems.jsonl`,
+  `reflex-hybrid.jsonl`), and `intent_detection.jsonl` labels each query
+  with its expected family, question-type slugs, and whether it should
+  trigger the family (#18) or question-type (#19) clarification.
+  `feedback-notes.csv` keeps reviewers' original MIS/REFLEX column;
+  `backend/evals/golden_datasets/build_dataset.py` maps it to families
+  (REFLEX questions naming HYBRID go to REFLEX HYBRID) and raises on any
+  value it has no mapping for. Rerun it after new rows land in the CSV,
+  and don't hand-edit the JSONL.
 - **Auth is JWT-based, stateless, client-held.** `backend/auth/` issues a
   signed JWT on signup/login (`JWT_SECRET`); the frontend stores it in
   `localStorage` (`frontend/lib/auth/token.ts`) and attaches it as a Bearer

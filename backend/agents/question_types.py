@@ -21,14 +21,11 @@ maintainer comment) -- a bare slug like "compatibility_lookup" doesn't
 self-explain the way the old verbose CSV wording did, so losing the
 description at classification time would likely hurt accuracy.
 
-NOT YET RECONCILED: `evals/golden_datasets/build_dataset.py`'s
-`expected_question_type` field still carries the CSV's raw wording
-("Technique/procedural", "Pull resource", ...), not these slugs, and the
-CSV has no source column for the new `compatibility_lookup` type at all.
-Nothing currently scores against `expected_question_type` (`evals/
-harness.py` doesn't read `question_type`), so this is a latent mismatch,
-not an active bug -- but whoever builds that scoring needs a translation
-step (and a decision on what backfills `compatibility_lookup`) first.
+The golden datasets use these slugs too: `evals/golden_datasets/
+build_dataset.py` translates the CSV's raw wording ("Technique/
+procedural", "Pull resource", ...) to them. No CSV row is labelled
+`compatibility_lookup` or `features_benefits`, so nothing in the datasets
+expects those two yet.
 
 Slugs and descriptions are code, but which document types each one
 retrieves from is data (issue #17, docs/adr/0006-doc-type-hierarchy-is-

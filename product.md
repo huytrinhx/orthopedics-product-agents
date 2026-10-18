@@ -16,15 +16,16 @@ not a finalized spec, and update it once real behavior lands.
 
 ## What the golden datasets show
 
-- **Per-system routing.** Queries are scoped to one product system at a
-  time (e.g. `MIS`, `REFLEX` today — see `intent_detection.jsonl`). Intent
-  detection picks the system before retrieval runs, and can flag
-  `expects_clarification: true` rather than guessing when it's ambiguous.
+- **Per-family routing.** Queries are scoped to one Product Family at a
+  time (e.g. `MIS - Foot Recon System`, `REFLEX HYBRID` — see
+  `intent_detection.jsonl`). Intent detection picks the family before
+  retrieval runs, and asks rather than guessing when it's ambiguous
+  (`expects_family_clarification: true`).
 - **Every answer traces to real source material.** `expected_citations` in
-  `mis.jsonl` / `reflex.jsonl` point at specific documents (e.g. "MIS
+  the per-family QA datasets point at specific documents (e.g. "MIS
   Inventory Control Form", "REFLEX TETRA" brochure) — answers aren't
   free-associated.
-- **Question types are varied but system-specific**: spec lookups
+- **Question types are varied but family-specific**: spec lookups
   (dimensions, thread/length options), SKU/ordering info, part
   differentiation ("how do I tell X apart from Y"), and surgical
   workflow/setup questions.

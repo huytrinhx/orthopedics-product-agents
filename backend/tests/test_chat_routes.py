@@ -433,7 +433,7 @@ def test_ambiguous_query_pauses_for_clarification_and_resume_completes_the_turn(
     """Ticket 09's core acceptance criterion, end to end, with issue #18's
     Product Families: a query that names no family (matching
     evals/golden_datasets/intent_detection.jsonl's hand-authored
-    expects_clarification: true fixtures -- build_dataset.py's
+    expects_family_clarification: true fixtures -- build_dataset.py's
     _AMBIGUOUS_FIXTURES, since the real feedback-notes.csv rows all
     confidently name one) pauses detect_intent's interrupt() rather than
     guessing, and answering it via POST /chat/resume -- here as free text
