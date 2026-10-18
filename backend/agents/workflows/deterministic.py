@@ -471,11 +471,8 @@ async def hybrid_retrieve(state: DeterministicState) -> dict:
     # Hard-filtered by detect_intent's resolved family (issue #18): a
     # family-scoped turn only sees chunks of documents tagged with that
     # family, and a document with no family is excluded -- accepted, since
-    # the legacy-tag migration (catalog/migrate_legacy_system_tags.py) is
-    # what gives existing documents their family. This replaced a
-    # deliberate "not filtered by system" rule that existed only because
-    # the old system tag was optional. No family resolved -> no family
-    # filter.
+    # the indexing gate (issue #14) requires a family before a document is
+    # indexed. No family resolved -> no family filter.
     search_query = state.get("search_query") or state["query"]
     # Canonical terms, not a flat canonical+alias mix -- see
     # resolve_synonyms' docstring.

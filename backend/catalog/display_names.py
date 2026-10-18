@@ -9,7 +9,7 @@ users should only ever see the display name. So the graph-facing chat tools
 names coming out of the graph become display names, and a display name the
 model passes back in (having just read it in an earlier tool result) is
 mapped back to the catalog name the graph needs. Anything not recognised
-passes through unchanged -- a legacy system tag, a SKU, a free-text term.
+passes through unchanged -- a SKU, a free-text term.
 The deterministic workflow's intent classifier (issue #18) also chooses
 among family display names and maps its pick back to a real family here.
 """

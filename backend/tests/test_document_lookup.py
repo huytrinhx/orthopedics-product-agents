@@ -12,7 +12,11 @@ from retrieval.vector_store import get_vector_store
 _EMBEDDING_DIM = 1536
 
 
-def _record(filename: str, system_name: str | None = None, document_type_name: str | None = None) -> DocumentRecord:
+def _record(
+    filename: str,
+    product_family_display_name: str | None = None,
+    document_type_name: str | None = None,
+) -> DocumentRecord:
     now = datetime.now(UTC)
     return DocumentRecord(
         id=uuid.uuid4(),
@@ -23,10 +27,9 @@ def _record(filename: str, system_name: str | None = None, document_type_name: s
         uploaded_by=uuid.uuid4(),
         created_at=now,
         updated_at=now,
-        system_id=None,
-        system_name=system_name,
         document_type_id=None,
         document_type_name=document_type_name,
+        product_family_display_name=product_family_display_name,
     )
 
 
@@ -50,13 +53,13 @@ def test_more_matched_words_rank_above_fewer():
     assert _filenames(ranked) == ["MIS Surgical Technique Guide.pdf", "MIS Brochure.pdf"]
 
 
-def test_matches_system_and_document_type_tags_not_just_filename():
+def test_matches_family_and_document_type_tags_not_just_filename():
     documents = [
-        _record("Brochure.pdf", system_name="REFLEX - Hybrid", document_type_name="Marketing"),
-        _record("Brochure.pdf", system_name="MIS - Foot Recon", document_type_name="Marketing"),
+        _record("Brochure.pdf", product_family_display_name="REFLEX Hybrid", document_type_name="Marketing"),
+        _record("Brochure.pdf", product_family_display_name="MIS Foot Recon", document_type_name="Marketing"),
     ]
     ranked = rank_documents_by_name("MIS brochure", documents)
-    assert ranked[0].system_name == "MIS - Foot Recon"
+    assert ranked[0].product_family_display_name == "MIS Foot Recon"
 
 
 def test_filler_words_alone_match_nothing():

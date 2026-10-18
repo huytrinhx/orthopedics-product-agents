@@ -40,7 +40,6 @@ async def test_ingest_document_vectors_writes_chunks(monkeypatch):
         await pipeline.ingest_document_vectors(
             str(document_id),
             "First paragraph.\n\nSecond paragraph.",
-            system_id=None,
             document_type_id=None,
         )
 
@@ -61,23 +60,24 @@ async def test_ingest_document_vectors_writes_chunks(monkeypatch):
 async def test_ingest_document_vectors_denormalizes_tags(monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test-dummy")
     monkeypatch.setattr(pipeline, "embed_texts", _fake_embed_texts)
-    from tags.repository import create_system
+    from tags.repository import create_document_type, delete_document_type
 
-    system = await create_system(_unique("System"))
+    document_type = await create_document_type(_unique("Doc Type"))
     document_id = await _create_document()
     try:
         await pipeline.ingest_document_vectors(
-            str(document_id), "Some text about a part.", system_id=system.id, document_type_id=None
+            str(document_id), "Some text about a part.", document_type_id=document_type.id
         )
 
         async with get_vector_store() as store, store._connection.cursor() as cursor:
             await cursor.execute(
-                "SELECT system_id FROM chunks WHERE document_id = %s", (document_id,)
+                "SELECT document_type_id FROM chunks WHERE document_id = %s", (document_id,)
             )
-            (system_id,) = await cursor.fetchone()
-        assert system_id == system.id
+            (document_type_id,) = await cursor.fetchone()
+        assert document_type_id == document_type.id
     finally:
         await delete_document(document_id)
+        await delete_document_type(document_type.id)
 
 
 async def test_ingest_document_vectors_denormalizes_the_product_family(monkeypatch):
@@ -95,7 +95,6 @@ async def test_ingest_document_vectors_denormalizes_the_product_family(monkeypat
         await pipeline.ingest_document_vectors(
             str(document_id),
             "Some text about a part.",
-            system_id=None,
             document_type_id=None,
             product_family_id=family.id,
         )
@@ -117,7 +116,7 @@ async def test_ingest_document_vectors_skips_without_openai_key(monkeypatch):
         # Would raise (no key, and embed_texts isn't monkeypatched here) if
         # the guard didn't short-circuit before any embedding call.
         await pipeline.ingest_document_vectors(
-            str(document_id), "Some text.", system_id=None, document_type_id=None
+            str(document_id), "Some text.", document_type_id=None
         )
 
         async with get_vector_store() as store, store._connection.cursor() as cursor:

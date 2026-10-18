@@ -108,60 +108,6 @@ class GraphClient:
                 family=product_family,
             )
 
-    async def rename_trays(self, renames: dict[str, str]) -> list[tuple[str, str]]:
-        """Renames Tray nodes in place (old name -> new name), so every edge
-        already pointing at one -- a Procedure's REQUIRES, Parts'
-        BELONGS_TO_TRAY -- survives a catalog renaming it, instead of the
-        seed minting a fresh Tray and the reconcile stranding the old one.
-        TraySection nodes aren't linked to their Tray by an edge, only by
-        their `tray` property and the tray-prefixed `key`
-        (replace_tray_sections), so both are rewritten alongside.
-
-        Skips a rename whose target name already exists (a re-run, or a
-        catalog that already had the new name) -- the uniqueness constraint
-        on Tray.name would reject it anyway, and the old Tray then goes
-        through prune_stale_tray_memberships like any other emptied tray.
-
-        Returns the (old, new) pairs actually renamed.
-        """
-        pairs = [{"old_name": old, "new_name": new} for old, new in renames.items() if old != new]
-        if not pairs:
-            return []
-        async with self._driver.session() as session:
-            result = await session.run(
-                """
-                UNWIND $pairs AS pair
-                MATCH (t:Tray {name: pair.old_name})
-                WHERE NOT EXISTS { MATCH (:Tray {name: pair.new_name}) }
-                SET t.name = pair.new_name
-                WITH pair
-                CALL (pair) {
-                    MATCH (s:TraySection {tray: pair.old_name})
-                    SET s.tray = pair.new_name,
-                        s.key = pair.new_name + substring(s.key, size(pair.old_name))
-                }
-                RETURN pair.old_name AS old_name, pair.new_name AS new_name
-                """,
-                pairs=pairs,
-            )
-            return [(record["old_name"], record["new_name"]) async for record in result]
-
-    async def delete_product_families(self, names: list[str]) -> list[str]:
-        """DETACH DELETEs the named ProductFamily nodes (their Trays stay,
-        just without that BELONGS_TO_FAMILY edge). Returns the names that
-        actually existed."""
-        async with self._driver.session() as session:
-            result = await session.run(
-                """
-                MATCH (f:ProductFamily) WHERE f.name IN $names
-                WITH f, f.name AS name
-                DETACH DELETE f
-                RETURN name
-                """,
-                names=names,
-            )
-            return sorted([record["name"] async for record in result])
-
     async def upsert_part(self, sku: str, tray: str, **properties: str | int | None) -> None:
         await self.upsert_parts([(sku, tray, properties)])
 
@@ -323,7 +269,9 @@ class GraphClient:
     ) -> None:
         """`product_family` and `trays` are catalog names (what the
         ProductFamily/Tray nodes are keyed on), not display names. The
-        legacy `system` property an older ingestion wrote is removed."""
+        `system` property a pre-family ingestion wrote is still REMOVEd
+        here and in set_document_tags, so any node that predates Product
+        Families sheds it on its next re-index or re-tag."""
         async with self._driver.session() as session:
             await session.run(
                 """
@@ -349,9 +297,8 @@ class GraphClient:
         """Re-tags an already-ingested Document node in place from the
         Document Manager's tag modal (issue #13) -- the same properties
         upsert_document writes, without re-running ingestion. Matches rather
-        than merges, like set_document_family_and_trays below: a never-
-        indexed document gets its node on first ingestion. Returns whether a
-        node was there to update.
+        than merges: a never-indexed document gets its node on first
+        ingestion. Returns whether a node was there to update.
         """
         async with self._driver.session() as session:
             result = await session.run(
@@ -364,29 +311,6 @@ class GraphClient:
                 """,
                 id=document_id,
                 doc_type=doc_type,
-                product_family=product_family,
-                trays=list(trays),
-            )
-            return await result.single() is not None
-
-    async def set_document_family_and_trays(
-        self, document_id: str, product_family: str | None, trays: list[str]
-    ) -> bool:
-        """Re-tags an already-ingested Document node in place (the legacy
-        system-tag migration, catalog/migrate_legacy_system_tags.py) without
-        re-running ingestion. Matches rather than merges: a document never
-        indexed has no node yet, and gets one with these properties on its
-        first ingestion. Returns whether a node was there to update.
-        """
-        async with self._driver.session() as session:
-            result = await session.run(
-                """
-                MATCH (d:Document {id: $id})
-                SET d.product_family = $product_family, d.trays = $trays
-                REMOVE d.system
-                RETURN d.id AS id
-                """,
-                id=document_id,
                 product_family=product_family,
                 trays=list(trays),
             )
@@ -471,10 +395,10 @@ class GraphClient:
 
         `groups` is `[{"tray": ..., "level": ..., "region": ..., "skus": [...]},
         ...]`, already validated against the real known parts/trays for this
-        document's system by the caller (tray_layout_extraction.py) --
-        `TraySection.key` is built here from tray+level+region since the
+        document's product family by the caller (tray_layout_extraction.py)
+        -- `TraySection.key` is built here from tray+level+region since the
         `tray_section_key` constraint (ticket 07) is global, not
-        per-system: an unscoped label like "Top Level" alone would collide
+        per-family: an unscoped label like "Top Level" alone would collide
         across different trays.
 
         `document_id` is part of the MERGE key on the relationship itself,
@@ -518,9 +442,7 @@ class GraphClient:
     async def list_parts_for_family(self, product_family: str) -> list[dict]:
         # `product_family` is the exact catalog name -- ingestion
         # (pipeline.py, tray_layout_extraction.py) passes the document's
-        # own Product Family now, not a legacy systems-tag name, so there's
-        # no legacy map in the way here (find_parts below still has one,
-        # for chat's system-scoped lookups).
+        # own Product Family.
         async with self._driver.session() as session:
             result = await session.run(
                 """
@@ -589,11 +511,10 @@ class GraphClient:
 
         `product_family` scopes the match to one ProductFamily (e.g.
         "MIS - Foot Recon System") when given, since a generic term like
-        "wire" would otherwise match parts across every ingested system.
+        "wire" would otherwise match parts across every ingested family.
         Takes the ProductFamily's catalog name only -- detect_intent
-        resolves a real family now (issue #18), so the legacy systems-tag
-        map this used to apply is gone from this path; part_lookup maps a
-        display name back to the catalog name before calling here. Ticket 20:
+        resolves a real family (issue #18), and part_lookup maps a display
+        name back to the catalog name before calling here. Ticket 20:
         this is the mechanism spec/SKU/pairing questions should ground
         answers in instead of vector-retrieved prose alone -- see
         backend/agents/workflows/deterministic.py's resolve_skus node.

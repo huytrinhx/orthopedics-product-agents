@@ -48,7 +48,6 @@ import asyncio
 import re
 import sys
 from collections import defaultdict
-from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -82,41 +81,6 @@ _REQUIRED_COLUMNS = ("Family", "Tray", "Item No.")
 # ("2.0mm Non-Locking (MMSN20xx"), and the prefix is still unambiguous.
 _COMPAT_PREFIX_RE = re.compile(r"\(([A-Za-z0-9]+)xx\)?\s*$")
 _NUMERIC_RE = re.compile(r"\d+(?:\.\d+)?")
-
-# ---- One-time Oct-26 migration. Remove once this seed has run in
-# production (or in the legacy-removal ticket at the latest). ----
-#
-# Before Oct-26 every Tray node was named with the brand prefix, and the
-# MIS/REFLEX ProductFamily nodes were inferred from tray names by regex.
-# Renaming the existing Tray nodes in place (rather than letting the seed
-# mint new ones) keeps their Procedure REQUIRES, TraySection, and
-# BELONGS_TO_TRAY edges. Beyond the prefix strip, three trays were
-# genuinely renamed in this catalog; `Pre-Hydrated Bioimplant System |
-# Implants` has no successor and goes through the tray-membership reconcile
-# like any other dropped tray.
-_RENAMED_TRAYS = {
-    "Distal Tibia XL Plate Caddy": "Distal Tibia Plating System | XL Plate Caddy",
-    "DEX Soft Tissue | Comprehensive Instrument Tray": "Soft Tissue | Comprehensive Instrument Tray",
-    "Pre-Hydrated Bioimplant System | Instruments": (
-        "Biologics and Bioimplants | Pre-hydrated Bioimplants Instruments"
-    ),
-}
-_RETIRED_FAMILIES = ("MIS", "REFLEX")
-
-
-def legacy_tray_renames(trays: Iterable[str]) -> dict[str, str]:
-    """Old (pre-Oct-26) Tray name -> its name in this catalog, for every
-    tray in `trays` that had one."""
-    tray_set = set(trays)
-    renames = {f"{_BRAND_PREFIX}{tray}": tray for tray in tray_set}
-    for old_name, new_name in _RENAMED_TRAYS.items():
-        if new_name in tray_set:
-            renames[f"{_BRAND_PREFIX}{old_name}"] = new_name
-    return renames
-
-
-# ---- End of one-time migration. ----
-
 
 class MasterCatalogError(ValueError):
     """The workbook breaks a rule the catalog hierarchy depends on (a
@@ -310,8 +274,6 @@ async def seed_master_catalog(client: GraphClient, path: Path = DEFAULT_PATH) ->
     tray_family = {row.tray: row.family for row in rows}
     families = sorted(set(tray_family.values()))
 
-    renamed_trays = await client.rename_trays(legacy_tray_renames(tray_family))
-
     for family in families:
         await client.upsert_product_family(family)
     for tray, family in tray_family.items():
@@ -345,9 +307,6 @@ async def seed_master_catalog(client: GraphClient, path: Path = DEFAULT_PATH) ->
         trays_by_sku[row.sku].add(row.tray)
     pruned_edges, deleted_trays, kept_trays = await client.prune_stale_tray_memberships(
         {sku: sorted(trays) for sku, trays in trays_by_sku.items()}
-    )
-    retired_families = await client.delete_product_families(
-        [family for family in _RETIRED_FAMILIES if family not in families]
     )
 
     all_skus = [row.sku for row in rows]
@@ -392,10 +351,6 @@ async def seed_master_catalog(client: GraphClient, path: Path = DEFAULT_PATH) ->
         f"{compat_count} COMPATIBLE_WITH edges, {tool_count} REQUIRES_TOOL edges; "
         f"removed {pruned_edges} stale BELONGS_TO_TRAY edges"
     )
-    for old_name, new_name in renamed_trays:
-        print(f"  renamed tray: {old_name} -> {new_name}")
-    for family in retired_families:
-        print(f"  retired product family: {family}")
     for tray in deleted_trays:
         print(f"  deleted emptied tray: {tray}")
     for tray in kept_trays:

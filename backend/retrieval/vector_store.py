@@ -38,7 +38,6 @@ _CANDIDATE_MULTIPLIER = 2
 
 @dataclass
 class RetrievalFilters:
-    system_id: uuid.UUID | None = None
     document_type_id: uuid.UUID | None = None
     # An inclusion list, not an exclusion filter -- a chunk with NO
     # document_type (tagging is optional, ticket 05) always passes this
@@ -82,9 +81,9 @@ class VectorStoreClient:
                     """
                     INSERT INTO chunks
                         (document_id, chunk_index, content, section_title,
-                         page_number, embedding, system_id, document_type_id,
+                         page_number, embedding, document_type_id,
                          product_family_id)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                     """,
                     (
                         document_id,
@@ -93,7 +92,6 @@ class VectorStoreClient:
                         chunk.get("section_title"),
                         chunk.get("page_number"),
                         chunk["embedding"],
-                        chunk.get("system_id"),
                         chunk.get("document_type_id"),
                         chunk.get("product_family_id"),
                     ),
@@ -110,9 +108,6 @@ class VectorStoreClient:
         pool_size = top_k * _CANDIDATE_MULTIPLIER
         conditions: list[str] = []
         condition_parameters: list[uuid.UUID] = []
-        if filters and filters.system_id:
-            conditions.append("c.system_id = %s")
-            condition_parameters.append(filters.system_id)
         if filters and filters.document_type_id:
             conditions.append("c.document_type_id = %s")
             condition_parameters.append(filters.document_type_id)

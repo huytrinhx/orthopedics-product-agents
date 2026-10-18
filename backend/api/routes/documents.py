@@ -65,7 +65,6 @@ def _document_out(document) -> DocumentOut:
         uploaded_by=document.uploaded_by,
         created_at=document.created_at,
         updated_at=document.updated_at,
-        system=TagOut(id=document.system_id, name=document.system_name) if document.system_id else None,
         document_type=(
             TagOut(id=document.document_type_id, name=document.document_type_name)
             if document.document_type_id
@@ -320,7 +319,6 @@ async def set_document_tags(
     try:
         document = await retag_document(
             document_id,
-            system_id=body.system_id if "system_id" in sent else current.system_id,
             document_type_id=(
                 body.document_type_id if "document_type_id" in sent else current.document_type_id
             ),
@@ -331,7 +329,7 @@ async def set_document_tags(
         )
     except psycopg.errors.ForeignKeyViolation:
         raise HTTPException(
-            status.HTTP_400_BAD_REQUEST, "Unknown system, document type, product family, or tray"
+            status.HTTP_400_BAD_REQUEST, "Unknown document type, product family, or tray"
         )
     except TraysOutsideFamily as error:
         raise HTTPException(

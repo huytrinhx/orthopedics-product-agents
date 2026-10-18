@@ -25,9 +25,6 @@ export interface DocumentRecord {
   uploaded_by: string;
   created_at: string;
   updated_at: string;
-  // Legacy, no longer shown -- replaced by product_family/trays (issue #12)
-  // and dropped from the API in the legacy-removal ticket.
-  system: Tag | null;
   document_type: Tag | null;
   product_family: DocumentProductFamily | null;
   trays: DocumentTray[];

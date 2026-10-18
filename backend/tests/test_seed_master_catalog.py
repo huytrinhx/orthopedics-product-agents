@@ -18,7 +18,6 @@ from config.db import get_connection
 from ingestion.seed_master_catalog import (
     CatalogRow,
     MasterCatalogError,
-    legacy_tray_renames,
     normalize_tray_name,
     parse_master_catalog,
     resolve_compatible_skus,
@@ -142,27 +141,6 @@ def test_unresolvable_tool_spec_returns_none():
     assert resolve_tool_sku("driver", "", []) is None
 
 
-def test_legacy_tray_renames_cover_prefix_strip_and_the_three_real_renames():
-    trays = {row.tray for row in _real_rows()}
-    renames = legacy_tray_renames(trays)
-    assert renames[f"{BRAND_PREFIX}MIS Foot Recon System"] == "MIS Foot Recon System"
-    assert renames[f"{BRAND_PREFIX}REFLEX® Foot Recon Nitinol Implant System"] == (
-        "REFLEX® Foot Recon Nitinol Implant System"
-    )
-    assert renames[f"{BRAND_PREFIX}Distal Tibia XL Plate Caddy"] == (
-        "Distal Tibia Plating System | XL Plate Caddy"
-    )
-    assert renames[f"{BRAND_PREFIX}DEX Soft Tissue | Comprehensive Instrument Tray"] == (
-        "Soft Tissue | Comprehensive Instrument Tray"
-    )
-    assert renames[f"{BRAND_PREFIX}Pre-Hydrated Bioimplant System | Instruments"] == (
-        "Biologics and Bioimplants | Pre-hydrated Bioimplants Instruments"
-    )
-    # No successor -- left to the tray-membership reconcile instead.
-    assert f"{BRAND_PREFIX}Pre-Hydrated Bioimplant System | Implants" not in renames
-    assert set(renames.values()) <= trays
-
-
 # ---- Synthetic workbooks ----
 
 _MINI_HEADER = [
@@ -244,15 +222,6 @@ async def _tray_exists(client, tray: str) -> bool:
         return await result.single() is not None
 
 
-async def _tray_element_id(client, tray: str) -> str | None:
-    async with client._driver.session() as session:
-        result = await session.run(
-            "MATCH (t:Tray {name: $name}) RETURN elementId(t) AS element_id", name=tray
-        )
-        record = await result.single()
-        return record["element_id"] if record else None
-
-
 async def _family_names_for_tray(client, tray: str) -> list[str]:
     async with client._driver.session() as session:
         result = await session.run(
@@ -290,18 +259,21 @@ async def test_seed_master_catalog_writes_parts_family_and_compatibility(tmp_pat
     assert any(related_entry["related_entity"] == screw_sku for related_entry in compat)
 
 
-async def test_seed_gives_each_tray_exactly_one_family_and_retires_mis_reflex(tmp_path):
+async def test_seed_gives_each_tray_exactly_one_family(tmp_path):
     suffix = uuid.uuid4().hex[:8]
     tray, family, sku = f"Tray {suffix}", f"Family {suffix}", f"SKU-{suffix}"
+    old_family, other_family = f"Old Family {suffix}", f"Other Family {suffix}"
     client = get_graph_client()
     await client.ensure_constraints()
-    # The pre-Oct-26 shape: regex-inferred MIS/REFLEX families.
-    await client.upsert_tray(tray, "MIS")
+    # A tray left sitting under two other families -- the seed's family
+    # replaces both rather than being added alongside.
+    await client.upsert_tray(tray, old_family)
     async with client._driver.session() as session:
         await session.run(
-            "MATCH (t:Tray {name: $tray}) MERGE (f:ProductFamily {name: 'REFLEX'}) "
+            "MATCH (t:Tray {name: $tray}) MERGE (f:ProductFamily {name: $family}) "
             "MERGE (t)-[:BELONGS_TO_FAMILY]->(f)",
             tray=tray,
+            family=other_family,
         )
 
     await seed_master_catalog(
@@ -309,80 +281,6 @@ async def test_seed_gives_each_tray_exactly_one_family_and_retires_mis_reflex(tm
     )
 
     assert await _family_names_for_tray(client, tray) == [family]
-    async with client._driver.session() as session:
-        result = await session.run(
-            "MATCH (f:ProductFamily) WHERE f.name IN ['MIS', 'REFLEX'] RETURN count(f) AS count"
-        )
-        assert (await result.single())["count"] == 0
-
-
-async def test_pre_existing_tray_is_renamed_in_place_keeping_requires_and_tray_section(tmp_path):
-    suffix = uuid.uuid4().hex[:8]
-    new_tray = f"Legacy Tray {suffix}"
-    old_tray = f"{BRAND_PREFIX}{new_tray}"
-    family, sku = f"Family {suffix}", f"LGC-{suffix}"
-    document_id, procedure = f"DOC-{suffix}", f"Procedure {suffix}"
-    client = get_graph_client()
-    await client.ensure_constraints()
-
-    # A tray as the old tab-delimited seed left it, carrying a document's
-    # Procedure REQUIRES edge and a tray-photo TraySection.
-    await client.upsert_tray(old_tray, "MIS")
-    await client.upsert_part(sku, old_tray)
-    await client.upsert_document(document_id, "technique.pdf", None, None)
-    assert await client.attach_procedure(procedure, old_tray, document_id)
-    await client.replace_tray_sections(
-        document_id, [{"tray": old_tray, "level": "Top Level", "region": "Left", "skus": [sku]}]
-    )
-    element_id = await _tray_element_id(client, old_tray)
-
-    await seed_master_catalog(
-        client, _write_mini_master(tmp_path / "renamed.xlsx", [(family, old_tray, sku)])
-    )
-
-    assert not await _tray_exists(client, old_tray)
-    assert await _tray_element_id(client, new_tray) == element_id
-    assert await _tray_names_for(client, sku) == {new_tray}
-    required_by = await client.query_related_entities(new_tray, "REQUIRES")
-    assert [related_entry["related_entity"] for related_entry in required_by] == [procedure]
-    async with client._driver.session() as session:
-        result = await session.run(
-            "MATCH (:Part {sku: $sku})-[:LOCATED_IN {document_id: $document_id}]->(s:TraySection) "
-            "RETURN s.tray AS tray, s.key AS key",
-            sku=sku,
-            document_id=document_id,
-        )
-        sections = [dict(record) async for record in result]
-    assert sections == [{"tray": new_tray, "key": f"{new_tray}::Top Level::Left"}]
-
-
-async def test_explicitly_renamed_tray_keeps_its_procedure(tmp_path):
-    old_tray = f"{BRAND_PREFIX}Distal Tibia XL Plate Caddy"
-    new_tray = "Distal Tibia Plating System | XL Plate Caddy"
-    suffix = uuid.uuid4().hex[:8]
-    sku, document_id, procedure = f"XLC-{suffix}", f"DOC-{suffix}", f"Procedure {suffix}"
-    client = get_graph_client()
-    await client.ensure_constraints()
-    async with client._driver.session() as session:
-        await session.run(
-            "MATCH (t:Tray) WHERE t.name IN [$old_tray, $new_tray] DETACH DELETE t",
-            old_tray=old_tray,
-            new_tray=new_tray,
-        )
-    await client.upsert_part(sku, old_tray)
-    await client.upsert_document(document_id, "technique.pdf", None, None)
-    assert await client.attach_procedure(procedure, old_tray, document_id)
-
-    await seed_master_catalog(
-        client,
-        _write_mini_master(
-            tmp_path / "explicit.xlsx", [("Distal Tibia Plating System", new_tray, sku)]
-        ),
-    )
-
-    assert not await _tray_exists(client, old_tray)
-    required_by = await client.query_related_entities(new_tray, "REQUIRES")
-    assert [related_entry["related_entity"] for related_entry in required_by] == [procedure]
 
 
 async def test_reseed_after_tray_rename_moves_parts_and_deletes_emptied_tray(tmp_path):

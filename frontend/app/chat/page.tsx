@@ -414,7 +414,7 @@ export default function ChatPage() {
           <div className="chat-thread">
             {threadLoading && <div className="empty-state">Loading conversation…</div>}
             {!threadLoading && messages.length === 0 && (
-              <div className="empty-state">Ask a question about a product system to get started.</div>
+              <div className="empty-state">Ask a question about a product family to get started.</div>
             )}
             {!threadLoading &&
               messages.map((message) => (
