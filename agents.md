@@ -63,9 +63,17 @@ picking this repo up cold, read this before making structural changes.
     conditions (`_needs_family_clarification`,
     `_needs_question_type_clarification`) rather than copies, so keep
     those the single place the decisions live. `run_eval` (Slice 2: full
-    answers scored by the judge) still raises `NotImplementedError`,
-    pending a policy for turns that pause on a clarification. Nothing runs
-    in CI.
+    answers scored by the judge) still raises `NotImplementedError`. Its
+    pause policy is settled (issue #25 comment): a row that pauses resumes
+    with a scripted reply stored on the row. Results are a CLI report,
+    not persisted.
+  - **Evals are run by an admin, by hand — never automatically in CI.**
+    They cost real model calls. **Whenever a change touches the agent
+    backend** (`backend/agents/`, or anything a workflow node calls into,
+    such as `retrieval/` or `config/llm_clients.py`), whoever makes it —
+    human or AI agent — tells the admin before it's merged or deployed
+    that the evals should be run, and gives the command. A manual CI
+    trigger (`workflow_dispatch`) is allowed; a per-PR job isn't.
 - **Inline self-eval is a deterministic fact check, not the judge.** Every
   workflow's `self_eval` node runs `backend/agents/fact_check.py` — citation
   ids, SKUs, and thread types checked against the turn's own retrieved
