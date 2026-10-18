@@ -98,7 +98,6 @@ async def ingest_document_vectors(
     document_id: str,
     text: str,
     *,
-    system_id: uuid.UUID | None,
     document_type_id: uuid.UUID | None,
     product_family_id: uuid.UUID | None = None,
 ) -> None:
@@ -114,7 +113,6 @@ async def ingest_document_vectors(
     vectors = await embed_texts([chunk["content"] for chunk in chunks])
     for chunk, vector in zip(chunks, vectors):
         chunk["embedding"] = vector
-        chunk["system_id"] = system_id
         chunk["document_type_id"] = document_type_id
         chunk["product_family_id"] = product_family_id
     async with get_vector_store() as store:

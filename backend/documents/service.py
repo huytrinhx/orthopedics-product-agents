@@ -52,7 +52,6 @@ def missing_index_tags(document: DocumentRecord) -> list[str]:
 
 async def retag_document(
     document_id: uuid.UUID,
-    system_id: uuid.UUID | None,
     document_type_id: uuid.UUID | None,
     product_family_id: uuid.UUID | None,
     tray_ids: list[uuid.UUID],
@@ -71,7 +70,6 @@ async def retag_document(
     """
     document = await set_tags(
         document_id,
-        system_id=system_id,
         document_type_id=document_type_id,
         product_family_id=product_family_id,
         tray_ids=tray_ids,
@@ -101,7 +99,7 @@ async def process_document(document_id: uuid.UUID, storage_path: str) -> None:
         text = extract_text(path, document.filename)
 
         # Graph-side lookups go by the document's own Product Family
-        # (catalog name), not its legacy system tag.
+        # (catalog name).
         await ingest_document(
             document_id=str(document_id),
             text=text,
@@ -113,7 +111,6 @@ async def process_document(document_id: uuid.UUID, storage_path: str) -> None:
         await ingest_document_vectors(
             document_id=str(document_id),
             text=text,
-            system_id=document.system_id,
             document_type_id=document.document_type_id,
             product_family_id=document.product_family_id,
         )

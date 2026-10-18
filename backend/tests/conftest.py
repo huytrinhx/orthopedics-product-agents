@@ -15,7 +15,8 @@ The containers themselves are NOT torn down between separate local `pytest`
 invocations, though -- a test that fails before reaching its own cleanup
 step (an assertion error before a `client.delete(...)`, say) leaves rows
 behind, and those accumulate run over run. Seen for real, repeatedly: enough
-leftover `systems` rows made detect_intent's system-disambiguation guardrail
+leftover tag rows (the since-removed legacy System tags) made detect_intent's
+disambiguation guardrail
 fire on ordinary, unrelated queries in totally different tests, which looks
 exactly like a real regression (a missing "done" event) until you notice the
 test containers are just full of old fixtures. `pytest_sessionstart` below

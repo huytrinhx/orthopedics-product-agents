@@ -276,40 +276,13 @@ re-run whenever they apply:
    no hand-run Cypher after a rename. Both are otherwise `MERGE`s, so they're
    idempotent — safe to rerun (e.g. after fixing a bad row in a source file)
    without duplicating anything.
-3. **One-off: carry legacy System tags over to Product Families and Trays
-   (issue #12).** Run this once, after step 1 has applied migration
-   `ec08a13c13dc` and step 2's `seed_master_catalog` has mirrored the
-   families/trays into Postgres. A dry run first — it's the default and
-   writes nothing:
-
-   ```bash
-   railway ssh -- python -m catalog.migrate_legacy_system_tags
-   ```
-
-   It prints the documents per legacy tag and the family each maps to (via
-   `backend/catalog/legacy_systems.py`), the family and trays each document
-   will get, the documents whose family has more than one tray (each gets
-   *all* of them — trim those later in the tag modal), and any unmapped tags
-   or untagged documents (left without a family; they show as incomplete).
-   Once the report looks right:
-
-   ```bash
-   railway ssh -- python -m catalog.migrate_legacy_system_tags --apply
-   ```
-
-   That writes each document's family and trays, copies the family onto its
-   chunks (no re-embedding), and sets `product_family`/`trays` on its Neo4j
-   `Document` node in place of `system`. A document that already has a
-   family is skipped, so re-running is a no-op and never undoes a trimmed
-   tray set. The `systems` table and `system_id` columns stay until the
-   legacy-removal ticket.
-4. **A new environment variable was added to the app.** Set its value in
+3. **A new environment variable was added to the app.** Set its value in
    the Railway dashboard, then also add its name to `.railway/railway.ts`'s
    `env` block (as `preserve()`) and run `railway config plan` then
    `railway config apply` — Infrastructure as Code treats an undeclared
    variable as drift to remove, so skipping this step gets it deleted on
    the next apply.
-5. **You just ran `railway config apply` for any reason.** Re-check
+4. **You just ran `railway config apply` for any reason.** Re-check
    "Restart Policy" reads On Failure in the dashboard (see step 8 above) —
    `apply` can silently drop it.
 

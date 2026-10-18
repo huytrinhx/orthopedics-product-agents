@@ -33,9 +33,10 @@ def _words(text: str) -> list[str]:
 def rank_documents_by_name(name: str, documents: list[DocumentRecord]) -> list[DocumentRecord]:
     """Documents matching `name`, best first: the whole name appearing in
     order beats scattered word hits, then more matched words beat fewer.
-    Matches against filename, system tag, and document-type tag together,
-    so "MIS brochure" finds "Brochure.pdf" tagged MIS. A document matching
-    none of the name's meaningful words is left out.
+    Matches against filename, Product Family (catalog and display name),
+    and document-type tag together, so "MIS brochure" finds "Brochure.pdf"
+    tagged with the MIS Foot Recon family. A document matching none of the
+    name's meaningful words is left out.
     """
     query_words = [word for word in _words(name) if word not in _STOPWORDS]
     if not query_words:
@@ -44,7 +45,17 @@ def rank_documents_by_name(name: str, documents: list[DocumentRecord]) -> list[D
     scored: list[tuple[bool, int, DocumentRecord]] = []
     for document in documents:
         haystack_words = _words(
-            " ".join(filter(None, [document.filename, document.system_name, document.document_type_name]))
+            " ".join(
+                filter(
+                    None,
+                    [
+                        document.filename,
+                        document.product_family_name,
+                        document.product_family_display_name,
+                        document.document_type_name,
+                    ],
+                )
+            )
         )
         haystack = " ".join(haystack_words)
         matched_word_count = sum(1 for word in query_words if word in haystack_words)
@@ -58,7 +69,7 @@ def rank_documents_by_name(name: str, documents: list[DocumentRecord]) -> list[D
 async def document_lookup(name: str, limit: int = 3) -> list[dict]:
     """Find ingested documents by name or title (e.g. "MIS Inventory Control
     Form", "REFLEX surgical technique") -- word matching on filename and
-    system/document-type tags, not a content search. Returns each match's
+    product-family/document-type tags, not a content search. Returns each match's
     document_id, filename, tags, chunk_count, and its opening chunks with
     citation ids. To search inside a match, pass its document_id to
     vector_search's document_ids.
@@ -71,7 +82,7 @@ async def document_lookup(name: str, limit: int = 3) -> list[dict]:
             {
                 "document_id": str(document.id),
                 "filename": document.filename,
-                "system": document.system_name,
+                "product_family": document.product_family_display_name,
                 "document_type": document.document_type_name,
                 "chunk_count": len(chunks),
                 "opening_chunks": [

@@ -1,4 +1,4 @@
-"""Exercises System/Document-Type tag management and their use on documents
+"""Exercises Document-Type tag management and its use on documents
 (ticket 05) against a real Postgres -- no mocking, same approach as
 test_auth.py / test_documents.py.
 """
@@ -55,27 +55,12 @@ def _upload_tagged(headers: dict, **tags: str) -> str:
     return document_id
 
 
-def test_system_tags_list_immediately_on_creation(monkeypatch, tmp_path):
+def test_document_type_tags_list_immediately_on_creation(monkeypatch, tmp_path):
     """The picker (and any tag-management UI) shows every tag an admin has
     created, not just ones already attached to a document -- otherwise a
     freshly created tag would be invisible to pick until some other flow
-    (upload) referenced it first.
+    referenced it first.
     """
-    token = _admin_token(monkeypatch, tmp_path)
-    headers = {"Authorization": f"Bearer {token}"}
-    name = _unique_name("REFLEX")
-
-    create = client.post("/systems", headers=headers, json={"name": name})
-    assert create.status_code == 200
-    system_id = create.json()["id"]
-    assert create.json()["name"] == name
-
-    listing = client.get("/systems", headers=headers)
-    assert listing.status_code == 200
-    assert any(listed_system["id"] == system_id for listed_system in listing.json())
-
-
-def test_document_type_tags_list_immediately_on_creation(monkeypatch, tmp_path):
     token = _admin_token(monkeypatch, tmp_path)
     headers = {"Authorization": f"Bearer {token}"}
     name = _unique_name("Brochure")
@@ -98,24 +83,22 @@ def test_deleting_a_documents_only_document_leaves_its_tags_listed(monkeypatch, 
     """
     token = _admin_token(monkeypatch, tmp_path)
     headers = {"Authorization": f"Bearer {token}"}
-    system = client.post("/systems", headers=headers, json={"name": _unique_name("MIS")}).json()
+    document_type = client.post(
+        "/document-types", headers=headers, json={"name": _unique_name("Brochure")}
+    ).json()
 
-    document_id = _upload_tagged(headers, system_id=system["id"])
-    assert any(listed_system["id"] == system["id"] for listed_system in client.get("/systems", headers=headers).json())
+    def listed() -> bool:
+        return any(
+            listed_document_type["id"] == document_type["id"]
+            for listed_document_type in client.get("/document-types", headers=headers).json()
+        )
+
+    document_id = _upload_tagged(headers, document_type_id=document_type["id"])
+    assert listed()
 
     client.delete(f"/documents/{document_id}", headers=headers)
 
-    assert any(listed_system["id"] == system["id"] for listed_system in client.get("/systems", headers=headers).json())
-
-
-def test_delete_unused_system_tag(monkeypatch, tmp_path):
-    token = _admin_token(monkeypatch, tmp_path)
-    headers = {"Authorization": f"Bearer {token}"}
-    system = client.post("/systems", headers=headers, json={"name": _unique_name("MIS")}).json()
-
-    response = client.delete(f"/systems/{system['id']}", headers=headers)
-    assert response.status_code == 204
-    assert not any(listed_system["id"] == system["id"] for listed_system in client.get("/systems", headers=headers).json())
+    assert listed()
 
 
 def test_delete_unused_document_type_tag(monkeypatch, tmp_path):
@@ -132,18 +115,6 @@ def test_delete_unused_document_type_tag(monkeypatch, tmp_path):
     )
 
 
-def test_delete_system_tag_still_in_use_conflicts(monkeypatch, tmp_path):
-    token = _admin_token(monkeypatch, tmp_path)
-    headers = {"Authorization": f"Bearer {token}"}
-    system = client.post("/systems", headers=headers, json={"name": _unique_name("REFLEX")}).json()
-    _upload_tagged(headers, system_id=system["id"])
-
-    response = client.delete(f"/systems/{system['id']}", headers=headers)
-    assert response.status_code == 409
-    # Still there -- the blocked delete didn't half-apply.
-    assert any(listed_system["id"] == system["id"] for listed_system in client.get("/systems", headers=headers).json())
-
-
 def test_delete_document_type_tag_still_in_use_conflicts(monkeypatch, tmp_path):
     token = _admin_token(monkeypatch, tmp_path)
     headers = {"Authorization": f"Bearer {token}"}
@@ -154,24 +125,28 @@ def test_delete_document_type_tag_still_in_use_conflicts(monkeypatch, tmp_path):
 
     response = client.delete(f"/document-types/{document_type['id']}", headers=headers)
     assert response.status_code == 409
+    # Still there -- the blocked delete didn't half-apply.
+    assert any(
+        listed_document_type["id"] == document_type["id"]
+        for listed_document_type in client.get("/document-types", headers=headers).json()
+    )
 
 
 def test_delete_nonexistent_tag_404s(monkeypatch, tmp_path):
     token = _admin_token(monkeypatch, tmp_path)
     headers = {"Authorization": f"Bearer {token}"}
-    assert client.delete(f"/systems/{uuid.uuid4()}", headers=headers).status_code == 404
     assert client.delete(f"/document-types/{uuid.uuid4()}", headers=headers).status_code == 404
 
 
-def test_duplicate_system_name_conflicts_case_insensitively(monkeypatch, tmp_path):
+def test_duplicate_document_type_name_conflicts_case_insensitively(monkeypatch, tmp_path):
     token = _admin_token(monkeypatch, tmp_path)
     headers = {"Authorization": f"Bearer {token}"}
-    name = _unique_name("MIS")
+    name = _unique_name("Brochure")
 
-    first = client.post("/systems", headers=headers, json={"name": name})
+    first = client.post("/document-types", headers=headers, json={"name": name})
     assert first.status_code == 200
 
-    dupe = client.post("/systems", headers=headers, json={"name": name.upper()})
+    dupe = client.post("/document-types", headers=headers, json={"name": name.upper()})
     assert dupe.status_code == 409
 
 
@@ -179,9 +154,6 @@ def test_non_admin_cannot_manage_tags(monkeypatch, tmp_path):
     token = _user_token(monkeypatch, tmp_path)
     headers = {"Authorization": f"Bearer {token}"}
 
-    assert client.post("/systems", headers=headers, json={"name": "x"}).status_code == 403
-    assert client.get("/systems", headers=headers).status_code == 403
-    assert client.delete(f"/systems/{uuid.uuid4()}", headers=headers).status_code == 403
     assert client.post("/document-types", headers=headers, json={"name": "x"}).status_code == 403
     assert client.get("/document-types", headers=headers).status_code == 403
     assert client.delete(f"/document-types/{uuid.uuid4()}", headers=headers).status_code == 403
@@ -250,13 +222,17 @@ def test_edit_tags_after_upload(monkeypatch, tmp_path):
         files={"file": ("untagged.txt", b"x", "text/plain")},
     )
     document_id = upload.json()["id"]
-    assert upload.json()["system"] is None
+    assert upload.json()["document_type"] is None
 
-    system = client.post("/systems", headers=headers, json={"name": _unique_name("MIS")}).json()
-    edit = client.patch(f"/documents/{document_id}/tags", headers=headers, json={"system_id": system["id"]})
+    document_type = client.post(
+        "/document-types", headers=headers, json={"name": _unique_name("Brochure")}
+    ).json()
+    edit = client.patch(
+        f"/documents/{document_id}/tags", headers=headers, json={"document_type_id": document_type["id"]}
+    )
     assert edit.status_code == 200
-    assert edit.json()["system"]["id"] == system["id"]
-    assert edit.json()["document_type"] is None
+    assert edit.json()["document_type"]["id"] == document_type["id"]
+    assert edit.json()["product_family"] is None
 
 
 def test_edit_tags_on_an_indexed_document_does_not_reindex(monkeypatch, tmp_path):
@@ -277,8 +253,12 @@ def test_edit_tags_on_an_indexed_document_does_not_reindex(monkeypatch, tmp_path
         time.sleep(0.05)
     assert client.get(f"/documents/{document_id}", headers=headers).json()["status"] == "done"
 
-    system = client.post("/systems", headers=headers, json={"name": _unique_name("REFLEX")}).json()
-    edit = client.patch(f"/documents/{document_id}/tags", headers=headers, json={"system_id": system["id"]})
+    document_type = client.post(
+        "/document-types", headers=headers, json={"name": _unique_name("IFU")}
+    ).json()
+    edit = client.patch(
+        f"/documents/{document_id}/tags", headers=headers, json={"document_type_id": document_type["id"]}
+    )
     assert edit.status_code == 200
     # Re-tagging updates in place (issue #13) -- no re-queue.
     assert edit.json()["status"] == "done"

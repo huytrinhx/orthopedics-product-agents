@@ -16,7 +16,7 @@ from auth.repository import create_user
 from catalog.repository import list_families_with_trays, upsert_families_and_trays
 from documents.repository import create_document, delete_document
 from retrieval.vector_store import RetrievalFilters, get_vector_store
-from tags.repository import create_document_type, create_system
+from tags.repository import create_document_type
 
 _EMBEDDING_DIM = 1536
 
@@ -31,13 +31,12 @@ def _unit_vector(index: int) -> list[float]:
     return vector
 
 
-async def _create_document(system_id=None, document_type_id=None) -> uuid.UUID:
+async def _create_document(document_type_id=None) -> uuid.UUID:
     user = await create_user(f"{_unique('user')}@example.com", None, False, True)
     document = await create_document(
         filename=_unique("doc") + ".txt",
         storage_path=f"/tmp/{_unique('storage')}.txt",
         uploaded_by=user.id,
-        system_id=system_id,
         document_type_id=document_type_id,
     )
     return document.id
@@ -128,10 +127,10 @@ async def test_hybrid_search_fuses_vector_and_keyword_legs():
         await delete_document(document_id)
 
 
-async def test_hybrid_search_respects_system_filter():
-    system_a_record = await create_system(_unique("SystemA"))
-    system_b_record = await create_system(_unique("SystemB"))
-    document_id = await _create_document(system_id=system_a_record.id)
+async def test_hybrid_search_respects_document_type_filter():
+    type_a_record = await create_document_type(_unique("TypeA"))
+    type_b_record = await create_document_type(_unique("TypeB"))
+    document_id = await _create_document(document_type_id=type_a_record.id)
     query_vector = _unit_vector(20)
 
     try:
@@ -143,18 +142,18 @@ async def test_hybrid_search_respects_system_filter():
                         "chunk_index": 0,
                         "content": "shared content",
                         "embedding": query_vector,
-                        "system_id": system_a_record.id,
+                        "document_type_id": type_a_record.id,
                     },
                 ],
             )
 
             matching = await store.hybrid_search(
                 "shared content", query_vector, top_k=5,
-                filters=RetrievalFilters(system_id=system_a_record.id),
+                filters=RetrievalFilters(document_type_id=type_a_record.id),
             )
             non_matching = await store.hybrid_search(
                 "shared content", query_vector, top_k=5,
-                filters=RetrievalFilters(system_id=system_b_record.id),
+                filters=RetrievalFilters(document_type_id=type_b_record.id),
             )
 
         assert len(matching) == 1

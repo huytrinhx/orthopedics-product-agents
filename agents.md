@@ -108,10 +108,12 @@ picking this repo up cold, read this before making structural changes.
   surviving type (`tags.repository.merge_document_type`). If you add a
   table that references `document_types`, make merge handle it too. See
   `docs/adr/0006-doc-type-hierarchy-is-data.md`.
-- **Golden datasets are per-product-system, not generic.** `mis.jsonl` /
-  `reflex.jsonl` correspond to real implant systems (MIS, REFLEX); the
-  intent-detection dataset routes a query to the right system before
-  retrieval. `backend/evals/golden_datasets/build_dataset.py` regenerates
+- **Golden datasets are per product line, not generic.** `mis.jsonl` /
+  `reflex.jsonl` correspond to the real MIS and REFLEX implant lines (each
+  spanning several Product Families). The intent-detection dataset's
+  `expected_system` labels (MIS/REFLEX) predate Product Families and nothing
+  reads them yet; relabelling them to families is open work, not a reason to
+  bring back a system tag. `backend/evals/golden_datasets/build_dataset.py` regenerates
   these from `feedback-notes.csv` (human-reviewed Q&A) — rerun it after new
   rows land there, don't hand-edit the JSONL.
 - **Auth is JWT-based, stateless, client-held.** `backend/auth/` issues a
@@ -138,16 +140,23 @@ picking this repo up cold, read this before making structural changes.
   SQL.** `alembic upgrade head` reads `DATABASE_URL` (same env var as
   everything else) and applies pending migrations; it's a required step in
   local setup (README), CI (runs against a throwaway Postgres service before
-  `pytest`), and production (`railway.toml`'s `releaseCommand`, once per
-  deploy before the new container takes traffic). Add new tables via
-  `alembic revision -m "..."`, not a one-off script.
+  `pytest`), and production. Production is **manual**, not part of the
+  deploy: there's no release/pre-deploy command, so after a deploy carrying
+  a new migration goes live, someone runs `alembic -c alembic.ini upgrade
+  head` from `backend/` with production's env (e.g. via `railway run`, or
+  `railway ssh` where the network allows it — see README's "Deploying to
+  Railway"). Until then the new code is serving against the old schema.
+  Add new tables via `alembic revision -m "..."`, not a one-off script.
 
 ## Deployment direction (as of this writing)
 
-Single Railway service, no GitHub Actions deploy step — `railway.toml`
-points Railway at the root `Dockerfile`, and it redeploys on every push to
-`main`. Postgres is Supabase (pgvector-enabled); Neo4j is AuraDB. Full
-step-by-step is in `README.md`'s "Deploying to Railway" section. Highlights:
+Single Railway service, no GitHub Actions deploy step — `.railway/railway.ts`
+(Railway's Infrastructure as Code; there is no `railway.toml`) points
+Railway at the root `Dockerfile`, and it redeploys on every push to `main`.
+Migrations and graph seeding are not part of that deploy; they're run by
+hand afterwards (see the Alembic bullet above). Postgres is Supabase
+(pgvector-enabled); Neo4j is AuraDB. Full step-by-step is in `README.md`'s
+"Deploying to Railway" section. Highlights:
 
 - The frontend is a Next.js **static export** (`output: "export"` in
   `frontend/next.config.js`) served by the backend — this rules out

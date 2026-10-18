@@ -1,12 +1,10 @@
-"""System and Document-Type tag management (ticket 05). Admin-only, same as
-the rest of document management (see auth.dependencies.require_admin). No
-fixed enum -- an admin grows these two lists as new product systems and
-document types show up.
+"""Document-Type tag management (ticket 05). Admin-only, same as the rest of
+document management (see auth.dependencies.require_admin). No fixed enum --
+an admin grows the list as new document types show up.
 
 Document Types are a closed, admin-curated list (issue #16): the Settings
 page (frontend/app/admin/) is the only UI that creates, renames, merges, or
-deletes them; the Document Manager only picks from the list. Systems are
-still created from the Document Manager's pickers.
+deletes them; the Document Manager only picks from the list.
 """
 import uuid
 
@@ -19,11 +17,8 @@ from tags.models import CreateTagRequest, MergeTagRequest, RenameTagRequest, Tag
 from tags.repository import (
     TagNotFound,
     create_document_type,
-    create_system,
     delete_document_type,
-    delete_system,
     list_document_types,
-    list_systems,
     merge_document_type,
     rename_document_type,
 )
@@ -33,36 +28,6 @@ router = APIRouter()
 
 def _tag_out(tag) -> TagOut:
     return TagOut(id=tag.id, name=tag.name)
-
-
-@router.post("/systems", response_model=TagOut)
-async def create_system_tag(
-    body: CreateTagRequest, admin: UserRecord = Depends(require_admin)
-) -> TagOut:
-    name = body.name.strip()
-    if not name:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Name is required")
-    try:
-        return _tag_out(await create_system(name))
-    except psycopg.errors.UniqueViolation:
-        raise HTTPException(status.HTTP_409_CONFLICT, f"A system named '{name}' already exists")
-
-
-@router.get("/systems", response_model=list[TagOut])
-async def list_system_tags(admin: UserRecord = Depends(require_admin)) -> list[TagOut]:
-    return [_tag_out(tag) for tag in await list_systems()]
-
-
-@router.delete("/systems/{tag_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_system_tag(tag_id: uuid.UUID, admin: UserRecord = Depends(require_admin)) -> None:
-    try:
-        deleted = await delete_system(tag_id)
-    except psycopg.errors.ForeignKeyViolation:
-        raise HTTPException(
-            status.HTTP_409_CONFLICT, "This system is still assigned to one or more documents"
-        )
-    if not deleted:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "System not found")
 
 
 @router.post("/document-types", response_model=TagOut)

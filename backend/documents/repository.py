@@ -1,6 +1,6 @@
 """Raw SQL against the `documents` table
 (backend/migrations/versions/..._create_documents_table.py), joined against
-the `systems` and `document_types` lookup tables
+the `document_types` lookup table
 (backend/migrations/versions/..._create_systems_and_document_types.py) and
 the catalog's `product_families`/`trays` mirror tables
 (backend/migrations/versions/..._tag_documents_with_family_and_trays.py)
@@ -30,8 +30,6 @@ class DocumentRecord:
     uploaded_by: uuid.UUID
     created_at: datetime
     updated_at: datetime
-    system_id: uuid.UUID | None
-    system_name: str | None
     document_type_id: uuid.UUID | None
     document_type_name: str | None
     product_family_id: uuid.UUID | None = None
@@ -58,10 +56,9 @@ class TraysOutsideFamily(Exception):
 
 _SELECT = """
     SELECT d.id, d.filename, d.storage_path, d.status, d.error, d.uploaded_by,
-           d.created_at, d.updated_at, d.system_id, s.name, d.document_type_id, dt.name,
+           d.created_at, d.updated_at, d.document_type_id, dt.name,
            d.product_family_id, pf.name, pf.display_name, d.last_indexed_at
     FROM documents d
-    LEFT JOIN systems s ON s.id = d.system_id
     LEFT JOIN document_types dt ON dt.id = d.document_type_id
     LEFT JOIN product_families pf ON pf.id = d.product_family_id
 """
@@ -129,16 +126,15 @@ async def create_document(
     filename: str,
     storage_path: str,
     uploaded_by: uuid.UUID,
-    system_id: uuid.UUID | None = None,
     document_type_id: uuid.UUID | None = None,
 ) -> DocumentRecord:
     connection = await get_connection()
     try:
         async with connection.cursor() as cursor:
             await cursor.execute(
-                "INSERT INTO documents (filename, storage_path, uploaded_by, system_id, document_type_id) "
-                "VALUES (%s, %s, %s, %s, %s) RETURNING id",
-                (filename, storage_path, uploaded_by, system_id, document_type_id),
+                "INSERT INTO documents (filename, storage_path, uploaded_by, document_type_id) "
+                "VALUES (%s, %s, %s, %s) RETURNING id",
+                (filename, storage_path, uploaded_by, document_type_id),
             )
             (new_id,) = await cursor.fetchone()
         await connection.commit()
@@ -279,7 +275,6 @@ async def list_chunks(document_id: uuid.UUID) -> list[ChunkRecord]:
 
 async def set_tags(
     document_id: uuid.UUID,
-    system_id: uuid.UUID | None,
     document_type_id: uuid.UUID | None,
     product_family_id: uuid.UUID | None,
     tray_ids: list[uuid.UUID],
@@ -297,29 +292,14 @@ async def set_tags(
     try:
         async with connection.transaction(), connection.cursor() as cursor:
             await cursor.execute(
-                "UPDATE documents SET system_id = %s, document_type_id = %s, updated_at = now() "
-                "WHERE id = %s",
-                (system_id, document_type_id, document_id),
+                "UPDATE documents SET document_type_id = %s, updated_at = now() WHERE id = %s",
+                (document_type_id, document_id),
             )
             await _write_family_and_trays(cursor, document_id, product_family_id, tray_ids)
             await cursor.execute(
-                "UPDATE chunks SET system_id = %s, document_type_id = %s WHERE document_id = %s",
-                (system_id, document_type_id, document_id),
+                "UPDATE chunks SET document_type_id = %s WHERE document_id = %s",
+                (document_type_id, document_id),
             )
     finally:
         await connection.close()
     return await get_document(document_id)
-
-
-async def set_family_and_trays(
-    document_id: uuid.UUID, product_family_id: uuid.UUID | None, tray_ids: list[uuid.UUID]
-) -> None:
-    """Family + trays only, leaving the other tags alone -- the legacy
-    system-tag migration (catalog/migrate_legacy_system_tags.py) writes
-    through this. Same validation as set_tags."""
-    connection = await get_connection()
-    try:
-        async with connection.transaction(), connection.cursor() as cursor:
-            await _write_family_and_trays(cursor, document_id, product_family_id, tray_ids)
-    finally:
-        await connection.close()

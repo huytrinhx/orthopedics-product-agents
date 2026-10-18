@@ -25,18 +25,12 @@ Single-context repo — see `docs/agents/domain.md` for how this file and
   falls back to) the catalog name. A catalog re-seed never overwrites it.
   The graph only knows catalog names, so the chat tools translate at their
   boundary (`backend/catalog/display_names.py`).
-- **System** *(legacy)* — the document-level System tag
-  (`backend/documents/models.py`, the Postgres `systems` table, e.g. `MIS -
-  Foot Recon`) that predates Product Families, and the old name of the
-  master item file's `Tray` column. Documents are now tagged with one
-  `Product Family` and one or more of its `Tray`s instead (issue #12;
-  `backend/catalog/migrate_legacy_system_tags.py` carries old tags over),
-  and ingestion scopes by that family. Chat's intent detection resolves a
-  `Product Family` too (issue #18), so nothing at chat time reads System
-  tags; the explicit tag -> family map (`backend/catalog/legacy_systems.py`)
-  is left only for the one-off tag migration, and golden-dataset fixtures
-  are still labelled by System, until the legacy-removal ticket. Not to be
-  confused with "workflow" (below) or a computer system.
+- **Document tags** — a document is tagged with one `Product Family`, one
+  or more of that family's `Tray`s, and a Document Type. Ingestion and
+  chat's intent detection both scope by the family. (A free-form
+  document-level "System" tag predated families; it was carried over to
+  families/trays in issue #12 and removed in issue #20. "System" is not a
+  live concept here — say `Product Family` or `Tray`.)
 - **Family clarification** — when the deterministic workflow's
   `detect_intent` can't tell which `Product Family` a question is about, it
   pauses the turn and asks, offering at most 4 candidate families (every
@@ -89,7 +83,7 @@ Single-context repo — see `docs/agents/domain.md` for how this file and
 - **Workflow** — one agent architecture (deterministic pipeline, ReAct
   agent, supervisor/multi-agent), registered by name in
   `backend/agents/registry.py`. Selected per-request (`/chat/<workflow>/stream`)
-  and by the eval harness — not the same concept as "system."
+  and by the eval harness.
 - **Judge** — the shared LLM-based scorer (`backend/agents/judge.py`)
   producing four axis scores: faithfulness, relevance, style, citation. Used
   identically by the offline eval harness and the human feedback UI.
@@ -100,7 +94,7 @@ Single-context repo — see `docs/agents/domain.md` for how this file and
   regenerated with the specific problems listed.
 - **Synonym resolution** — expanding a query against the canonical
   entity/synonym graph in Neo4j/AuraDB before retrieval (e.g. "ACL repair"
-  -> also matches variant phrasings within the same system). Distinct from
+  -> also matches variant phrasings within the same family). Distinct from
   the vector/full-text retrieval step itself.
 - **Canonical term** — the anchor graph node for a cluster of equivalent
   terms from `backend/evals/synonyms-map.csv`, resolved via
@@ -109,7 +103,8 @@ Single-context repo — see `docs/agents/domain.md` for how this file and
   `pin`) and 1:1 abbreviation expansions (e.g. `FT` -> `Full thread`) — both
   resolve identically from a caller's perspective.
 - **Golden dataset** — a JSONL file of real, human-reviewed query/expected-
-  answer/expected-citation examples for one system, generated from
+  answer/expected-citation examples for one product line (MIS, REFLEX),
+  generated from
   `feedback-notes.csv` via `build_dataset.py`. Consumed by
   `backend/evals/harness.py`.
 - **Chunk** — a retrieval-sized slice of an ingested document
