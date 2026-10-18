@@ -21,11 +21,11 @@ import { WorkflowSection } from "./workflow-section";
 // window.location rather than useSearchParams, which a static export would
 // force behind a Suspense boundary (same reasoning as /chat's `?ask=`).
 const SECTIONS: { id: string; label: string; Component: ComponentType }[] = [
-  { id: "workflow", label: "Workflow", Component: WorkflowSection },
-  { id: "models", label: "Models", Component: ModelAssignmentsSection },
   { id: "document-types", label: "Document types", Component: DocumentTypesSection },
   { id: "families", label: "Families & trays", Component: ProductFamiliesSection },
   { id: "doc-type-hierarchy", label: "Doc type hierarchy", Component: DocTypeHierarchySection },
+  { id: "workflow", label: "Workflow", Component: WorkflowSection },
+  { id: "models", label: "Models", Component: ModelAssignmentsSection },
 ];
 
 function sectionIdFromUrl(): string {
