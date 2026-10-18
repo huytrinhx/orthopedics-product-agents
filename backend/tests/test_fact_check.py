@@ -73,6 +73,27 @@ def test_only_checks_the_line_the_sku_is_on():
     assert _check(answer, parts=[_FULL_THREAD]) == []
 
 
+def test_a_conflicting_sources_line_in_the_prompted_format_passes():
+    # generate is told to call out a passage that contradicts the catalog
+    # with both values on one line -- that line names the passage's wrong
+    # thread type, and must not be "corrected" away by the thread check.
+    answer = (
+        "- MSK42020: 4.0 x 20mm Full Thread screw\n\n"
+        "Conflicting sources\n"
+        f"MSK42020: the catalog lists Full Thread; [{_DOCUMENT_ID}#3] says partial thread. "
+        "This answer uses the catalog value."
+    )
+    assert _check(answer, citation_ids={f"{_DOCUMENT_ID}#3"}, parts=[_FULL_THREAD]) == []
+
+
+def test_a_conflict_line_missing_the_catalog_value_is_flagged():
+    # Why the prompt asks for both values on the same line: the passage's
+    # value on its own reads as the answer's claim.
+    issues = _check(f"[{_DOCUMENT_ID}#3] says MSK42020 is partial thread.", citation_ids={f"{_DOCUMENT_ID}#3"}, parts=[_FULL_THREAD])
+    assert len(issues) == 1
+    assert "MSK42020 is Full Thread (FT)" in issues[0]
+
+
 def test_correction_note_lists_every_issue():
     note = format_issues_for_correction(["first problem", "second problem"])
     assert "- first problem\n- second problem" in note
