@@ -773,6 +773,93 @@ highlighter amber with the reason spelled out under the filename. */
   max-width: 720px;
 }
 
+/* Settings page: a vertical section nav (settings-nav.tsx) beside the one
+   selected section. Below 760px the nav becomes a horizontally scrolling
+   row above the content, so every section stays one tap away. */
+.settings-layout {
+  display: grid;
+  grid-template-columns: 200px minmax(0, 1fr);
+  gap: 40px;
+  align-items: start;
+  margin-top: 28px;
+}
+
+.settings-content > .settings-section {
+  margin-top: 0;
+}
+
+.settings-nav {
+  position: sticky;
+  top: 24px;
+}
+
+.settings-nav ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border-left: 1px solid var(--steel-line);
+}
+
+.settings-nav a {
+  display: block;
+  margin-left: -1px;
+  padding: 8px 14px;
+  border-left: 2px solid transparent;
+  color: var(--ink-soft);
+  font-size: 0.92rem;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.settings-nav a:hover {
+  color: var(--ink);
+  background: var(--diffuser-dim);
+}
+
+.settings-nav a:focus-visible {
+  outline-offset: -2px;
+}
+
+.settings-nav a[aria-current="page"] {
+  border-left-color: var(--verify);
+  color: var(--verify-dark);
+  background: var(--verify-wash);
+  font-weight: 500;
+}
+
+@media (max-width: 760px) {
+  .settings-layout {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 24px;
+    margin-top: 20px;
+  }
+
+  .settings-nav {
+    position: static;
+  }
+
+  .settings-nav ul {
+    flex-direction: row;
+    overflow-x: auto;
+    border-left: none;
+  }
+
+  /* The underline sits on each link rather than the scrolling list, since
+     overflow-x clips anything drawn past the list's own box. */
+  .settings-nav a {
+    margin-left: 0;
+    border-left: none;
+    border-bottom: 2px solid var(--steel-line);
+  }
+
+  .settings-nav a[aria-current="page"] {
+    border-bottom-color: var(--verify);
+  }
+}
+
 .settings-section-lede {
   color: var(--ink-soft);
   font-size: 0.92rem;
