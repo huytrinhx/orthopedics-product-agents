@@ -81,6 +81,9 @@ def _patch_fixed_nodes(monkeypatch, *, generate=None, self_eval=None) -> None:
             ]
         }
 
+    async def fake_resolve_query_parts(state):
+        return {"query_parts": [], "turn_tray_ids": []}
+
     async def fake_rerank(state):
         return {"reranked": state["retrieved"]}
 
@@ -93,6 +96,7 @@ def _patch_fixed_nodes(monkeypatch, *, generate=None, self_eval=None) -> None:
     monkeypatch.setattr(det, "detect_intent", fake_detect_intent)
     monkeypatch.setattr(det, "resolve_synonyms", fake_resolve_synonyms)
     monkeypatch.setattr(det, "hybrid_retrieve", fake_hybrid_retrieve)
+    monkeypatch.setattr(det, "resolve_query_parts", fake_resolve_query_parts)
     monkeypatch.setattr(det, "rerank", fake_rerank)
     monkeypatch.setattr(det, "resolve_skus", fake_resolve_skus)
     monkeypatch.setattr(det, "aggregate_facts", fake_aggregate_facts)
@@ -116,6 +120,7 @@ def test_build_graph_compiles_with_the_expected_nodes():
         "clarify_question_type",
         "resolve_synonyms",
         "hybrid_retrieve",
+        "resolve_query_parts",
         "rerank",
         "resolve_skus",
         "aggregate_facts",
@@ -220,6 +225,9 @@ async def test_synonym_ambiguity_clarifies_before_retrieval_ever_runs(monkeypatc
         hybrid_retrieve_calls += 1
         return {"retrieved": []}
 
+    async def fake_resolve_query_parts(state):
+        return {"query_parts": [], "turn_tray_ids": []}
+
     async def fake_rerank(state):
         return {"reranked": []}
 
@@ -248,6 +256,7 @@ async def test_synonym_ambiguity_clarifies_before_retrieval_ever_runs(monkeypatc
     monkeypatch.setattr(det, "detect_intent", fake_detect_intent)
     monkeypatch.setattr(det, "resolve_synonyms", fake_resolve_synonyms)
     monkeypatch.setattr(det, "hybrid_retrieve", fake_hybrid_retrieve)
+    monkeypatch.setattr(det, "resolve_query_parts", fake_resolve_query_parts)
     monkeypatch.setattr(det, "rerank", fake_rerank)
     monkeypatch.setattr(det, "resolve_skus", fake_resolve_skus)
     monkeypatch.setattr(det, "aggregate_facts", fake_aggregate_facts)

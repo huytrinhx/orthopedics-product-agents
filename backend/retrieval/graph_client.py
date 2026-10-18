@@ -464,6 +464,22 @@ class GraphClient:
             )
             return [record["name"] async for record in result]
 
+    async def list_part_descriptions_by_tray(self, product_family: str) -> dict[str, list[str]]:
+        """Tray catalog name -> its Parts' descriptions, for one family
+        (its catalog name). The deterministic workflow reads a tray's screw
+        diameters off these (issue #21's stated-diameter rule) rather than
+        keeping a diameter -> tray table in code.
+        """
+        async with self._driver.session() as session:
+            result = await session.run(
+                """
+                MATCH (p:Part)-[:BELONGS_TO_TRAY]->(t:Tray)-[:BELONGS_TO_FAMILY]->(:ProductFamily {name: $family})
+                RETURN t.name AS tray, collect(coalesce(p.description, '')) AS descriptions
+                """,
+                family=product_family,
+            )
+            return {record["tray"]: record["descriptions"] async for record in result}
+
     # ---- Query surface (backend/agents/tools/graph_query.py + synonym_resolve.py) ----
 
     async def query_related_entities(
@@ -535,6 +551,11 @@ class GraphClient:
         `product_family` key, not `{"part": {...}, "product_family": ...}`
         -- so callers (resolve_skus, _format_part) can read `sku`/
         `description` directly without unwrapping a nested key first.
+        Also a `trays` key (issue #21): the catalog names of every Tray in
+        that family the Part belongs to, sorted -- usually one, but a part
+        like a pickup can sit in several trays of the same family. One row
+        per Part and family, not per tray, so a multi-tray part doesn't eat
+        `limit` once per tray.
         """
         family = product_family or None
         # Falls back to matching on any individual word in `term` (2+
@@ -585,14 +606,15 @@ class GraphClient:
                      [w IN split(toLower($stripped_term), ' ')
                       WHERE size(w) > 1 AND NOT w IN split(toLower(coalesce($family, '')), ' ')]
                      AS match_words
-                MATCH (p:Part)-[:BELONGS_TO_TRAY]->(:Tray)-[:BELONGS_TO_FAMILY]->(f:ProductFamily)
+                MATCH (p:Part)-[:BELONGS_TO_TRAY]->(t:Tray)-[:BELONGS_TO_FAMILY]->(f:ProductFamily)
                 WHERE ($family IS NULL OR f.name = $family)
                   AND (
                     toLower(p.sku) = toLower($term)
                     OR toLower(p.description) CONTAINS toLower($term)
                     OR ANY(word IN match_words WHERE toLower(p.description) CONTAINS word)
                   )
-                RETURN properties(p) AS part, f.name AS product_family,
+                WITH p, f, match_words, collect(DISTINCT t.name) AS trays
+                RETURN properties(p) AS part, f.name AS product_family, trays,
                        size([word IN match_words WHERE toLower(p.description) CONTAINS word])
                            AS word_match_count
                 ORDER BY CASE
@@ -611,7 +633,11 @@ class GraphClient:
                 limit=limit,
             )
             return [
-                {**record["part"], "product_family": record["product_family"]}
+                {
+                    **record["part"],
+                    "product_family": record["product_family"],
+                    "trays": sorted(record["trays"]),
+                }
                 async for record in result
             ]
 

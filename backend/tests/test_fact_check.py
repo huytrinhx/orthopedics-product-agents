@@ -94,6 +94,67 @@ def test_a_conflict_line_missing_the_catalog_value_is_flagged():
     assert "MSK42020 is Full Thread (FT)" in issues[0]
 
 
+# Issue #21: trays as part_lookup returns them -- display names, one or more.
+_MINI_TRAY = "REFLEX® MINI Implant System"
+_NITINOL_TRAY = "REFLEX® Nitinol Implant System"
+_AKIN_BLADE = {"sku": "RFX25001", "description": "BLADE, AKIN, STEPPED", "trays": [_MINI_TRAY]}
+_TETRA_STAPLE = {"sku": "RFX18020", "description": "STAPLE, TETRA, 18 X 20", "trays": [_NITINOL_TRAY]}
+_PICKUPS = {"sku": "MSN90003", "description": "PICKUPS", "trays": [_MINI_TRAY, _NITINOL_TRAY]}
+
+
+def test_a_tray_matching_the_catalog_passes_even_without_its_trademark():
+    assert _check("RFX25001 is in the REFLEX MINI Implant System tray.", parts=[_AKIN_BLADE, _TETRA_STAPLE]) == []
+
+
+def test_flags_a_tray_the_catalog_contradicts():
+    issues = _check(f"RFX25001 is in the {_NITINOL_TRAY} tray.", parts=[_AKIN_BLADE, _TETRA_STAPLE])
+    assert issues == [
+        f"RFX25001 is in {_MINI_TRAY} in the catalog, but the answer places it in {_NITINOL_TRAY}."
+    ]
+
+
+def test_a_part_in_several_trays_passes_naming_any_of_them():
+    assert _check(f"MSN90003 ships in the {_NITINOL_TRAY}.", parts=[_PICKUPS]) == []
+
+
+def test_skips_a_line_naming_parts_from_different_trays():
+    # Can't tell which tray belongs to which SKU, so it doesn't guess.
+    answer = f"RFX25001 and RFX18020 both come from the {_NITINOL_TRAY}."
+    assert _check(answer, parts=[_AKIN_BLADE, _TETRA_STAPLE]) == []
+
+
+def test_only_checks_the_line_the_sku_is_on_for_trays():
+    answer = f"- RFX25001: Akin stepped blade\n- Staples live in the {_NITINOL_TRAY}"
+    assert _check(answer, parts=[_AKIN_BLADE, _TETRA_STAPLE]) == []
+
+
+def test_ignores_a_tray_it_was_never_told_about():
+    # Only the turn's own Parts' trays, plus any tray_names given, are
+    # recognized as tray names.
+    assert _check("RFX25001 is in the Sterile Staple Kits.", parts=[_AKIN_BLADE]) == []
+
+
+def test_flags_a_sibling_tray_given_as_a_known_tray_name():
+    issues = check_answer(
+        "RFX25001 is in the REFLEX Sterile Staple Kits.",
+        citation_ids=set(),
+        source_text="",
+        parts=[_AKIN_BLADE],
+        tray_names={_MINI_TRAY, "REFLEX® Sterile Staple Kits"},
+    )
+    assert issues == [
+        f"RFX25001 is in {_MINI_TRAY} in the catalog, but the answer places it in REFLEX® Sterile Staple Kits."
+    ]
+
+
+def test_a_conflicting_sources_tray_line_passes():
+    answer = (
+        f"RFX25001: the catalog lists {_MINI_TRAY}; [{_DOCUMENT_ID}#3] says {_NITINOL_TRAY}. "
+        "This answer uses the catalog value."
+    )
+    assert _check(answer, citation_ids={f"{_DOCUMENT_ID}#3"}, parts=[_AKIN_BLADE, _TETRA_STAPLE]) == []
+
+
 def test_correction_note_lists_every_issue():
     note = format_issues_for_correction(["first problem", "second problem"])
     assert "- first problem\n- second problem" in note

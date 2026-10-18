@@ -34,6 +34,14 @@ _RRF_K = 10
 # would give RRF nothing extra to promote from either leg, defeating the
 # point of fusing two ranked lists.
 _CANDIDATE_MULTIPLIER = 2
+# Every tray the chunk's document is tagged with, read from document_trays
+# rather than a chunks column -- trays deliberately aren't denormalized onto
+# chunks (see the ..._tag_documents_with_family_and_trays migration), since
+# retrieval never filters by tray: it's only rerank's soft bonus (issue #21).
+_TRAY_IDS_SQL = (
+    "ARRAY(SELECT document_tray.tray_id FROM document_trays document_tray "
+    "WHERE document_tray.document_id = c.document_id ORDER BY document_tray.tray_id) AS tray_ids"
+)
 
 
 @dataclass
@@ -136,10 +144,13 @@ class VectorStoreClient:
             # against the question type -> doc type hierarchy table (issue
             # #17); the name rides along for prompts/traces, and joining it
             # per-row later would mean N extra queries instead of one JOIN.
+            # The chunk's document's tray ids ride along the same way (issue
+            # #21): rerank gives a small bonus to a document tagged with one
+            # of the turn's trays. Never a filter -- see _TRAY_IDS_SQL.
             await cursor.execute(
                 f"""
                 SELECT c.id, c.document_id, c.chunk_index, c.content, c.section_title,
-                       c.document_type_id, dt.name AS document_type
+                       c.document_type_id, dt.name AS document_type, {_TRAY_IDS_SQL}
                 FROM chunks c
                 LEFT JOIN document_types dt ON dt.id = c.document_type_id
                 WHERE true {filter_sql}
@@ -153,7 +164,7 @@ class VectorStoreClient:
             await cursor.execute(
                 f"""
                 SELECT c.id, c.document_id, c.chunk_index, c.content, c.section_title,
-                       c.document_type_id, dt.name AS document_type
+                       c.document_type_id, dt.name AS document_type, {_TRAY_IDS_SQL}
                 FROM chunks c
                 LEFT JOIN document_types dt ON dt.id = c.document_type_id
                 WHERE c.tsv @@ plainto_tsquery('english', %s) {filter_sql}
@@ -190,6 +201,7 @@ def _reciprocal_rank_fusion(
                 if rows_by_id[chunk_id]["document_type_id"]
                 else None
             ),
+            "tray_ids": [str(tray_id) for tray_id in rows_by_id[chunk_id]["tray_ids"]],
             "score": scores[chunk_id],
             "citation": f"{rows_by_id[chunk_id]['document_id']}#{rows_by_id[chunk_id]['chunk_index']}",
         }
