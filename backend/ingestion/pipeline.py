@@ -21,6 +21,8 @@ import uuid
 from ingestion.chunking import chunk_document, strip_page_markers
 from ingestion.embedding import embed_texts
 from ingestion.entity_extraction import extract_entities
+from model_assignments.runtime import configured_slot_model, log_slot_models
+from model_assignments.slots import Slot
 from retrieval.graph_client import get_graph_client
 from retrieval.vector_store import get_vector_store
 
@@ -84,8 +86,16 @@ async def ingest_document(
         # attach prose facts to.
         return
 
+    # Read once per document (issue #24): a slot change only affects
+    # documents ingested after it, and nothing is re-ingested for it.
+    slot_model = await configured_slot_model(Slot.ENTITY_EXTRACTION)
+    log_slot_models(
+        "ingestion_models", {Slot.ENTITY_EXTRACTION.value: slot_model}, document_id=document_id
+    )
     for chunk in _split_for_extraction(strip_page_markers(text)):
-        for item in await extract_entities(chunk, known_parts=known_parts, known_trays=known_trays):
+        for item in await extract_entities(
+            chunk, known_parts=known_parts, known_trays=known_trays, slot_model=slot_model
+        ):
             if item["type"] == "differentiation":
                 await client.attach_differentiation(
                     item["sku_a"], item["sku_b"], item["explanation"], document_id

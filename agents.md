@@ -59,6 +59,50 @@ picking this repo up cold, read this before making structural changes.
     model output with `.text`, never `.content`. OpenRouter's Responses API
     is stateless, which is why the gateway client sets `store=False`; don't
     turn on `use_previous_response_id`.
+  - **Each node runs on its slot's model, and an unset slot means the
+    default** (issue #24, `backend/model_assignments/`). There are six
+    slots, each declaring what its LangChain call needs from a model:
+    intent classification (`deterministic._classify_intent` and
+    `_classify_question_type_reply`, structured output), deterministic
+    answer (`deterministic.generate`, streamed text), ReAct agent
+    (`react_agent.generate`, tool calling), judge (`agents/judge.py`,
+    structured output), entity extraction and tray-layout extraction
+    (structured output, plus image input for tray layout). An admin picks
+    a model and reasoning effort per slot in Settings; it's a row in
+    `model_assignments`. **A slot with no row runs `CHAT_MODEL` at the
+    model's own reasoning default, by calling `get_chat_model()` with no
+    arguments** — exactly what every node did before slots existed — so
+    an empty table changes nothing. Without `OPENROUTER_API_KEY`, every
+    slot runs the default whatever is saved, and Settings is read-only.
+    - Slots are code (`slots.py`), like question types. A new call site
+      joins an existing slot, or gets a new slot with its needs and probe
+      checks (`probe.py`'s `SLOT_CHECKS`); don't call
+      `get_chat_model(model, effort)` with a hand-picked model.
+    - A chat turn resolves its slots once
+      (`runtime.resolve_turn_slot_models`: saved settings through a
+      30-second in-process cache, then the conversation's overrides), logs
+      them as `chat_turn_models`, and passes them in the run config. Nodes
+      read their slot with `slot_model_for_run`, never the database. The
+      judge and each ingested document read theirs with
+      `configured_slot_model`; ingestion logs `ingestion_models`. An
+      extraction slot change only affects documents ingested afterwards.
+    - Saving is two checks: the OpenRouter catalog's metadata has to cover
+      the slot's needs (`catalog.py`, cached an hour), then the slot's real
+      LangChain call has to work against the model on fixed sample inputs
+      (`probe.py`, shared with `evals/openrouter_spike.py`). A failed probe
+      rejects the save with the reason. There are no scheduled re-probes.
+    - At runtime, an assigned model's unusable output (a parse or
+      validation failure, an empty answer, a malformed tool call) is
+      retried once on `CHAT_MODEL` and logged as `slot_output_fallback`
+      (`runtime.invoke_with_output_fallback`). That's separate from the
+      gateway-outage fallback, and a default slot never retries.
+    - Changing the judge's slot breaks score comparison with earlier runs;
+      Settings says so.
+    - The Eval tab's "Rerun with models" sends admin-only per-slot
+      overrides with the chat request (`model_overrides`; a non-admin gets
+      a 403). They're kept in that conversation's state only, and its
+      answers show what they ran on. The harness takes the same choice as
+      `--model <slot>=<model_id>[@<effort>]`.
 - **Uploaded/ingested documents live on local disk (`INGEST_DATA_DIR`), not
   object storage.** No Azure Blob Storage/Azurite — a Railway volume covers
   persistence in production. See

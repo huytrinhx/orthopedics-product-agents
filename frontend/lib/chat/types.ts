@@ -1,3 +1,5 @@
+import type { SlotModelUsed } from "../model-assignments/types";
+
 export type EvalScores = Partial<{
   faithfulness: number;
   relevance: number;
@@ -56,6 +58,9 @@ export type ChatStreamEvent =
         message_id: string;
         answer: string;
         citations: ChatCitation[];
+        // Only in a conversation with admin model overrides (issue #24, the
+        // Eval tab's rerun): slot name -> the model it ran on.
+        models?: Record<string, SlotModelUsed>;
       };
     }
   | { event: "error"; data: { message: string } };
@@ -86,6 +91,8 @@ export interface ChatMessage {
   // renders once this is set, and keys its submission off it.
   messageId?: string;
   feedback?: ChatFeedback | null;
+  // Set from a rerun's "done" event (issue #24): what each slot ran on.
+  models?: Record<string, SlotModelUsed>;
 }
 
 // Mirrors backend/chat_threads/models.py -- the sidebar (ticket 10).

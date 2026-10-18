@@ -22,7 +22,10 @@
 // first turn of a fresh conversation on load, then strips the param so a
 // refresh doesn't ask it again. Read from window.location rather than
 // useSearchParams, which a static export would force behind a Suspense
-// boundary for no benefit here.
+// boundary for no benefit here. A rerun with per-slot model overrides
+// (issue #24) also carries `&models=<json>`; they go with that first turn
+// (admin-only server-side) and stay with the conversation, and its answers
+// show which models they ran on.
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import Link from "next/link";
 import ReactMarkdown from "react-markdown";
@@ -32,6 +35,7 @@ import { STATUS_LABELS, citationLabel, stripCitationMarkers } from "../../lib/ch
 import type { ChatCitation, ChatMessage, ChatStreamEvent, ChatThread } from "../../lib/chat/types";
 import { getDocumentChunks, getDocumentFile } from "../../lib/documents/api";
 import type { DocumentChunk } from "../../lib/documents/types";
+import type { ModelOverrides, SlotModelUsed } from "../../lib/model-assignments/types";
 import { MessageFeedback } from "./message-feedback";
 import { PdfCitationViewer } from "./pdf-citation-viewer";
 
@@ -41,6 +45,35 @@ function isPdfFilename(filename: string): boolean {
 
 function uniqueId(): string {
   return Math.random().toString(36).slice(2);
+}
+
+// `?models=` from the Eval tab's rerun. Anything that isn't a JSON object
+// is ignored rather than sent.
+function parseModelOverrides(raw: string | null): ModelOverrides | undefined {
+  if (!raw) return undefined;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as ModelOverrides) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+const SLOT_LABELS: Record<string, string> = {
+  intent_classification: "Intent",
+  deterministic_answer: "Answer",
+  react_agent: "ReAct agent",
+};
+
+function formatModelsUsed(models: Record<string, SlotModelUsed>): string {
+  return Object.entries(models)
+    .map(
+      ([slot, used]) =>
+        `${SLOT_LABELS[slot] ?? slot}: ${used.model_id} (${used.reasoning_effort ?? "default effort"}${
+          used.source === "override" ? ", override" : ""
+        })`
+    )
+    .join(" · ");
 }
 
 function formatThreadDate(iso: string): string {
@@ -104,11 +137,12 @@ export default function ChatPage() {
   useEffect(() => {
     if (!user || askedFromUrlRef.current) return;
     if (!user.is_admin && !user.is_active) return;
-    const question = new URLSearchParams(window.location.search).get("ask")?.trim();
+    const searchParams = new URLSearchParams(window.location.search);
+    const question = searchParams.get("ask")?.trim();
     if (!question) return;
     askedFromUrlRef.current = true;
     window.history.replaceState(null, "", window.location.pathname);
-    sendQuestion(question);
+    sendQuestion(question, parseModelOverrides(searchParams.get("models")));
     // sendQuestion is deliberately not a dependency -- this only ever runs
     // once, on the first render with a user.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -273,6 +307,7 @@ export default function ChatPage() {
           status: undefined,
           pending: false,
           messageId: streamEvent.data.message_id,
+          models: streamEvent.data.models,
         });
       } else if (streamEvent.event === "error") {
         updateMessage(assistantId, { pending: false, status: undefined });
@@ -313,7 +348,7 @@ export default function ChatPage() {
     await sendQuestion(text);
   }
 
-  async function sendQuestion(text: string) {
+  async function sendQuestion(text: string, modelOverrides?: ModelOverrides) {
     const userMessage: ChatMessage = { id: uniqueId(), role: "user", content: text };
     const assistantId = uniqueId();
     setMessages((previous) => [
@@ -321,7 +356,7 @@ export default function ChatPage() {
       userMessage,
       { id: assistantId, role: "assistant", content: "", pending: true, status: "Thinking…" },
     ]);
-    await runTurn(streamChat(text, threadIdRef.current), assistantId);
+    await runTurn(streamChat(text, threadIdRef.current, modelOverrides), assistantId);
   }
 
   // Ticket 09: answers a clarification question, either by clicking one of
@@ -425,6 +460,9 @@ export default function ChatPage() {
                     </div>
                   )}
                   {message.status && <div className="chat-status">{message.status}</div>}
+                  {message.models && (
+                    <div className="chat-models-used">Ran on: {formatModelsUsed(message.models)}</div>
+                  )}
                   {message.clarification && (
                     <div className="chat-clarification">
                       {message.clarification.options.length > 0 && (

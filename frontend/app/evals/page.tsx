@@ -8,13 +8,17 @@
 // app/chat/page.tsx), on whatever workflow is the current default -- so
 // the admin sees exactly what a rep would get now. This replaced an inline,
 // history-replaying rerun with a per-item attempt history (2026-10-07, see
-// build-log.md).
+// build-log.md). "Rerun with models" (issue #24) adds per-slot model
+// overrides to that rerun (`&models=`) to compare models on the same
+// question; it's only offered when OPENROUTER_API_KEY is set.
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { useAuth } from "../../lib/auth-context";
 import { listFeedback } from "../../lib/feedback/api";
 import type { FeedbackListItem } from "../../lib/feedback/types";
+import { getModelAssignments } from "../../lib/model-assignments/api";
+import { CHAT_SLOTS, type ModelOverrides, type ModelSlot } from "../../lib/model-assignments/types";
 import { FeedbackRow } from "./feedback-row";
 
 type Filter = "unresolved" | "all";
@@ -29,12 +33,24 @@ export default function EvalsPage() {
   const [feedback, setFeedback] = useState<FeedbackListItem[] | null>(null);
   const [filter, setFilter] = useState<Filter>("unresolved");
   const [error, setError] = useState<string | null>(null);
+  const [chatSlots, setChatSlots] = useState<ModelSlot[]>([]);
 
   useEffect(() => {
     if (!user?.is_admin) return;
     listFeedback()
       .then(setFeedback)
       .catch((caughtError) => setError(caughtError instanceof Error ? caughtError.message : "Couldn't load feedback"));
+    // Model overrides are an extra: without them (or the gateway), Rerun
+    // works as before.
+    getModelAssignments()
+      .then((assignments) =>
+        setChatSlots(
+          assignments.gateway_configured
+            ? assignments.slots.filter((slot) => (CHAT_SLOTS as readonly string[]).includes(slot.slot))
+            : []
+        )
+      )
+      .catch(() => setChatSlots([]));
   }, [user]);
 
   function updateItem(messageId: string, patch: Partial<FeedbackListItem>) {
@@ -47,8 +63,9 @@ export default function EvalsPage() {
     setFeedback((previous) => (previous ? previous.filter((item) => item.message_id !== messageId) : previous));
   }
 
-  function rerun(question: string) {
-    router.push(`/chat?ask=${encodeURIComponent(question)}`);
+  function rerun(question: string, modelOverrides?: ModelOverrides) {
+    const models = modelOverrides ? `&models=${encodeURIComponent(JSON.stringify(modelOverrides))}` : "";
+    router.push(`/chat?ask=${encodeURIComponent(question)}${models}`);
   }
 
   if (loading) return <main className="page-wide"><p>Loading…</p></main>;
@@ -73,7 +90,9 @@ export default function EvalsPage() {
       <p className="lede">
         Every score, comment, and flag reps have left on an answer, newest first. Click a row to read
         the full answer. Rerun asks the same question again in a fresh chat on the current default
-        workflow; mark a flagged item resolved once the rerun confirms it&rsquo;s fixed.
+        workflow; Rerun with models first picks per-slot models for that one conversation, and its
+        answer shows what it ran on. Mark a flagged item resolved once the rerun confirms it&rsquo;s
+        fixed.
       </p>
 
       <div className="eval-filter" role="group" aria-label="Filter feedback">
@@ -126,6 +145,7 @@ export default function EvalsPage() {
                 <FeedbackRow
                   key={item.message_id}
                   item={item}
+                  chatSlots={chatSlots}
                   onRerun={rerun}
                   onResolvedChanged={(resolved) => updateItem(item.message_id, { resolved })}
                   onDeleted={() => removeItem(item.message_id)}

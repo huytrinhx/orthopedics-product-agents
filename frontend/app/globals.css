@@ -949,6 +949,125 @@ highlighter amber with the reason spelled out under the filename. */
   color: var(--ink-soft);
 }
 
+/* ---------------- per-slot models (issue #24) ---------------- */
+
+.model-slot-call-sites {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  color: var(--steel);
+}
+
+.model-slot-warning {
+  margin: 0;
+  font-size: 0.86rem;
+  color: var(--highlighter);
+}
+
+.model-slot-current {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.model-slot-model {
+  font-family: var(--font-mono);
+  font-size: 0.86rem;
+}
+
+.model-slot-audit,
+.model-slot-readonly {
+  font-size: 0.82rem;
+  color: var(--ink-soft);
+}
+
+.model-slot-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* A failed probe's reason spans several lines, one per check. */
+.model-slot-details {
+  white-space: pre-wrap;
+}
+
+.model-slot-probe {
+  font-size: 0.84rem;
+  padding: 8px 10px;
+}
+
+.model-slot-probe ul {
+  margin: 4px 0 0;
+  padding-left: 18px;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+}
+
+.model-slot-probe-passed {
+  background: var(--verify-wash);
+  color: var(--verify-dark);
+}
+
+.model-slot-probe-failed {
+  background: var(--danger-wash);
+  color: var(--danger);
+}
+
+.model-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-width: 640px;
+}
+
+.model-picker-list {
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+}
+
+.model-picker-effort {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.86rem;
+}
+
+.model-picker-loading,
+.model-picker-empty {
+  margin: 0;
+  font-size: 0.84rem;
+  color: var(--ink-soft);
+}
+
+.rerun-models {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.rerun-models-slot {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.rerun-models-label {
+  font-weight: 600;
+  font-size: 0.88rem;
+}
+
+.rerun-models-current {
+  font-weight: 400;
+  color: var(--steel);
+}
+
+.chat-models-used {
+  margin-top: 6px;
+  font-family: var(--font-mono);
+  font-size: 0.74rem;
+  color: var(--steel);
+}
+
 /* ---------------- upload form ---------------- */
 
 .upload-row {

@@ -53,3 +53,9 @@ class BaseAgentState(TypedDict):
     fact_check_issues: list[str]
     user_id: str
     thread_id: str
+    # An admin's per-slot model overrides for this conversation (issue #24,
+    # the Eval tab's rerun): slot -> {model_id, reasoning_effort}. Only
+    # stored here, so they last as long as the conversation; the API layer
+    # reads them back each request and hands nodes the resolved models
+    # through the run config (model_assignments/runtime.py), not state.
+    model_overrides: dict[str, dict]

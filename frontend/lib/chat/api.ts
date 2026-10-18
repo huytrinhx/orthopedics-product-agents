@@ -1,4 +1,5 @@
 import { API_BASE, authHeaders, handleUnauthorized, request } from "../api/client";
+import type { ModelOverrides } from "../model-assignments/types";
 import type { ChatFeedback, ChatStreamEvent, ChatThread, ChatTranscript, SubmitFeedbackRequest } from "./types";
 
 // SSE (event: <name>\ndata: <json>\n\n) but over a POST, so the native
@@ -39,15 +40,18 @@ async function* parseSseStream(response: Response): AsyncGenerator<ChatStreamEve
 
 // No workflow name here -- the backend runs whichever workflow the admin
 // has configured as default (ticket 14); the chat UI never picks one
-// itself.
+// itself. `modelOverrides` is admin-only (issue #24, the Eval tab's rerun):
+// per-slot models for this conversation. The backend 403s it for anyone
+// else.
 export async function* streamChat(
   message: string,
-  threadId?: string
+  threadId?: string,
+  modelOverrides?: ModelOverrides
 ): AsyncGenerator<ChatStreamEvent> {
   const response = await fetch(`${API_BASE}/chat/stream`, {
     method: "POST",
     headers: { "Content-Type": "application/json", ...authHeaders() },
-    body: JSON.stringify({ message, thread_id: threadId }),
+    body: JSON.stringify({ message, thread_id: threadId, model_overrides: modelOverrides }),
   });
   yield* parseSseStream(response);
 }

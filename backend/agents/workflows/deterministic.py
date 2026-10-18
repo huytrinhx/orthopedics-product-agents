@@ -85,6 +85,8 @@ from catalog.display_names import CatalogDisplayNames, catalog_display_names_for
 from catalog.repository import ProductFamilyRecord, TrayRecord, list_families_with_trays
 from config.llm_clients import get_chat_model
 from doc_type_hierarchy.repository import RankedDocumentType, list_hierarchy
+from model_assignments.runtime import SlotModel, invoke_with_output_fallback, slot_model_for_run
+from model_assignments.slots import Slot
 from retrieval.graph_client import get_graph_client
 
 # Neo4j round-trips are cheap individually but resolve_skus can extract
@@ -352,8 +354,13 @@ async def _classify_intent(
     family_names: list[str],
     previous_family: str | None = None,
     previous_message: str | None = None,
+    *,
+    slot_model: SlotModel | None = None,
 ) -> _IntentClassification:
-    model = get_chat_model().with_structured_output(_IntentClassification)
+    """`slot_model` defaults to the intent-classification slot of the graph
+    run this is called from (issue #24); the intent eval passes its own.
+    """
+    slot_model = slot_model or slot_model_for_run(Slot.INTENT_CLASSIFICATION)
     question_type_listing = "\n".join(f"- {question_type.name}: {question_type.description}" for question_type in QUESTION_TYPES)
     # Hints only (issue #22): product_family still comes from what the new
     # question itself says, and detect_intent -- not the model -- decides
@@ -370,39 +377,42 @@ async def _classify_intent(
             "implies, and set mentions_family to false if it names or points "
             "at no product family at all."
         )
-    return await model.ainvoke(
-        [
-            SystemMessage(
-                content=(
-                    "Classify the sales rep's question below.\n\n"
-                    f"Allowed product families: {', '.join(family_names) or '(none configured)'}\n"
-                    f"Allowed question types:\n{question_type_listing}\n\n"
-                    "Set product_family to null if the question doesn't "
-                    "clearly name or imply exactly one of the allowed "
-                    "product families -- when genuinely unclear, always "
-                    "prefer null over guessing, even if only one family is "
-                    "configured. When it's null, list in candidate_families "
-                    f"the (at most {MAX_FAMILY_CANDIDATES}) allowed families "
-                    "the question could plausibly be about, most likely "
-                    "first, or none if nothing in it points anywhere. Only "
-                    "once the question does clearly identify a family: if "
-                    "several allowed families share a common brand name "
-                    "(e.g. MIS or REFLEX), pick the one that actually "
-                    "matches, and don't switch to a different family just "
-                    "because of incidental word overlap (a question about a "
-                    "screw, wire, or guidepin describes the implant/"
-                    "consumable family, not a separate powered-instrument "
-                    "family, unless it explicitly asks about the powered "
-                    "tool itself). Use family names and question type names "
-                    "exactly as given -- most questions are exactly one "
-                    "type; if a question can be interpreted as more than one "
-                    "type, output multiple types; if none of the types "
-                    "clearly fits, output unclassified alone."
-                    f"{follow_up_context}"
-                )
-            ),
-            {"role": "user", "content": query},
-        ]
+    prompt = [
+        SystemMessage(
+            content=(
+                "Classify the sales rep's question below.\n\n"
+                f"Allowed product families: {', '.join(family_names) or '(none configured)'}\n"
+                f"Allowed question types:\n{question_type_listing}\n\n"
+                "Set product_family to null if the question doesn't "
+                "clearly name or imply exactly one of the allowed "
+                "product families -- when genuinely unclear, always "
+                "prefer null over guessing, even if only one family is "
+                "configured. When it's null, list in candidate_families "
+                f"the (at most {MAX_FAMILY_CANDIDATES}) allowed families "
+                "the question could plausibly be about, most likely "
+                "first, or none if nothing in it points anywhere. Only "
+                "once the question does clearly identify a family: if "
+                "several allowed families share a common brand name "
+                "(e.g. MIS or REFLEX), pick the one that actually "
+                "matches, and don't switch to a different family just "
+                "because of incidental word overlap (a question about a "
+                "screw, wire, or guidepin describes the implant/"
+                "consumable family, not a separate powered-instrument "
+                "family, unless it explicitly asks about the powered "
+                "tool itself). Use family names and question type names "
+                "exactly as given -- most questions are exactly one "
+                "type; if a question can be interpreted as more than one "
+                "type, output multiple types; if none of the types "
+                "clearly fits, output unclassified alone."
+                f"{follow_up_context}"
+            )
+        ),
+        {"role": "user", "content": query},
+    ]
+    return await invoke_with_output_fallback(
+        slot_model,
+        get_chat_model,
+        lambda chat_model: chat_model.with_structured_output(_IntentClassification).ainvoke(prompt),
     )
 
 
@@ -548,19 +558,21 @@ async def _classify_question_type_reply(query: str, reply: str) -> str:
     from every question type, not only the offered ones, like the family
     clarification's free text. Only runs on that free-text path.
     """
-    model = get_chat_model().with_structured_output(_QuestionTypeReply)
     question_type_listing = "\n".join(f"- {question_type.name}: {question_type.description}" for question_type in QUESTION_TYPES)
-    result = await model.ainvoke(
-        [
-            SystemMessage(
-                content=(
-                    "A sales rep was asked what kind of question they're asking. "
-                    "Pick the one question type their reply means.\n\n"
-                    f"Allowed question types:\n{question_type_listing}"
-                )
-            ),
-            {"role": "user", "content": f"Question: {query}\nWhat they meant: {reply}"},
-        ]
+    prompt = [
+        SystemMessage(
+            content=(
+                "A sales rep was asked what kind of question they're asking. "
+                "Pick the one question type their reply means.\n\n"
+                f"Allowed question types:\n{question_type_listing}"
+            )
+        ),
+        {"role": "user", "content": f"Question: {query}\nWhat they meant: {reply}"},
+    ]
+    result = await invoke_with_output_fallback(
+        slot_model_for_run(Slot.INTENT_CLASSIFICATION),
+        get_chat_model,
+        lambda chat_model: chat_model.with_structured_output(_QuestionTypeReply).ainvoke(prompt),
     )
     return result.question_type
 
@@ -1222,7 +1234,6 @@ def _format_known_facts(aggregated_facts: str) -> str:
 
 async def generate(state: DeterministicState) -> dict:
     passages = state.get("reranked") or []
-    model = get_chat_model()
     # state["messages"]'s last entry is this turn's raw HumanMessage (the
     # API appends it before invoking, and the checkpointer restores every
     # earlier turn's messages too) -- swap it for a context-augmented
@@ -1257,7 +1268,14 @@ async def generate(state: DeterministicState) -> dict:
     if issues:
         prompt += [AIMessage(content=state["answer"]), HumanMessage(content=format_issues_for_correction(issues))]
         update["correction_rounds"] = state.get("correction_rounds", 0) + 1
-    response = await model.ainvoke(prompt)
+    # An assigned model's empty answer gets one retry on CHAT_MODEL (issue
+    # #24). The call streams through astream_events whichever model answers.
+    response = await invoke_with_output_fallback(
+        slot_model_for_run(Slot.DETERMINISTIC_ANSWER),
+        get_chat_model,
+        lambda chat_model: chat_model.ainvoke(prompt),
+        is_usable=lambda candidate: bool(candidate.text.strip()),
+    )
     answer = response.text
     return {**update, "answer": answer, "citations": extract_citations(answer)}
 
