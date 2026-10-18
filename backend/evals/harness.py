@@ -1,6 +1,7 @@
 """Runs a golden dataset against any registered workflow, scoring each
-example with the shared judge (backend/agents/judge.py). Triggered from CI
-(.github/workflows/ci.yml) on PRs that touch backend/agents/.
+example with the shared judge (backend/agents/judge.py). Not run from CI:
+its job there passed without evaluating anything, since run_eval is still a
+stub, so issue #8 deleted it and #25 brings it back with a real harness.
 """
 from agents.judge import judge_answer  # noqa: F401
 from agents.registry import get_workflow  # noqa: F401

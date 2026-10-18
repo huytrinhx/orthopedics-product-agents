@@ -20,28 +20,44 @@ picking this repo up cold, read this before making structural changes.
   expansion instead queries the Neo4j/AuraDB graph directly
   (`backend/agents/tools/synonym_resolve.py`). See
   `docs/adr/0002-postgres-pgvector-retrieval.md`.
-- **LLM/embeddings provider is plain OpenAI**
-  (`backend/config/llm_clients.py`, `OPENAI_API_KEY`), not Azure OpenAI —
-  the enterprise service-principal auth pattern (`AZURE_TENANT_ID`/
-  `CLIENT_ID`/`CLIENT_SECRET`) was removed along with Azure AI Search. See
-  `docs/adr/0003-openai-direct-llm-provider.md`.
-  - **The chat model goes through the Responses API**
-    (`use_responses_api=True` in `get_chat_model()`), not Chat
+- **Chat goes through OpenRouter; embeddings stay on plain OpenAI**
+  (`backend/config/llm_clients.py`), not Azure OpenAI. The enterprise
+  service-principal auth pattern (`AZURE_TENANT_ID`/`CLIENT_ID`/
+  `CLIENT_SECRET`) was removed along with Azure AI Search. See
+  `docs/adr/0003-openai-direct-llm-provider.md` and
+  `docs/adr/0007-openrouter-chat-gateway.md`, which supersedes 0003's chat
+  half.
+  - **OpenRouter is the only chat path once `OPENROUTER_API_KEY` is set.**
+    `ChatOpenAI` stays the client with OpenRouter's `base_url`. Without the
+    key (local dev, CI) chat goes to OpenAI direct. There's no per-call
+    provider choice, and no provider-switch abstraction beyond that one
+    branch: a new model, Kyma included, is an OpenRouter model id, not new
+    client code. Every call site goes through `get_chat_model()`. Don't
+    construct `ChatOpenAI` anywhere else, or that call skips the gateway
+    and the fallback.
+  - **`CHAT_MODEL` is an OpenRouter id and must be `openai/...`.** OpenAI
+    direct runs it with the prefix stripped, and so does the outage
+    fallback, which retries a 5xx, timeout, or rejected-key failure against
+    OpenAI direct and logs `chat_gateway_fallback`. Startup
+    (`configured_chat_model()` in the lifespan) refuses anything else, and
+    refuses a leftover `OPENAI_CHAT_MODEL` set on its own. Model output
+    errors never trigger the fallback.
+  - **`get_chat_model(model, reasoning_effort)` is `lru_cache`d per (model,
+    effort).** `model` is an OpenRouter id (#24 picks one per node). The
+    fallback always runs `CHAT_MODEL`.
+  - **Every node uses the Responses API** (`USE_RESPONSES_API`), not Chat
     Completions. Production runs a GPT-5.x reasoning model, and OpenAI
     rejects function tools alongside reasoning on `/v1/chat/completions`,
     which broke every `react_agent` turn. Turning reasoning off
     (`reasoning_effort="none"`) was the other way out, but `react_agent`'s
     tool-bound `generate` call is where the model decides which tool to call
     and when to stop, so that's exactly where reasoning earns its cost.
-    Responses-API messages carry `content` as a list of blocks: read model
-    output with `.text`, never `.content`. Moving to OpenRouter as a model
-    gateway is tracked in GitHub issue #8.
-  - **Kyma (kymaapi.com) is a live option for the chat model on deployment,
-    not yet wired up.** There's deliberately no provider-switch abstraction
-    in the code for this — it would be speculative complexity for a model
-    not yet committed to. If this gets picked up, it belongs in the same PR
-    that stands up the Kyma account, alongside `get_chat_model()` in
-    `backend/config/llm_clients.py`.
+    Whether OpenRouter's Chat Completions can replace it is
+    `backend/evals/openrouter_spike.py`'s job, and ADR 0007 records the
+    result. Responses-API messages carry `content` as a list of blocks: read
+    model output with `.text`, never `.content`. OpenRouter's Responses API
+    is stateless, which is why the gateway client sets `store=False`; don't
+    turn on `use_previous_response_id`.
 - **Uploaded/ingested documents live on local disk (`INGEST_DATA_DIR`), not
   object storage.** No Azure Blob Storage/Azurite — a Railway volume covers
   persistence in production. See

@@ -55,11 +55,21 @@ Agentic retrieval over an orthopedics product/clinical knowledge base
    deprecated, hard cutoff 2026-12-01) is all Railway needs to build/deploy
    on every push to `main`; there's no GitHub Actions deploy step. Postgres
    runs on Supabase (pgvector-enabled); Neo4j runs on AuraDB.
-10. **Model provider: OpenAI API**, direct (`OPENAI_API_KEY`) — see
-    `backend/config/llm_clients.py`. LangGraph is model-agnostic, so this is
-    a low-cost-to-change default; swapping the chat model to Kyma
-    (kymaapi.com) for deployment is a live option under consideration, not
-    yet wired up (nothing in this codebase depends on it — see `agents.md`).
+10. **Model provider: OpenRouter for chat, OpenAI for embeddings.** With
+    `OPENROUTER_API_KEY` set, every chat call goes through OpenRouter's
+    OpenAI-compatible API, so trying a different model means changing
+    `CHAT_MODEL`, not code. A gateway outage (5xx, timeout, rejected key)
+    falls back to OpenAI direct for that call. Without the key (local dev,
+    CI), chat goes to OpenAI direct. Embeddings always use OpenAI direct
+    (`OPENAI_API_KEY`). See `backend/config/llm_clients.py` and
+    `docs/adr/0007-openrouter-chat-gateway.md`.
+
+    | Variable | Required | What it does |
+    | --- | --- | --- |
+    | `OPENAI_API_KEY` | Always | Embeddings, chat when there's no OpenRouter key, and the gateway-outage fallback. |
+    | `OPENROUTER_API_KEY` | Production | Sends every chat call through OpenRouter. Leave it unset locally and in CI. |
+    | `CHAT_MODEL` | No (default `openai/gpt-4o`) | The chat model, as an OpenRouter id. It must be an `openai/...` model so the OpenAI-direct path can run it with the prefix stripped. Startup fails otherwise. Replaces `OPENAI_CHAT_MODEL`, and startup also fails if only that old variable is set. |
+    | `OPENAI_EMBEDDING_MODEL` | No (default `text-embedding-3-small`) | Changing it means re-ingesting every document. |
 
 ## Repo layout
 
@@ -72,7 +82,7 @@ backend/            FastAPI + LangGraph service (Python)
     judge.py          shared 4-axis LLM-judge (offline evals + feedback)
     fact_check.py     deterministic per-turn answer checks (self_eval)
     registry.py        workflow name -> compiled graph
-  config/             OpenAI chat/embedding client factories
+  config/             chat (OpenRouter, OpenAI fallback) and embedding (OpenAI) client factories
   retrieval/          Postgres/pgvector + Neo4j/AuraDB clients
   ingestion/          chunking, embedding, entity extraction -> pgvector index + graph
   memory/             Postgres-backed checkpointer (conversation) + store (user)
@@ -84,7 +94,7 @@ backend/            FastAPI + LangGraph service (Python)
 frontend/            Next.js app: /chat, /documents, /evals (static export)
 Dockerfile            builds the frontend, then serves it + the API from one process
 .railway/railway.ts    tells Railway to build with that Dockerfile (see "Deploying to Railway")
-.github/workflows/     ci.yml (lint/test/eval on PR) — no deploy workflow, Railway
+.github/workflows/     ci.yml (lint/test on PR; golden-dataset evals return with #25) — no deploy workflow, Railway
                         deploys straight from git via .railway/railway.ts
 ```
 
@@ -109,6 +119,8 @@ it.
    `localhost:7687`).
 3. **Configure env**: `cp .env.example .env`, then fill in `OPENAI_API_KEY`.
    The Neo4j/Postgres values already match `docker-compose.yml`'s defaults.
+   Leave `OPENROUTER_API_KEY` blank unless you want local chat to go through
+   the gateway too (see decision 10).
 4. **Optional — Langfuse (per-question LLM/agent tracing)**: no self-hosting
    needed — sign up at [cloud.langfuse.com](https://cloud.langfuse.com),
    create a project, and copy its keys into `.env`
@@ -124,7 +136,8 @@ it.
 
 Unlike a prior draft of this project, there's no enterprise-cloud dependency
 for local dev — `OPENAI_API_KEY` works the same way locally and in
-production, and every other service (Postgres, Neo4j) runs in Docker.
+production (where OpenRouter sits in front of it for chat), and every other
+service (Postgres, Neo4j) runs in Docker.
 
 ## Deploying to Railway
 
@@ -205,7 +218,9 @@ See "Subsequent deployments" below for why migrations aren't automatic.
    `.railway/railway.ts` already declares every variable name below (via
    `preserve()`, so it never manages the actual value) — this step is just
    giving each one a real value. Required: `OPENAI_API_KEY`,
-   `DATABASE_URL`, `NEO4J_URI`/`NEO4J_USER`/`NEO4J_PASSWORD`, `JWT_SECRET`
+   `OPENROUTER_API_KEY`, `CHAT_MODEL` (an OpenRouter id such as
+   `openai/gpt-5.6-luna`; delete the old `OPENAI_CHAT_MODEL`, which startup
+   now rejects when it's set without `CHAT_MODEL`), `DATABASE_URL`, `NEO4J_URI`/`NEO4J_USER`/`NEO4J_PASSWORD`, `JWT_SECRET`
    (a real random value — it falls back to an insecure dev default if
    unset), `ADMIN_EMAILS` (comma-separated; grants `is_admin`). Required
    only for Google sign-in: `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET` and

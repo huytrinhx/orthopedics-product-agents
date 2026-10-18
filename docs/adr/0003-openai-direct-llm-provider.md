@@ -2,7 +2,10 @@
 
 ## Status
 
-Accepted
+Accepted. The chat-model provider half is superseded by
+[0007](0007-openrouter-chat-gateway.md): chat now goes through OpenRouter,
+with OpenAI direct as the fallback, and Kyma isn't adopted. Embeddings stay
+on OpenAI direct as decided here.
 
 ## Context
 
