@@ -113,7 +113,9 @@ picking this repo up cold, read this before making structural changes.
   (`mis-foot-recon-system.jsonl`, `reflex-foot-recon-systems.jsonl`,
   `reflex-hybrid.jsonl`), and `intent_detection.jsonl` labels each query
   with its expected family, question-type slugs, and whether it should
-  trigger the family (#18) or question-type (#19) clarification.
+  trigger the family (#18) or question-type (#19) clarification. Rows
+  with several `turns` label the last one as a follow-up to the earlier
+  ones (#22, family carry-over).
   `feedback-notes.csv` keeps reviewers' original MIS/REFLEX column;
   `backend/evals/golden_datasets/build_dataset.py` maps it to families
   (REFLEX questions naming HYBRID go to REFLEX HYBRID) and raises on any

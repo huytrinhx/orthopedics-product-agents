@@ -4,8 +4,9 @@ Product Family (mis-foot-recon-system.jsonl, reflex-foot-recon-systems.jsonl,
 reflex-hybrid.jsonl) and intent_detection.jsonl (family routing, question
 type and clarification eval, ticket 09 / issues #18 and #19) -- the latter
 also gets a few hand-authored rows appended after the CSV-derived ones:
-family-clarification cases (_AMBIGUOUS_FIXTURES) and extra documents_lookup
-examples (_DOCUMENTS_LOOKUP_FIXTURES, the rarest question type in the CSV).
+family-clarification cases (_AMBIGUOUS_FIXTURES), extra documents_lookup
+examples (_DOCUMENTS_LOOKUP_FIXTURES, the rarest question type in the CSV),
+and multi-turn follow-ups (_FOLLOW_UP_FIXTURES, issue #22).
 Rerun this after new rows land in feedback-notes.csv.
 
 feedback-notes.csv stays exactly as reviewers wrote it, so its "Indexed
@@ -167,6 +168,56 @@ _DOCUMENTS_LOOKUP_FIXTURES: list[dict] = [
 ]
 
 
+def follow_up_record(
+    earlier_prompts: list[str], prompt: str, product_family: str | None, question_types: list[str]
+) -> dict:
+    """A multi-turn row (issue #22): its labels are for the last turn, read
+    in the context of the earlier ones. Only the rep's turns are listed --
+    detect_intent sees the previous user message and the family the
+    previous turn resolved to, never an earlier answer.
+    """
+    record = intent_record(prompt, product_family, question_types)
+    earlier_turns = [{"role": "user", "content": earlier_prompt} for earlier_prompt in earlier_prompts]
+    record["turns"] = [*earlier_turns, *record["turns"]]
+    return record
+
+
+# Hand-authored like the fixtures above: feedback-notes.csv only holds
+# single questions. A follow-up naming no family stays on the previous
+# turn's family with no clarification; one clearly naming another family
+# switches to it; one naming another family ambiguously ("the REFLEX set"
+# is REFLEX Foot Recon Systems or REFLEX HYBRID) still asks. The question
+# type is labelled fresh for every turn, so a follow-up can change it.
+_FOLLOW_UP_FIXTURES: list[dict] = [
+    follow_up_record(["What screws are in the MIS set?"], "What about the 3.5 PT?", MIS_FOOT_RECON, ["system_contents"]),
+    follow_up_record(
+        ["What screws are in the MIS set?", "What about the 3.5 PT?"],
+        "Which level of the tray is it on?",
+        MIS_FOOT_RECON,
+        ["system_contents"],
+    ),
+    follow_up_record(
+        ["Whats the SKU for the 1.4 wire in the MIS set"],
+        "Ok, and how do I insert it?",
+        MIS_FOOT_RECON,
+        ["technique_procedural"],
+    ),
+    follow_up_record(
+        ["How wide is the reflex hybrid MTP implant"],
+        "And how long are the staple legs?",
+        REFLEX_HYBRID,
+        ["product_characteristics"],
+    ),
+    follow_up_record(
+        ["What screws are in the MIS set?"],
+        "How wide is the reflex hybrid MTP implant?",
+        REFLEX_HYBRID,
+        ["product_characteristics"],
+    ),
+    follow_up_record(["What screws are in the MIS set?"], "What about the REFLEX set?", None, ["system_contents"]),
+]
+
+
 def dataset_file_name(product_family: str) -> str:
     """"MIS - Foot Recon System" -> "mis-foot-recon-system.jsonl"."""
     return re.sub(r"[^a-z0-9]+", "-", product_family.lower()).strip("-") + ".jsonl"
@@ -194,6 +245,7 @@ def main() -> None:
 
     intent_records.extend(_AMBIGUOUS_FIXTURES)
     intent_records.extend(_DOCUMENTS_LOOKUP_FIXTURES)
+    intent_records.extend(_FOLLOW_UP_FIXTURES)
     intent_path = DATASET_DIRECTORY / "intent_detection.jsonl"
     write_jsonl(intent_path, intent_records)
     print(f"wrote {len(intent_records)} examples to {intent_path.name}")

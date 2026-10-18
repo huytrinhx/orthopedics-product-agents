@@ -68,7 +68,7 @@ class _Harness:
         async def fake_list_families_with_trays():
             return list(_FAMILIES)
 
-        async def fake_classify_intent(query, family_names):
+        async def fake_classify_intent(query, family_names, previous_family=None, previous_message=None):
             self.classify_calls += 1
             return classification.model_copy(deep=True)
 

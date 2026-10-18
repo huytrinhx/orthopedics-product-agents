@@ -3,7 +3,9 @@ against the real app -- no mocking, same approach as
 test_documents.py/test_tags.py. Route-level concerns (auth, unknown
 workflow, thread ownership) don't need a real LLM; anything that has to
 complete an actual chat turn does, so those are gated behind OPENAI_API_KEY
-like test_entity_extraction.py.
+like test_entity_extraction.py. The one exception fakes the classifier
+and every node past it, since it's about what chat.py carries between
+turns (issue #22), not about the answer.
 """
 import asyncio
 import json
@@ -513,3 +515,84 @@ def test_a_long_first_message_is_truncated_into_the_thread_title():
 
     assert len(listing[0]["title"]) <= 61  # 60 chars + the "…" truncation marker
     assert listing[0]["title"].endswith("…")
+
+
+def test_a_follow_up_naming_no_family_stays_on_the_threads_family_across_requests(monkeypatch):
+    """Issue #22, through the real routes and the real Postgres
+    checkpointer: chat.py's per-turn inputs leave resolved_family alone, so
+    the second POST /chat/{workflow}/stream on the same thread reads the
+    first turn's family back and answers with no clarification. The
+    classifier and everything past detect_intent are faked, so this needs
+    no OPENAI_API_KEY.
+    """
+    import agents.workflows.deterministic as det
+    from catalog.repository import ProductFamilyRecord
+
+    foot_recon = ProductFamilyRecord(uuid.uuid4(), "MIS - Foot Recon System", "MIS Foot Recon")
+    power = ProductFamilyRecord(uuid.uuid4(), "MIS - Power System", "MIS Power")
+    first_question = "What screws are in the MIS Foot Recon set?"
+    follow_up = "What about the 3.5 PT?"
+    classifications = {
+        first_question: det._IntentClassification(product_family="MIS Foot Recon", question_type=["system_contents"]),
+        follow_up: det._IntentClassification(product_family=None, candidate_families=["MIS Power"]),
+    }
+    classifier_hints: list[tuple[str | None, str | None]] = []
+    retrieved_family_ids: list[str | None] = []
+
+    async def fake_list_families_with_trays():
+        return [foot_recon, power]
+
+    async def fake_classify_intent(query, family_names, previous_family=None, previous_message=None):
+        classifier_hints.append((previous_family, previous_message))
+        return classifications[query].model_copy(deep=True)
+
+    async def fake_resolve_synonyms(state):
+        return {"resolved_canonical_terms": [], "synonym_ambiguity": None}
+
+    async def fake_hybrid_retrieve(state):
+        retrieved_family_ids.append(state.get("resolved_family_id"))
+        return {"retrieved": []}
+
+    async def fake_rerank(state):
+        return {"reranked": []}
+
+    async def fake_resolve_skus(state):
+        return {"resolved_parts": []}
+
+    async def fake_aggregate_facts(state):
+        return {"aggregated_facts": ""}
+
+    async def fake_generate(state):
+        return {"answer": f"about {state['resolved_family']}", "citations": []}
+
+    async def fake_self_eval(state):
+        return {"fact_check_issues": []}
+
+    monkeypatch.setattr(det, "list_families_with_trays", fake_list_families_with_trays)
+    monkeypatch.setattr(det, "_classify_intent", fake_classify_intent)
+    monkeypatch.setattr(det, "resolve_synonyms", fake_resolve_synonyms)
+    monkeypatch.setattr(det, "hybrid_retrieve", fake_hybrid_retrieve)
+    monkeypatch.setattr(det, "rerank", fake_rerank)
+    monkeypatch.setattr(det, "resolve_skus", fake_resolve_skus)
+    monkeypatch.setattr(det, "aggregate_facts", fake_aggregate_facts)
+    monkeypatch.setattr(det, "generate", fake_generate)
+    monkeypatch.setattr(det, "self_eval", fake_self_eval)
+
+    with TestClient(app) as client:
+        headers = {"Authorization": f"Bearer {_user_token(client)}"}
+        first_response = client.post(
+            "/chat/deterministic/stream", headers=headers, json={"message": first_question}
+        )
+        first = dict(_sse_events(first_response.text))
+        second_response = client.post(
+            "/chat/deterministic/stream",
+            headers=headers,
+            json={"message": follow_up, "thread_id": first["thread"]["thread_id"]},
+        )
+        second = dict(_sse_events(second_response.text))
+
+    assert first["done"]["answer"] == "about MIS Foot Recon"
+    assert "clarification" not in second
+    assert second["done"]["answer"] == "about MIS Foot Recon"
+    assert retrieved_family_ids == [str(foot_recon.id), str(foot_recon.id)]
+    assert classifier_hints == [(None, None), ("MIS Foot Recon", first_question)]
