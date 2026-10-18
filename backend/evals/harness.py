@@ -46,6 +46,7 @@ Usage (from backend/):
 import argparse
 import asyncio
 import os
+import sys
 from dataclasses import asdict, replace
 from functools import partial
 from pathlib import Path
@@ -333,6 +334,10 @@ def main(argv: list[str] | None = None) -> None:
             2,
             f"{', '.join(gateway_only)} can only run through OpenRouter -- set OPENROUTER_API_KEY\n",
         )
+    if sys.platform == "win32":
+        # psycopg's async mode can't run on Windows' default Proactor loop,
+        # and admins run this from a Windows shell.
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
     model_selection = {
         "overrides": arguments.model_overrides,
         "family_confidence_threshold": arguments.family_confidence_threshold,
