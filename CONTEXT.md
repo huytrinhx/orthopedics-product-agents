@@ -70,7 +70,15 @@ Single-context repo — see `docs/agents/domain.md` for how this file and
 - **Question type** — what kind of thing a rep's question asks about
   (`product_characteristics`, `technique_procedural`, `features_benefits`,
   ..., `unclassified`), classified per turn by the deterministic workflow.
-  The slugs are code (`backend/agents/question_types.py`).
+  The slugs are code (`backend/agents/question_types.py`). Every turn
+  resolves to exactly one.
+- **Question-type clarification** — when the deterministic workflow's
+  classifier detects more than one question type, `clarify_question_type`
+  pauses the turn and asks which one the rep means, offering the detected
+  types' descriptions plus "Something else" (which resolves to
+  `unclassified`) and free text. At most once per turn, after any family
+  clarification, and separate from the synonym-ambiguity question's
+  budget. A single detected type, `unclassified` included, never asks.
 - **Doc-type hierarchy** — for each question type, the ranked list of
   document types retrieval filters to, most authoritative first. It's data
   (`question_type_document_types`, edited in Settings) keyed by document

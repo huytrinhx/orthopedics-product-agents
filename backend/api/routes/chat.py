@@ -3,7 +3,8 @@
 Also exposes the suspend/resume human-clarification pattern (ticket 09):
 detect_intent (agents/workflows/deterministic.py, the graph's entry node)
 calls interrupt() when it can't confidently tell which Product Family a
-query is about; astream_events surfaces that as an on_chain_stream "LangGraph"
+query is about, and clarify_question_type does the same when the query
+reads as more than one question type (issue #19); astream_events surfaces that as an on_chain_stream "LangGraph"
 chunk carrying an "__interrupt__" tuple rather than raising, so _stream_graph
 below watches for that chunk shape and emits a "clarification" SSE event
 instead of "done". POST /{workflow_name}/resume (and its default-workflow
@@ -112,6 +113,8 @@ class ChatResumeRequest(BaseModel):
     # Product Family's display or catalog name (not only the offered
     # candidates), and leaves the turn unscoped (not the raw text) if
     # nothing matches, rather than recording a family that doesn't exist.
+    # A question-type clarification resolves it to exactly one question
+    # type instead (deterministic.py's clarify_question_type).
     human_input: str
 
 

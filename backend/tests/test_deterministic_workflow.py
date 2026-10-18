@@ -69,7 +69,7 @@ def _patch_fixed_nodes(monkeypatch, *, generate=None, self_eval=None) -> None:
     """
 
     async def fake_detect_intent(state):
-        return {"resolved_family": None, "resolved_family_id": None, "resolved_question_type": []}
+        return {"resolved_family": None, "resolved_family_id": None, "detected_question_types": ["unclassified"]}
 
     async def fake_resolve_synonyms(state):
         return {"resolved_canonical_terms": [], "synonym_ambiguity": None}
@@ -113,6 +113,7 @@ def test_build_graph_compiles_with_the_expected_nodes():
     nodes = set(graph.get_graph().nodes) - {"__start__", "__end__"}
     assert nodes == {
         "detect_intent",
+        "clarify_question_type",
         "resolve_synonyms",
         "hybrid_retrieve",
         "rerank",
@@ -212,7 +213,7 @@ async def test_synonym_ambiguity_clarifies_before_retrieval_ever_runs(monkeypatc
     hybrid_retrieve_calls = 0
 
     async def fake_detect_intent(state):
-        return {"resolved_family": None, "resolved_family_id": None, "resolved_question_type": []}
+        return {"resolved_family": None, "resolved_family_id": None, "detected_question_types": ["unclassified"]}
 
     async def fake_hybrid_retrieve(state):
         nonlocal hybrid_retrieve_calls

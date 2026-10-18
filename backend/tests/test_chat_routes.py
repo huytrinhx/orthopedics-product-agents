@@ -60,6 +60,24 @@ def _sse_events(text: str) -> list[tuple[str, dict]]:
     return events
 
 
+def _settle_question_type_clarification(client: TestClient, headers: dict, response_text: str) -> dict:
+    """A turn's SSE events by name, after answering a question-type
+    clarification (issue #19) with "Something else" if the live classifier
+    read the question as more than one type -- these tests are about
+    something else, and need the turn to reach "done" either way.
+    """
+    events = dict(_sse_events(response_text))
+    clarification = events.get("clarification")
+    if "done" in events or not clarification or "Something else" not in clarification["options"]:
+        return events
+    resumed = client.post(
+        "/chat/resume",
+        headers=headers,
+        json={"thread_id": clarification["thread_id"], "human_input": "Something else"},
+    )
+    return {**events, **dict(_sse_events(resumed.text))}
+
+
 def test_stream_requires_auth():
     with TestClient(app) as client:
         response = client.post("/chat/deterministic/stream", json={"message": "hi"})
@@ -187,13 +205,13 @@ def test_full_pipeline_answers_with_citations_from_a_real_indexed_document(monke
                 break
             time.sleep(0.25)
 
-        user_token = _user_token(client)
+        user_headers = {"Authorization": f"Bearer {_user_token(client)}"}
         response = client.post(
             "/chat/deterministic/stream",
-            headers={"Authorization": f"Bearer {user_token}"},
+            headers=user_headers,
             json={"message": "How much torque should I use on the REFLEX HYBRID locking screw?"},
         )
-        done = dict(_sse_events(response.text))["done"]
+        done = _settle_question_type_clarification(client, user_headers, response.text)["done"]
 
         client.delete(f"/documents/{document_id}", headers=admin_headers)
 
@@ -260,7 +278,7 @@ def test_citations_survive_a_thread_resume(monkeypatch, tmp_path):
             headers=user_headers,
             json={"message": "How much torque should I use on the MIRA APEX compression screw?"},
         )
-        events = dict(_sse_events(stream_response.text))
+        events = _settle_question_type_clarification(client, user_headers, stream_response.text)
         thread_id = events["thread"]["thread_id"]
         live_citations = events["done"]["citations"]
 
@@ -334,7 +352,7 @@ def test_thread_appears_in_sidebar_and_transcript_round_trips_both_turns(monkeyp
             headers=headers,
             json={"message": "What torque should I use on a REFLEX HYBRID locking screw?"},
         )
-        thread_id = _sse_events(first.text)[0][1]["thread_id"]
+        thread_id = _settle_question_type_clarification(client, headers, first.text)["thread"]["thread_id"]
 
         listing = client.get("/chat/threads", headers=headers).json()
         assert len(listing) == 1
@@ -346,7 +364,7 @@ def test_thread_appears_in_sidebar_and_transcript_round_trips_both_turns(monkeyp
             headers=headers,
             json={"message": "And in inch-pounds for the REFLEX HYBRID?", "thread_id": thread_id},
         )
-        assert dict(_sse_events(second.text))["thread"]["thread_id"] == thread_id
+        assert _settle_question_type_clarification(client, headers, second.text)["thread"]["thread_id"] == thread_id
 
         transcript = client.get(f"/chat/threads/{thread_id}", headers=headers).json()
 
@@ -378,7 +396,7 @@ def test_done_event_message_id_round_trips_through_feedback_and_transcript(monke
             headers=headers,
             json={"message": "What torque should I use on a REFLEX HYBRID locking screw?"},
         )
-        events = dict(_sse_events(response.text))
+        events = _settle_question_type_clarification(client, headers, response.text)
         thread_id = events["thread"]["thread_id"]
         message_id = events["done"]["message_id"]
         assert message_id
@@ -450,7 +468,7 @@ def test_ambiguous_query_pauses_for_clarification_and_resume_completes_the_turn(
             headers=user_headers,
             json={"thread_id": thread_id, "human_input": family_name.lower()},
         )
-        events2 = dict(_sse_events(second.text))
+        events2 = _settle_question_type_clarification(client, user_headers, second.text)
         assert events2["thread"]["thread_id"] == thread_id
         assert "done" in events2
 
@@ -469,7 +487,9 @@ def test_resume_without_a_pending_clarification_is_rejected(monkeypatch, tmp_pat
             headers=user_headers,
             json={"message": "How much torque should I use on the REFLEX HYBRID locking screw?"},
         )
-        thread_id = dict(_sse_events(first.text))["thread"]["thread_id"]
+        thread_id = _settle_question_type_clarification(client, user_headers, first.text)["thread"][
+            "thread_id"
+        ]
 
         resume = client.post(
             "/chat/resume",

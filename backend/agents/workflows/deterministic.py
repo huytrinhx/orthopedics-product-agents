@@ -1,6 +1,6 @@
 """Deterministic retrieval workflow: fixed pipeline, no agentic tool choice.
 
-query -> detect_intent -> resolve_synonyms
+query -> detect_intent -> clarify_question_type -> resolve_synonyms
        -> (if a term is genuinely ambiguous between canonical concepts:
            request_clarification, then back to resolve_synonyms)
        -> hybrid_retrieve -> rerank -> resolve_skus -> aggregate_facts
@@ -14,6 +14,13 @@ detect_intent classifies which Product Family the query is about and,
   when it can't tell confidently, calls interrupt() to ask -- offering the
   classifier's few candidate families (or every family, if it had none)
   plus free text. hybrid_retrieve then hard-filters to that family.
+
+clarify_question_type (issue #19) narrows detect_intent's classified
+  question types to exactly one: when the classifier returned several, it
+  asks which one the rep means (their descriptions plus "Something else",
+  which resolves to `unclassified`), so every turn follows one predictable
+  doc-type retrieval path. Runs after the family question, so a turn
+  needing both asks family first, then question type -- once each.
 
 resolve_synonyms/_should_clarify_synonyms: when a single
   extracted word matches more than one distinct canonical concept (the
@@ -59,7 +66,7 @@ from pydantic import BaseModel, Field
 
 from agents.citations import extract_citations
 from agents.fact_check import check_answer, format_issues_for_correction
-from agents.question_types import QUESTION_TYPE_NAMES, QUESTION_TYPES
+from agents.question_types import QUESTION_TYPE_NAMES, QUESTION_TYPES, UNCLASSIFIED, QuestionType
 from agents.registry import register
 from agents.state import BaseAgentState, RetrievedPassage
 from agents.tools.part_lookup import part_lookup
@@ -147,21 +154,22 @@ class DeterministicState(BaseAgentState, total=False):
     # to the catalog name) and react_agent's prompt. Both are None together
     # when no family was resolved -- nothing configured, or a clarification
     # reply that names no real family -- and retrieval then runs unscoped.
-    # resolved_question_type drives hybrid_retrieve's document-type filter
-    # (the doc type hierarchy table, issue #17) in addition to its original
-    # observability role. It's a list, not a single value, since a question
-    # can genuinely span more than one type (e.g. both a procedural step
-    # and a product spec in the same question) -- detect_intent does NOT
-    # interrupt on a multi-type classification, only on family ambiguity
-    # (see its own docstring). Always one of agents/question_types.py's
-    # QUESTION_TYPE_NAMES, enforced by _IntentClassification's Literal
-    # field -- not a free-form string.
+    # detected_question_types is the classifier's raw answer (deduped, with
+    # `unclassified` dropped when anything else is present) -- possibly
+    # several types. clarify_question_type narrows it to
+    # resolved_question_type, exactly one value (issue #19), asking the rep
+    # when there were several; that one value drives hybrid_retrieve's
+    # document-type filter (the doc type hierarchy table, issue #17),
+    # rerank's bonus, and generate's procedural branch. Always one of
+    # agents/question_types.py's QUESTION_TYPE_NAMES -- the classifier's
+    # Literal field and _resolve_question_type_reply both enforce it.
     resolved_family: str | None
     resolved_family_id: str | None
-    resolved_question_type: list[str]
+    detected_question_types: list[str]
+    resolved_question_type: str
     # Set by hybrid_retrieve from the doc type hierarchy table: document
     # type id -> rerank's additive priority bonus for this turn's question
-    # types. Carried to rerank in state so the table is read once per turn.
+    # type. Carried to rerank in state so the table is read once per turn.
     document_type_bonuses: dict[str, float]
 
 
@@ -201,11 +209,10 @@ class _IntentClassification(BaseModel):
         default_factory=list,
         description=(
             "Zero or more of the allowed question types that apply -- most "
-            "questions are exactly one, but include more than one only when "
-            "the question genuinely asks about more than one kind of thing "
-            "(e.g. both a technique/procedural step and a product spec in "
-            "the same question). Use unclassified, alone, if none of the "
-            "others clearly applies."
+            "questions are exactly one, but include more than one when the "
+            "question could be read as more than one kind of thing (the rep "
+            "is then asked which they mean). Use unclassified, alone, if "
+            "none of the others clearly applies."
         ),
     )
 
@@ -269,7 +276,8 @@ async def _classify_intent(query: str, family_names: list[str]) -> _IntentClassi
                     "tool itself). Use family names and question type names "
                     "exactly as given -- most questions are exactly one "
                     "type; if a question can be interpreted as more than one "
-                    "type, output multiple types."
+                    "type, output multiple types; if none of the types "
+                    "clearly fits, output unclassified alone."
                 )
             ),
             {"role": "user", "content": query},
@@ -299,14 +307,11 @@ async def detect_intent(state: DeterministicState) -> dict:
     seed), there's nothing to disambiguate against, so this skips straight
     past the interrupt and leaves resolved_family None.
 
-    question_type never triggers this interrupt -- an unclear question
-    is classified `unclassified`, which simply retrieves unfiltered (see
-    the doc type hierarchy notes above hybrid_retrieve), so an unclear (or
-    multi-type) classification there is left as whatever the classifier
-    returns rather than blocking the turn on a second question.
-    It's a list, not a single value, since a question can genuinely be more
-    than one type -- see agents/question_types.py for the canonical values,
-    enforced directly by _IntentClassification's Literal-typed field.
+    question_type never triggers this node's interrupt: the classified
+    types go out as detected_question_types, and the next node,
+    clarify_question_type, owns narrowing them to one (issue #19). Keeping
+    that a separate node is what keeps its interrupt from re-running this
+    node's classifier call on resume, and puts it after the family question.
     """
     families = await list_families_with_trays()
     display_names = catalog_display_names_for(families)
@@ -337,8 +342,122 @@ async def detect_intent(state: DeterministicState) -> dict:
     return {
         "resolved_family": family.display_name if family else None,
         "resolved_family_id": str(family.id) if family else None,
-        "resolved_question_type": result.question_type,
+        "detected_question_types": _detected_question_types(result.question_type),
     }
+
+
+# The clarification option that resolves to UNCLASSIFIED (issue #19): the
+# rep's way of saying none of the detected readings is what they meant.
+SOMETHING_ELSE = "Something else"
+
+
+def _detected_question_types(classified: list[str]) -> list[str]:
+    """The classifier's question types, deduped in order. `unclassified`
+    only means anything alone, so it's dropped when a real type came back
+    with it; nothing at all comes back as `unclassified`.
+    """
+    detected = [
+        question_type for question_type in dict.fromkeys(classified) if question_type != UNCLASSIFIED
+    ]
+    return detected or [UNCLASSIFIED]
+
+
+def _question_type_option(question_type: QuestionType) -> str:
+    # str.capitalize() would lowercase the rest of the description.
+    return question_type.description[:1].upper() + question_type.description[1:]
+
+
+def _match_question_type_reply(reply: str) -> str | None:
+    """A clicked option, or free text that names a question type outright
+    (its option text, or its slug with or without underscores), case-
+    insensitively. None for anything else.
+    """
+    normalized = " ".join(reply.split()).lower()
+    if normalized == SOMETHING_ELSE.lower():
+        return UNCLASSIFIED
+    for question_type in QUESTION_TYPES:
+        spellings = {
+            question_type.name,
+            question_type.name.replace("_", " "),
+            _question_type_option(question_type).lower(),
+        }
+        if normalized in spellings:
+            return question_type.name
+    return None
+
+
+class _QuestionTypeReply(BaseModel):
+    question_type: Literal[*QUESTION_TYPE_NAMES] = Field(
+        description=(
+            "The one allowed question type the rep's reply says their "
+            "question is, or unclassified if the reply doesn't make it any "
+            "of them."
+        ),
+    )
+
+
+async def _classify_question_type_reply(query: str, reply: str) -> str:
+    """Free text that doesn't name a question type outright ("I need the
+    steps") still has to come back as exactly one, so the model picks it --
+    from every question type, not only the offered ones, like the family
+    clarification's free text. Only runs on that free-text path.
+    """
+    model = get_chat_model().with_structured_output(_QuestionTypeReply)
+    question_type_listing = "\n".join(f"- {question_type.name}: {question_type.description}" for question_type in QUESTION_TYPES)
+    result = await model.ainvoke(
+        [
+            SystemMessage(
+                content=(
+                    "A sales rep was asked what kind of question they're asking. "
+                    "Pick the one question type their reply means.\n\n"
+                    f"Allowed question types:\n{question_type_listing}"
+                )
+            ),
+            {"role": "user", "content": f"Question: {query}\nWhat they meant: {reply}"},
+        ]
+    )
+    return result.question_type
+
+
+async def clarify_question_type(state: DeterministicState) -> dict:
+    """Narrows detect_intent's detected_question_types to exactly one
+    resolved_question_type (issue #19), so retrieval follows one doc-type
+    path instead of a union of several. One detected type (including a
+    plain `unclassified`) resolves straight through; several pause the
+    graph via interrupt() offering their descriptions plus SOMETHING_ELSE,
+    resumed through the same POST /chat/resume as the family question.
+
+    A clicked option or a reply naming a type resolves with no model call
+    (_match_question_type_reply); other free text goes to
+    _classify_question_type_reply. Either way the result is a single type,
+    so there's never a second question-type clarification in a turn.
+
+    A separate node from detect_intent so resuming here replays only this
+    node -- not the intent classifier -- and so it runs after the family
+    question. It has its own budget: the synonym clarification's
+    clarification_rounds doesn't count it, and it doesn't count that.
+    """
+    detected = state.get("detected_question_types") or [UNCLASSIFIED]
+    if len(detected) == 1:
+        return {"resolved_question_type": detected[0]}
+
+    question_types_by_name = {question_type.name: question_type for question_type in QUESTION_TYPES}
+    reply = interrupt(
+        {
+            "question": "Which of these best describes what you're asking?",
+            "options": [
+                *(_question_type_option(question_types_by_name[name]) for name in detected),
+                SOMETHING_ELSE,
+            ],
+        }
+    )
+    reply = (reply or "").strip()
+    if not reply:
+        return {"resolved_question_type": UNCLASSIFIED}
+    resolved = _match_question_type_reply(reply)
+    if resolved is None:
+        resolved = await _classify_question_type_reply(state["query"], reply)
+    return {"resolved_question_type": resolved}
 
 
 async def resolve_synonyms(state: DeterministicState) -> dict:
@@ -433,38 +552,29 @@ def _ranked_document_type_ids(
 
 
 def _document_type_bonuses(
-    question_types: list[str], ranking: dict[str, list[str]]
+    question_type: str | None, ranking: dict[str, list[str]]
 ) -> dict[str, float]:
-    """Document type id -> rerank bonus for this turn. The first of this
-    turn's question types with anything mapped decides the order (most
-    authoritative gets the biggest bonus); a doc type it doesn't rank gets
-    none. Empty when no question type has anything mapped.
+    """Document type id -> rerank bonus for this turn's question type, in
+    its ranked order (most authoritative gets the biggest bonus); a doc type
+    it doesn't rank gets none. Empty when it has nothing mapped.
     """
-    for question_type in question_types:
-        ranked_ids = ranking.get(question_type)
-        if ranked_ids:
-            return {
-                document_type_id: (len(ranked_ids) - rank) * _DOCTYPE_BONUS_STEP
-                for rank, document_type_id in enumerate(ranked_ids)
-            }
-    return {}
+    ranked_ids = ranking.get(question_type or "") or []
+    return {
+        document_type_id: (len(ranked_ids) - rank) * _DOCTYPE_BONUS_STEP
+        for rank, document_type_id in enumerate(ranked_ids)
+    }
 
 
 def _allowed_document_type_ids(
-    question_types: list[str], ranking: dict[str, list[str]]
+    question_type: str | None, ranking: dict[str, list[str]]
 ) -> list[str] | None:
-    """The document type ids hybrid_retrieve hard-filters to: every id
-    mapped to any of this turn's question types. Returns None (no filter --
-    retrieve unfiltered) when none of them has anything mapped (e.g.
-    "unclassified" or "documents_lookup"), since restricting to an empty
-    list would be worse than not filtering at all when there's no actual
-    rule to apply.
+    """The document type ids hybrid_retrieve hard-filters to: the ones
+    mapped to this turn's question type. Returns None (no filter --
+    retrieve unfiltered) when it has nothing mapped (e.g. "unclassified" or
+    "documents_lookup"), since restricting to an empty list would be worse
+    than not filtering at all when there's no actual rule to apply.
     """
-    allowed_ids: dict[str, None] = {}
-    for question_type in question_types:
-        for document_type_id in ranking.get(question_type, []):
-            allowed_ids.setdefault(document_type_id, None)
-    return list(allowed_ids) or None
+    return list(ranking.get(question_type or "") or []) or None
 
 
 async def hybrid_retrieve(state: DeterministicState) -> dict:
@@ -480,7 +590,7 @@ async def hybrid_retrieve(state: DeterministicState) -> dict:
     # Canonical terms, not a flat canonical+alias mix -- see
     # resolve_synonyms' docstring.
     search_text = " ".join(filter(None, [search_query, *state.get("resolved_canonical_terms", [])]))
-    question_types = state.get("resolved_question_type") or []
+    question_type = state.get("resolved_question_type")
     # Hard-filters the retrieval pool by document type when the classified
     # question type has doc types mapped (the hierarchy table) -- added
     # 2026-09-04 after comparing a Technique/procedural answer against its
@@ -495,7 +605,7 @@ async def hybrid_retrieve(state: DeterministicState) -> dict:
     # regardless (RetrievalFilters' own doc) -- this narrows the pool to
     # relevant *and* unknown-type documents, never to relevant-only.
     ranking = _ranked_document_type_ids(await list_hierarchy())
-    allowed_document_type_ids = _allowed_document_type_ids(question_types, ranking)
+    allowed_document_type_ids = _allowed_document_type_ids(question_type, ranking)
     results = await vector_search.ainvoke(
         {
             "query": search_text,
@@ -517,7 +627,7 @@ async def hybrid_retrieve(state: DeterministicState) -> dict:
     ]
     return {
         "retrieved": retrieved,
-        "document_type_bonuses": _document_type_bonuses(question_types, ranking),
+        "document_type_bonuses": _document_type_bonuses(question_type, ranking),
     }
 
 
@@ -602,8 +712,8 @@ async def rerank(state: DeterministicState) -> dict:
     documents = [passage["text"] for passage in passages]
     bm25 = _normalize_to_unit_range(_bm25_scores(query_terms, documents))
     # Doc type id -> bonus, computed by hybrid_retrieve from the hierarchy
-    # table for this turn's question types. An untagged chunk (no id) or a
-    # type the leading question type doesn't rank gets no bonus.
+    # table for this turn's question type. An untagged chunk (no id) or a
+    # type that question type doesn't rank gets no bonus.
     document_type_bonuses = state.get("document_type_bonuses") or {}
     # score is overwritten with the combined (BM25 + doctype priority
     # bonus) value, not left at hybrid_retrieve's original RRF fusion
@@ -658,7 +768,7 @@ async def resolve_skus(state: DeterministicState) -> dict:
     worth the coupling. Costs one extra round of Neo4j lookups per turn
     versus the ticket-24 shape; still per-term, still cheap.
     """
-    question_types = state.get("resolved_question_type") or []
+    question_type = state.get("resolved_question_type")
     # A display name -- part_lookup maps it back to the catalog name.
     family = state.get("resolved_family")
 
@@ -666,7 +776,7 @@ async def resolve_skus(state: DeterministicState) -> dict:
         [*extract_candidate_terms(state["query"]), *state.get("resolved_canonical_terms", [])]
     )
     all_terms = query_terms
-    if "technique_procedural" in question_types:
+    if question_type == "technique_procedural":
         passage_text = " ".join(passage["text"] for passage in (state.get("reranked") or []))
         all_terms = with_singular_variants([*query_terms, *extract_candidate_terms(passage_text)])
     all_terms = all_terms[:MAX_TERMS_PER_TURN]
@@ -767,7 +877,7 @@ _GENERATE_SYSTEM_PROMPT = (
 )
 
 # Appended to _GENERATE_SYSTEM_PROMPT when detect_intent classified the
-# turn as (at least partly) "technique_procedural" -- a spec-lookup answer
+# turn as "technique_procedural" -- a spec-lookup answer
 # reads fine grouped by part category, but a procedural one needs the
 # sequence a rep would actually follow at the table, not a category dump.
 _PROCEDURAL_FORMAT_ADDENDUM = (
@@ -816,7 +926,7 @@ async def generate(state: DeterministicState) -> dict:
         )
     )
     system_prompt = _GENERATE_SYSTEM_PROMPT
-    if "technique_procedural" in (state.get("resolved_question_type") or []):
+    if state.get("resolved_question_type") == "technique_procedural":
         system_prompt += _PROCEDURAL_FORMAT_ADDENDUM
     prompt = [SystemMessage(content=system_prompt), *history, augmented_question]
     # A correction pass (routed here by _should_correct): show the model
@@ -933,6 +1043,7 @@ def _should_correct(state: DeterministicState) -> Literal["generate", "finalize"
 def build_graph(checkpointer):
     graph = StateGraph(DeterministicState)
     graph.add_node("detect_intent", detect_intent)
+    graph.add_node("clarify_question_type", clarify_question_type)
     graph.add_node("resolve_synonyms", resolve_synonyms)
     graph.add_node("hybrid_retrieve", hybrid_retrieve)
     graph.add_node("rerank", rerank)
@@ -944,7 +1055,8 @@ def build_graph(checkpointer):
     graph.add_node("finalize", finalize)
 
     graph.set_entry_point("detect_intent")
-    graph.add_edge("detect_intent", "resolve_synonyms")
+    graph.add_edge("detect_intent", "clarify_question_type")
+    graph.add_edge("clarify_question_type", "resolve_synonyms")
     graph.add_conditional_edges("resolve_synonyms", _should_clarify_synonyms)
     graph.add_edge("hybrid_retrieve", "rerank")
     graph.add_edge("rerank", "resolve_skus")

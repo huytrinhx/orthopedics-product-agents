@@ -103,26 +103,21 @@ def _seeded_ranking() -> dict[str, list[str]]:
     return ranking
 
 
-@pytest.mark.parametrize(
-    "question_types",
-    [[question_type] for question_type in _LEGACY_QUESTION_TYPES]
-    + [
-        ["technique_procedural", "product_characteristics"],
-        ["documents_lookup", "technique_procedural"],
-        [],
-    ],
-)
-def test_seeded_mapping_reproduces_the_old_in_code_retrieval_behavior(question_types):
+# One question type per turn since issue #19 -- the legacy helpers still
+# take the list shape they had then, so they get a one-element list.
+@pytest.mark.parametrize("question_type", [*_LEGACY_QUESTION_TYPES, None])
+def test_seeded_mapping_reproduces_the_old_in_code_retrieval_behavior(question_type):
     ranking = _seeded_ranking()
+    legacy_question_types = [question_type] if question_type else []
 
-    allowed = det._allowed_document_type_ids(question_types, ranking)
-    legacy_allowed = _legacy_allowed_ids(question_types, _DOCUMENT_TYPES)
+    allowed = det._allowed_document_type_ids(question_type, ranking)
+    legacy_allowed = _legacy_allowed_ids(legacy_question_types, _DOCUMENT_TYPES)
     assert (set(allowed) if allowed is not None else None) == legacy_allowed
 
-    bonuses = det._document_type_bonuses(question_types, ranking)
+    bonuses = det._document_type_bonuses(question_type, ranking)
     for document_type_id, document_type_name in _DOCUMENT_TYPES:
         assert bonuses.get(document_type_id, 0.0) == pytest.approx(
-            _legacy_bonus(question_types, document_type_name)
+            _legacy_bonus(legacy_question_types, document_type_name)
         )
 
 
@@ -206,11 +201,11 @@ _SETUP = RankedDocumentType(uuid.uuid4(), "Setup Guide")
 _HIERARCHY = {"technique_procedural": [_TECHNIQUE, _SETUP]}
 
 
-@pytest.mark.parametrize("question_types", [["unclassified"], ["documents_lookup"], []])
-async def test_unclassified_and_unmapped_question_types_retrieve_unfiltered(monkeypatch, question_types):
+@pytest.mark.parametrize("question_type", ["unclassified", "documents_lookup", None])
+async def test_unclassified_and_unmapped_question_types_retrieve_unfiltered(monkeypatch, question_type):
     search = _patch_retrieval(monkeypatch, _HIERARCHY)
 
-    result = await det.hybrid_retrieve({"query": "anything", "resolved_question_type": question_types})
+    result = await det.hybrid_retrieve({"query": "anything", "resolved_question_type": question_type})
 
     assert search.calls[0]["document_type_ids"] is None
     assert result["document_type_bonuses"] == {}
@@ -219,7 +214,7 @@ async def test_unclassified_and_unmapped_question_types_retrieve_unfiltered(monk
 async def test_mapped_question_type_filters_by_document_type_id(monkeypatch):
     search = _patch_retrieval(monkeypatch, _HIERARCHY)
 
-    await det.hybrid_retrieve({"query": "steps", "resolved_question_type": ["technique_procedural"]})
+    await det.hybrid_retrieve({"query": "steps", "resolved_question_type": "technique_procedural"})
 
     assert search.calls[0]["document_type_ids"] == [str(_TECHNIQUE.id), str(_SETUP.id)]
 
@@ -247,7 +242,7 @@ async def test_rerank_bonus_matches_by_document_type_id_not_name(monkeypatch):
         )
     ]
     _patch_retrieval(monkeypatch, _HIERARCHY, results)
-    state = {"query": "steps", "resolved_question_type": ["technique_procedural"]}
+    state = {"query": "steps", "resolved_question_type": "technique_procedural"}
 
     state.update(await det.hybrid_retrieve(state))
     reranked = (await det.rerank(state))["reranked"]

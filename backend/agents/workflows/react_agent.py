@@ -24,7 +24,9 @@ admin workflow picker and ticket 09's clarification UI both work here
 unchanged. The resolved family reaches the model as a note in its system
 prompt (for part_lookup's product_family); its vector_search calls are the
 model's own and aren't family-filtered the way deterministic's
-hybrid_retrieve is.
+hybrid_retrieve is. Deterministic's question-type clarification (issue
+#19) isn't wired in here: the model picks its own tools and nothing
+filters or formats by question type, so the rep's pick would go unused.
 
 `generate` here does double duty as both the reasoning step (deciding which
 tool to call next) and the final-answer step (once it stops requesting
@@ -168,7 +170,11 @@ class ReactAgentState(BaseAgentState, total=False):
     # Set by detect_intent -- see DeterministicState for their meaning.
     resolved_family: str | None
     resolved_family_id: str | None
-    resolved_question_type: list[str]
+    # Only the classifier's raw answer: this workflow has no
+    # clarify_question_type node (issue #19), since nothing here retrieves
+    # or formats by question type -- asking the rep to pick one would change
+    # nothing about the answer.
+    detected_question_types: list[str]
     # The tool-calling loop's own transcript -- see module docstring for why
     # this is a separate channel from `messages`, never merged into it
     # except by finalize appending exactly one clean AIMessage.

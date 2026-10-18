@@ -6,6 +6,7 @@ import type { ChatCitation } from "./types";
 // turn's status/citations look like."
 export const STATUS_LABELS: Record<string, string> = {
   detect_intent: "Understanding your question…",
+  clarify_question_type: "Understanding your question…",
   resolve_synonyms: "Checking terminology…",
   hybrid_retrieve: "Searching documents…",
   rerank: "Ranking results…",
