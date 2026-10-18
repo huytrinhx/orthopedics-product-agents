@@ -306,6 +306,12 @@ of actions doesn't force the table wider than it needs to be. */
   gap: 2px;
 }
 
+/* Tooltip wrappers around buttons that may be disabled (a disabled button
+gets no hover in some browsers) -- kept flush with the bare buttons. */
+.actions-cell > span {
+  display: inline-flex;
+}
+
 .field {
   display: flex;
   flex-direction: column;
@@ -609,6 +615,26 @@ per line, wrapping instead of stretching the table. */
 
 .tag-values-empty {
   color: var(--ink-soft);
+}
+
+/* Documents table rows missing a Product Family, Tray, or Document Type
+(issue #14): can't be indexed until tagged, so they're flagged in the
+highlighter amber with the reason spelled out under the filename. */
+.document-row-incomplete td {
+  background: #fbf3e6;
+}
+
+.document-row-incomplete td:first-child {
+  box-shadow: inset 3px 0 0 var(--highlighter);
+}
+
+.document-incomplete-note {
+  display: block;
+  margin-top: 4px;
+  max-width: 260px;
+  font-size: 0.8rem;
+  color: var(--highlighter);
+  white-space: normal;
 }
 
 /* Per-document tag modal (app/documents/tag-modal.tsx), a native <dialog>. */

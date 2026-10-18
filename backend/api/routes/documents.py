@@ -7,7 +7,8 @@ new exposure -- see backend/api/routes/chat.py. Upload writes the raw file
 under INGEST_DATA_DIR and leaves the document untagged and "pending" --
 indexing only runs once an admin triggers it via POST /{document_id}/index
 (or re-uploads the file), which kicks off backend/documents/service.py's
-background processing. A re-tag never re-indexes: it updates what indexing
+background processing -- and only once the document is complete (Product
+Family, a Tray, a Document Type; issue #14's gate). A re-tag never re-indexes: it updates what indexing
 already wrote in place (documents.service.retag_document).
 """
 import mimetypes
@@ -41,7 +42,7 @@ from documents.repository import (
     replace_file,
     set_status,
 )
-from documents.service import process_document, retag_document
+from documents.service import missing_index_tags, process_document, retag_document
 from retrieval.graph_client import get_graph_client
 from retrieval.vector_store import get_vector_store
 from tags.models import TagOut
@@ -83,7 +84,23 @@ def _document_out(document) -> DocumentOut:
             TrayOut(id=tray.id, name=tray.name, display_name=tray.display_name)
             for tray in document.trays
         ],
+        last_indexed_at=document.last_indexed_at,
+        missing_tags=missing_index_tags(document),
     )
+
+
+def _require_complete(document) -> None:
+    """The indexing gate (issue #14), shared by every route that queues
+    process_document. Refuses before anything is written or queued, naming
+    the missing tags so the admin knows what to fill in the tag modal."""
+    missing = missing_index_tags(document)
+    if missing:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "Document can't be indexed until it's tagged; missing: "
+            + ", ".join(missing)
+            + ". Set them in the document's Tags.",
+        )
 
 
 async def _save_upload(file: UploadFile) -> Path:
@@ -231,11 +248,15 @@ async def reupload_document_file(
     upload history. Same pipeline seam as index_document below: queue +
     process_document re-extracts and
     re-indexes against the new file, upserting this document_id's chunks/
-    graph entities in place rather than duplicating them.
+    graph entities in place rather than duplicating them. Because it
+    re-indexes, it's behind the same completeness gate as index_document --
+    checked before the new file is saved, so a refused re-upload leaves the
+    document (and its old file) exactly as it was.
     """
     document = await get_document(document_id)
     if document is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Document not found")
+    _require_complete(document)
     if not file.filename:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Uploaded file has no filename")
 
@@ -264,10 +285,14 @@ async def index_document(
     """Manual Index/Reindex trigger from the Document Manager UI -- the only
     way (besides a re-upload) a document's text gets (re-)extracted and
     embedded; tagging never triggers it (see set_document_tags below).
+    Refuses an incomplete document with a 409 naming its missing tags
+    (_require_complete); an already-indexed one keeps its status and stays
+    retrievable.
     """
     document = await get_document(document_id)
     if document is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Document not found")
+    _require_complete(document)
     await set_status(document_id, "queued")
     background_tasks.add_task(process_document, document.id, document.storage_path)
     document = await get_document(document_id)

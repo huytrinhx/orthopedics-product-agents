@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 from api.main import app
 from config.db import get_connection
 from doc_type_hierarchy.repository import list_hierarchy, set_document_types
+from tests.complete_tagging import tag_completely
 
 client = TestClient(app)
 
@@ -268,6 +269,7 @@ def test_edit_tags_on_an_indexed_document_does_not_reindex(monkeypatch, tmp_path
         files={"file": ("retag-me.txt", b"x", "text/plain")},
     )
     document_id = upload.json()["id"]
+    tag_completely(client, headers, document_id)
     client.post(f"/documents/{document_id}/index", headers=headers)
     for _ in range(20):
         if client.get(f"/documents/{document_id}", headers=headers).json()["status"] == "done":

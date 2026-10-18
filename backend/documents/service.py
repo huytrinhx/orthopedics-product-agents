@@ -17,13 +17,37 @@ import logging
 import uuid
 from pathlib import Path
 
-from documents.repository import DocumentRecord, get_document, set_status, set_tags
+from documents.repository import (
+    DocumentRecord,
+    get_document,
+    mark_indexed,
+    set_status,
+    set_tags,
+)
 from ingestion.pipeline import ingest_document, ingest_document_vectors
 from ingestion.text_extraction import extract_text
 from ingestion.tray_layout_extraction import extract_tray_layout
 from retrieval.graph_client import get_graph_client
 
 logger = logging.getLogger(__name__)
+
+
+def missing_index_tags(document: DocumentRecord) -> list[str]:
+    """The tags a document still needs before it may be indexed (issue
+    #14): a document is complete with a Product Family, at least one Tray,
+    and a Document Type. Empty means complete. Every indexing trigger
+    (Index/Reindex, re-upload) checks this; retrieval deliberately doesn't
+    -- an incomplete document indexed before the gate existed stays
+    searchable, it just can't be re-indexed until it's completed.
+    """
+    missing = []
+    if document.product_family_id is None:
+        missing.append("Product Family")
+    if not document.trays:
+        missing.append("Tray")
+    if document.document_type_id is None:
+        missing.append("Document Type")
+    return missing
 
 
 async def retag_document(
@@ -109,6 +133,6 @@ async def process_document(document_id: uuid.UUID, storage_path: str) -> None:
                 document_id,
             )
 
-        await set_status(document_id, "done")
+        await mark_indexed(document_id)
     except Exception as error:  # noqa: BLE001 - background task: report, don't crash the process
         await set_status(document_id, "failed", error=str(error))

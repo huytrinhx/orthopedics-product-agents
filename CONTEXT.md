@@ -44,6 +44,12 @@ Single-context repo — see `docs/agents/domain.md` for how this file and
   turn. Retrieval is then **hard-filtered** to the resolved family:
   documents without a family are excluded from family-scoped turns, and
   only a turn that resolved no family retrieves across all of them.
+- **Complete** *(document)* — tagged with a `Product Family`, at least one
+  of its `Tray`s, and a Document Type (issue #14,
+  `documents.service.missing_index_tags`). Only a complete document can be
+  indexed or re-indexed (Index/Reindex and re-upload both answer 409
+  otherwise). An incomplete document that was indexed before this rule
+  stays retrievable; it just can't be re-indexed until it's completed.
 - **Master item file** — `backend/evals/master-product-detail-oct-26.xlsx`
   (the stakeholders' "Master Product Detail File (Oct-26) - Do Not Edit",
   committed as-is), the real catalog of every `Part` (family, tray, SKU,

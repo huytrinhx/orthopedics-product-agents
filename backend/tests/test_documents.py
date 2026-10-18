@@ -9,6 +9,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from api.main import app
+from tests.complete_tagging import tag_completely
 
 client = TestClient(app)
 
@@ -109,9 +110,11 @@ def test_admin_upload_appears_in_list_pending_until_indexed(monkeypatch, tmp_pat
     assert any(listed_document["id"] == body["id"] for listed_document in listing.json())
 
     # Indexing only runs once triggered -- via the Index/Reindex button's
-    # endpoint, not as a side effect of upload.
+    # endpoint, not as a side effect of upload -- and only once it's
+    # completely tagged (issue #14, see test_indexing_gate.py).
     document_id = body["id"]
-    index = client.post(f"/documents/{document_id}/index", headers=headers)
+    tag_completely(client, headers, document_id)
+    index =client.post(f"/documents/{document_id}/index", headers=headers)
     assert index.status_code == 200
     assert index.json()["status"] in ("queued", "processing", "done")
 
@@ -204,6 +207,7 @@ def test_a_non_admin_can_read_chunks(monkeypatch, tmp_path):
         files={"file": ("a.txt", b"hello world", "text/plain")},
     )
     document_id = upload.json()["id"]
+    tag_completely(client, admin_headers, document_id)
     client.post(f"/documents/{document_id}/index", headers=admin_headers)
     for _ in range(20):
         if client.get(f"/documents/{document_id}", headers=admin_headers).json()["status"] == "done":
@@ -234,6 +238,7 @@ def test_chunks_content_matches_the_indexed_document(monkeypatch, tmp_path):
         files={"file": ("torque-spec.txt", content, "text/plain")},
     )
     document_id = upload.json()["id"]
+    tag_completely(client, admin_headers, document_id)
     client.post(f"/documents/{document_id}/index", headers=admin_headers)
     for _ in range(40):
         if client.get(f"/documents/{document_id}", headers=admin_headers).json()["status"] == "done":
@@ -258,6 +263,7 @@ def test_admin_can_reupload_document_file(monkeypatch, tmp_path):
         files={"file": ("original.txt", b"original contents", "text/plain")},
     )
     document_id = upload.json()["id"]
+    tag_completely(client, headers, document_id)
     original_files = set(tmp_path.iterdir())
 
     reupload = client.post(
