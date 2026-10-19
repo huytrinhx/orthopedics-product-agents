@@ -138,6 +138,17 @@ async def _check_decision_catalog(slot: Slot, choice: ModelChoice) -> ModelChoic
     return choice.model_copy(update={"model_id": catalog_model.model_id})
 
 
+async def _listed_decision_model(slot: Slot, model_id: str) -> CatalogModel | None:
+    """The decision model listed under `model_id`, for a slot that accepts
+    them; None otherwise, or when the decision listing can't be read."""
+    if not SLOT_DEFINITIONS[slot].accepts_decision_models:
+        return None
+    try:
+        return await find_decision_model(model_id)
+    except CatalogUnavailable:
+        return None
+
+
 async def _check_catalog(slot: Slot, choice: ModelChoice) -> ModelChoice:
     """The static layer: the catalog metadata the picker filters on, checked
     again here so a hand-built request can't skip it. Returns the choice to
@@ -150,6 +161,19 @@ async def _check_catalog(slot: Slot, choice: ModelChoice) -> ModelChoice:
     except CatalogUnavailable as error:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(error))
     if catalog_model is None:
+        decision_model = await _listed_decision_model(slot, choice.model_id)
+        if decision_model is not None:
+            # No id is in both listings, so a decision model sent as a chat
+            # one is unambiguous: run it as what OpenRouter says it is,
+            # rather than refuse an id the picker itself offered.
+            if choice.reasoning_effort is not None:
+                raise HTTPException(
+                    status.HTTP_400_BAD_REQUEST,
+                    f"{choice.model_id} is a decision model, which takes no reasoning effort",
+                )
+            return choice.model_copy(
+                update={"model_id": decision_model.model_id, "model_kind": ModelKind.DECISION.value}
+            )
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST, f"{choice.model_id} isn't in OpenRouter's model catalog"
         )

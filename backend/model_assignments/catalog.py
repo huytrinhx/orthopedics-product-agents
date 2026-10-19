@@ -133,9 +133,14 @@ def _parse_decision_model(raw_model: dict) -> CatalogModel | None:
     may be an alias that moves (a leading `~` always is). One with neither
     a canonical slug nor a non-alias id isn't offered.
     """
-    canonical_slug = raw_model.get("canonical_slug")
     model_id = raw_model.get("id") or ""
-    pinned_id = canonical_slug or (model_id if not model_id.startswith("~") else None)
+    # An alias's canonical slug can be the alias itself
+    # (`~typesafe/jev-latest`), so a `~` there isn't a pin either.
+    canonical_slug = raw_model.get("canonical_slug") or ""
+    pinned_id = next(
+        (candidate for candidate in (canonical_slug, model_id) if candidate and not candidate.startswith("~")),
+        None,
+    )
     if not pinned_id:
         return None
     return replace(_parse(raw_model, pinned_id), listed_id=model_id or None)

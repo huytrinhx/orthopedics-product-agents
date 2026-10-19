@@ -554,6 +554,14 @@ _DECISION_CATALOG = [
         "name": "TypeSafe: Jev (latest)",
         "architecture": {"output_modalities": ["decisions"]},
     },
+    # Nor is one whose canonical slug is the alias itself, as OpenRouter
+    # lists `~typesafe/jev-latest` today.
+    {
+        "id": "~typesafe/jev-latest-too",
+        "canonical_slug": "~typesafe/jev-latest-too",
+        "name": "TypeSafe: Jev (latest, slugged)",
+        "architecture": {"output_modalities": ["decisions"]},
+    },
 ]
 
 
@@ -644,6 +652,38 @@ def test_saving_a_decision_model_pins_its_dated_id_and_stores_its_thresholds(dec
         DEFAULT_FAMILY_CONFIDENCE_THRESHOLD,
         0.1,
     )
+
+
+def test_a_decision_model_sent_as_a_chat_model_is_saved_as_a_decision_model(decision_gateway, monkeypatch):
+    # Production, 2026-10-18: picking Jev in Settings reached the server as a
+    # chat model and was refused as "isn't in OpenRouter's model catalog".
+    with TestClient(app) as client:
+        headers = _admin_headers(client, monkeypatch)
+        response = client.put(
+            "/admin/model-assignments/intent_classification",
+            headers=headers,
+            json={"model_id": "typesafe/jev-1.13-20260917", "reasoning_effort": None},
+        )
+        with_effort = client.put(
+            "/admin/model-assignments/intent_classification",
+            headers=headers,
+            json={"model_id": "typesafe/jev-1.13-20260917", "reasoning_effort": "low"},
+        )
+        on_judge = client.put(
+            "/admin/model-assignments/judge",
+            headers=headers,
+            json={"model_id": "typesafe/jev-1.13-20260917"},
+        )
+
+    assert response.status_code == 200, response.text
+    intent = next(slot for slot in response.json()["slots"] if slot["slot"] == "intent_classification")
+    assert intent["assignment"]["model_kind"] == "decision"
+    assert intent["assignment"]["model_id"] == "typesafe/jev-1.13-20260917"
+    assert with_effort.status_code == 400
+    assert "takes no reasoning effort" in with_effort.json()["detail"]
+    # A slot that takes no decision model still finds no such chat model.
+    assert on_judge.status_code == 400
+    assert "isn't in OpenRouter's model catalog" in on_judge.json()["detail"]
 
 
 def test_a_decision_model_failing_its_probe_isnt_saved(decision_gateway, monkeypatch):
