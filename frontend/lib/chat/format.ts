@@ -46,6 +46,16 @@ export function stripCitationMarkers(content: string): string {
 // chips (filename only) -- a rep can't tell "the dosing table" apart from
 // "the contraindications section" of the same PDF without clicking both.
 // Falls back to the chunk's position when it has no heading of its own.
+// The full heading path is shown when there is one (issue #26), so "Step 1"
+// of one technique doesn't look like "Step 1" of another.
+export function headingLabel(headingPath: string[] | undefined, sectionTitle: string | null): string | null {
+  if (headingPath && headingPath.length > 0) {
+    return headingPath.join(" › ");
+  }
+  return sectionTitle;
+}
+
 export function citationLabel(citation: ChatCitation): string {
-  return citation.section_title ? `${citation.filename} — ${citation.section_title}` : `${citation.filename} (#${citation.chunk_index + 1})`;
+  const heading = headingLabel(citation.heading_path, citation.section_title);
+  return heading ? `${citation.filename} — ${heading}` : `${citation.filename} (#${citation.chunk_index + 1})`;
 }

@@ -89,15 +89,16 @@ class VectorStoreClient:
                     """
                     INSERT INTO chunks
                         (document_id, chunk_index, content, section_title,
-                         page_number, embedding, document_type_id,
-                         product_family_id)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                         heading_path, page_number, embedding,
+                         document_type_id, product_family_id)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """,
                     (
                         document_id,
                         chunk["chunk_index"],
                         chunk["content"],
                         chunk.get("section_title"),
+                        chunk.get("heading_path", []),
                         chunk.get("page_number"),
                         chunk["embedding"],
                         chunk.get("document_type_id"),
@@ -149,7 +150,7 @@ class VectorStoreClient:
             # of the turn's trays. Never a filter -- see _TRAY_IDS_SQL.
             await cursor.execute(
                 f"""
-                SELECT c.id, c.document_id, c.chunk_index, c.content, c.section_title,
+                SELECT c.id, c.document_id, c.chunk_index, c.content, c.section_title, c.heading_path,
                        c.document_type_id, dt.name AS document_type, {_TRAY_IDS_SQL}
                 FROM chunks c
                 LEFT JOIN document_types dt ON dt.id = c.document_type_id
@@ -163,7 +164,7 @@ class VectorStoreClient:
 
             await cursor.execute(
                 f"""
-                SELECT c.id, c.document_id, c.chunk_index, c.content, c.section_title,
+                SELECT c.id, c.document_id, c.chunk_index, c.content, c.section_title, c.heading_path,
                        c.document_type_id, dt.name AS document_type, {_TRAY_IDS_SQL}
                 FROM chunks c
                 LEFT JOIN document_types dt ON dt.id = c.document_type_id
@@ -195,6 +196,9 @@ def _reciprocal_rank_fusion(
             "chunk_index": rows_by_id[chunk_id]["chunk_index"],
             "content": rows_by_id[chunk_id]["content"],
             "section_title": rows_by_id[chunk_id]["section_title"],
+            # [technique, step] for a step chunk (issue #26); empty for a
+            # chunk with no heading or one indexed before the column existed.
+            "heading_path": rows_by_id[chunk_id]["heading_path"] or [],
             "document_type": rows_by_id[chunk_id]["document_type"],
             "document_type_id": (
                 str(rows_by_id[chunk_id]["document_type_id"])

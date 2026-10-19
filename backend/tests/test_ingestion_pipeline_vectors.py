@@ -8,9 +8,9 @@ leg: guard rails that don't need a real LLM call run here, unconditionally.
 import uuid
 
 from auth.repository import create_user
-from documents.repository import create_document, delete_document
+from documents.repository import create_document, delete_document, list_chunks
 from ingestion import pipeline
-from retrieval.vector_store import get_vector_store
+from retrieval.vector_store import RetrievalFilters, get_vector_store
 
 
 def _unique(prefix: str) -> str:
@@ -123,5 +123,41 @@ async def test_ingest_document_vectors_skips_without_openai_key(monkeypatch):
             await cursor.execute("SELECT count(*) FROM chunks WHERE document_id = %s", (document_id,))
             (count,) = await cursor.fetchone()
         assert count == 0
+    finally:
+        await delete_document(document_id)
+
+
+async def test_ingest_document_vectors_stores_and_embeds_the_heading_path(monkeypatch):
+    # Issue #26: a step chunk's technique title travels with it -- stored,
+    # embedded above its content, and returned by retrieval and by the
+    # chunk listing behind citations.
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-dummy")
+    embedded: list[str] = []
+
+    async def recording_embed_texts(texts: list[str]) -> list[list[float]]:
+        embedded.extend(texts)
+        return await _fake_embed_texts(texts)
+
+    monkeypatch.setattr(pipeline, "embed_texts", recording_embed_texts)
+    technique = "TETRA Staple and Cannulated Screw Surgical Technique"
+    text = f"# {technique}\n1\n# Step 1. Joint Prep\nPrep the joint using the cup and cone reamers."
+    document_id = await _create_document()
+    try:
+        await pipeline.ingest_document_vectors(str(document_id), text, document_type_id=None)
+
+        [chunk] = await list_chunks(document_id)
+        assert chunk.heading_path == [technique, "Step 1. Joint Prep"]
+        assert chunk.section_title == "Step 1. Joint Prep"
+        assert embedded == [f"{technique} > Step 1. Joint Prep\n\n{chunk.content}"]
+        assert technique not in chunk.content
+
+        async with get_vector_store() as store:
+            [result] = await store.hybrid_search(
+                "cup and cone reamers",
+                [1.0] + [0.0] * 1535,
+                top_k=1,
+                filters=RetrievalFilters(document_ids=[document_id]),
+            )
+        assert result["heading_path"] == [technique, "Step 1. Joint Prep"]
     finally:
         await delete_document(document_id)

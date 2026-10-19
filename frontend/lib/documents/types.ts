@@ -46,6 +46,9 @@ export interface DocumentChunk {
   // The page this chunk's content starts on in the source PDF (ticket 26).
   // null for non-PDF documents and for chunks indexed before this shipped.
   page_number: number | null;
+  // The chunk's headings, outermost first (issue #26); section_title is its
+  // last element. Empty for chunks indexed before this shipped.
+  heading_path: string[];
 }
 
 // Mirrors backend/documents/models.py's ComponentHealth/SystemHealthOut.

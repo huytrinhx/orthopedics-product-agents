@@ -249,6 +249,9 @@ class ChunkRecord:
     content: str
     section_title: str | None
     page_number: int | None
+    # Outermost heading first (issue #26); empty for a chunk with no
+    # heading or one indexed before the column existed.
+    heading_path: list[str] = field(default_factory=list)
 
 
 async def list_chunks(document_id: uuid.UUID) -> list[ChunkRecord]:
@@ -263,12 +266,12 @@ async def list_chunks(document_id: uuid.UUID) -> list[ChunkRecord]:
     try:
         async with connection.cursor() as cursor:
             await cursor.execute(
-                "SELECT chunk_index, content, section_title, page_number FROM chunks "
+                "SELECT chunk_index, content, section_title, page_number, heading_path FROM chunks "
                 "WHERE document_id = %s ORDER BY chunk_index",
                 (document_id,),
             )
             rows = await cursor.fetchall()
-            return [ChunkRecord(*row) for row in rows]
+            return [ChunkRecord(*row[:4], heading_path=row[4] or []) for row in rows]
     finally:
         await connection.close()
 

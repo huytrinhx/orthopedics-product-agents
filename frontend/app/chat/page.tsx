@@ -31,7 +31,7 @@ import Link from "next/link";
 import ReactMarkdown from "react-markdown";
 import { getChatThread, listChatThreads, resumeChat, streamChat } from "../../lib/chat/api";
 import { useAuth } from "../../lib/auth-context";
-import { STATUS_LABELS, citationLabel, stripCitationMarkers } from "../../lib/chat/format";
+import { STATUS_LABELS, citationLabel, headingLabel, stripCitationMarkers } from "../../lib/chat/format";
 import type { ChatCitation, ChatMessage, ChatStreamEvent, ChatThread } from "../../lib/chat/types";
 import { getDocumentChunks, getDocumentFile } from "../../lib/documents/api";
 import type { DocumentChunk } from "../../lib/documents/types";
@@ -580,8 +580,10 @@ export default function ChatPage() {
                       ref={isActive ? activeChunkRef : undefined}
                       className={`chat-doc-chunk${isActive ? " chat-doc-chunk-active" : ""}`}
                     >
-                      {chunk.section_title && (
-                        <div className="chat-doc-chunk-section">{chunk.section_title}</div>
+                      {headingLabel(chunk.heading_path, chunk.section_title) && (
+                        <div className="chat-doc-chunk-section">
+                          {headingLabel(chunk.heading_path, chunk.section_title)}
+                        </div>
                       )}
                       <div className="chat-doc-chunk-text">{chunk.content}</div>
                     </div>

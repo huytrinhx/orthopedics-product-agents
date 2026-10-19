@@ -209,6 +209,7 @@ async def get_document_chunks(
             content=chunk.content,
             section_title=chunk.section_title,
             page_number=chunk.page_number,
+            heading_path=chunk.heading_path,
         )
         for chunk in await list_chunks(document_id)
     ]

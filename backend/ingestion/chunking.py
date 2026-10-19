@@ -3,15 +3,26 @@
 Operates on text already normalized by backend/ingestion/text_extraction.py:
 a line prefixed with `"# "` is a detected heading (PDF: font-size heuristic,
 `.md`: literal Markdown syntax). Text is split into sections on those
-headings first; a document with no heading markers at all (plain `.txt`,
-where no such signal exists) is treated as a single unheaded section, and
-splits on blank-line paragraph boundaries instead -- the closest available
-structure signal in that case.
+headings first (backend/ingestion/headings.py, which also repairs the
+headings a PDF's font sizes get wrong and gives each section its heading
+path); a document with no heading markers at all (plain `.txt`, where no
+such signal exists) is treated as a single unheaded section, and splits on
+blank-line paragraph boundaries instead -- the closest available structure
+signal in that case.
 
 Each section's paragraphs are then packed into ~800-token windows (tiktoken,
 matching text-embedding-3-small's token accounting) with a 100-token
-overlap; a single paragraph that alone exceeds the window budget is
-token-windowed on its own.
+overlap. A single paragraph that alone exceeds the window budget is split
+on line boundaries, never mid-line (issue #26): a PDF page's text has no
+blank lines in it, so a long "paragraph" is usually a whole tray table,
+and the token windows this used to cut it with landed mid-row ("MSCP" |
+" 20mm"). A table's pieces don't overlap and each repeats the table's
+column header; prose pieces overlap by whole lines. Only a single line
+longer than the budget on its own is still token-windowed.
+
+Each chunk carries `heading_path` (e.g. `["<technique title>", "Step 3.
+..."]`, empty when the section has no heading) and, for existing readers,
+`section_title` -- the path's last element, the most specific heading.
 
 Ticket 26: a PDF's text also carries text_extraction.py's page-marker
 paragraphs (PAGE_MARKER_PATTERN below) -- consumed here to tag every real
@@ -27,16 +38,17 @@ document (`_tag_lines_with_pages`), before section-splitting -- not
 per-section. A PDF page very often starts with a heading as its first real
 content line (e.g. "# Preparation & Insertion"), which would otherwise
 split a page's marker from that page's own content into two different
-`_split_sections()` sections (the marker landing in the section *before*
-the heading), silently losing the page tag for everything the marker was
-meant to describe. Tagging globally first means the marker/heading order
-in the raw text no longer matters.
+sections (the marker landing in the section *before* the heading),
+silently losing the page tag for everything the marker was meant to
+describe. Tagging globally first means the marker/heading order in the raw
+text no longer matters.
 """
 import re
 
 import tiktoken
 
 from config import tiktoken_cache  # noqa: F401  (sets TIKTOKEN_CACHE_DIR)
+from ingestion.headings import outline_sections
 from ingestion.text_extraction import PAGE_MARKER_TEMPLATE
 
 DEFAULT_CHUNK_SIZE = 800
@@ -50,6 +62,16 @@ PAGE_MARKER_PATTERN = re.compile(
     "^" + re.escape(PAGE_MARKER_TEMPLATE).replace(r"\{page_number\}", r"(\d+)") + "$"
 )
 
+# A table's column header line: "Item No. Description Qty." in every tray
+# table of the Surgical Technique brochures.
+_COLUMN_HEADER_PATTERN = re.compile(r"\bitem\s+(?:no\b|number\b|#)|\bdescription\b.*\bqty\b", re.IGNORECASE)
+# A catalog-number-shaped token (MSCP3022, MPSL3550, MST41515NS). Only used
+# to tell a table from prose, not to validate anything.
+_SKU_LIKE_PATTERN = re.compile(r"\b[A-Z]{2,}[A-Z0-9]*\d{3,}[A-Z0-9]*\b")
+# A paragraph with no column header still reads as a table when at least
+# this share of its lines carry a catalog number.
+_TABLE_SKU_LINE_SHARE = 0.4
+
 _Line = tuple[str, int | None]
 _Paragraph = tuple[str, int | None]
 
@@ -60,8 +82,8 @@ def chunk_document(
     tagged_lines = _tag_lines_with_pages(text)
     chunks: list[dict] = []
     index = 0
-    for title, body_lines in _split_sections(tagged_lines):
-        paragraphs = _group_into_paragraphs(body_lines)
+    for section in outline_sections(tagged_lines):
+        paragraphs = _group_into_paragraphs(section.body_lines)
         if not paragraphs:
             continue
         for window, page_number in _pack_paragraphs(paragraphs, chunk_size, overlap):
@@ -69,7 +91,8 @@ def chunk_document(
                 {
                     "chunk_index": index,
                     "content": window,
-                    "section_title": title,
+                    "section_title": section.heading_path[-1] if section.heading_path else None,
+                    "heading_path": section.heading_path,
                     "page_number": page_number,
                 }
             )
@@ -90,7 +113,7 @@ def strip_page_markers(text: str) -> str:
 def _tag_lines_with_pages(text: str) -> list[_Line]:
     """One global top-to-bottom pass over every line, carrying the most
     recently seen page marker forward -- independent of where
-    `_split_sections` will later cut the text into sections. Marker lines
+    `outline_sections` will later cut the text into sections. Marker lines
     themselves are dropped here (not just filtered downstream).
     """
     current_page: int | None = None
@@ -102,26 +125,6 @@ def _tag_lines_with_pages(text: str) -> list[_Line]:
             continue
         tagged.append((line, current_page))
     return tagged
-
-
-def _split_sections(tagged_lines: list[_Line]) -> list[tuple[str | None, list[_Line]]]:
-    if not any(line.startswith("# ") for line, _ in tagged_lines):
-        return [(None, tagged_lines)]
-
-    sections: list[tuple[str | None, list[_Line]]] = []
-    title: str | None = None
-    body: list[_Line] = []
-    for line, page in tagged_lines:
-        if line.startswith("# "):
-            if body:
-                sections.append((title, body))
-            title = line[2:].strip()
-            body = []
-        else:
-            body.append((line, page))
-    if body:
-        sections.append((title, body))
-    return sections
 
 
 def _group_into_paragraphs(tagged_lines: list[_Line]) -> list[_Paragraph]:
@@ -167,7 +170,7 @@ def _pack_paragraphs(
         if tokens > chunk_size:
             flush()
             current, current_tokens = [], 0
-            windows.extend((window, page) for window in _token_windows(paragraph, chunk_size, overlap))
+            windows.extend((piece, page) for piece in _split_long_paragraph(paragraph, chunk_size, overlap))
             continue
 
         if current and current_tokens + tokens > chunk_size:
@@ -193,6 +196,98 @@ def _overlap_tail(paragraphs: list[_Paragraph], overlap: int) -> list[_Paragraph
             break
         tail.insert(0, item)
         tokens += _token_count(item[0])
+    return tail
+
+
+def _is_table(lines: list[str]) -> bool:
+    if any(_COLUMN_HEADER_PATTERN.search(line) for line in lines):
+        return True
+    sku_lines = sum(1 for line in lines if _SKU_LIKE_PATTERN.search(line))
+    return sku_lines >= len(lines) * _TABLE_SKU_LINE_SHARE
+
+
+def _split_long_paragraph(paragraph: str, chunk_size: int, overlap: int) -> list[str]:
+    """An over-budget paragraph cut on line boundaries. A table's pieces
+    each start with the column header in force where they start (plus the
+    caption line above it, e.g. "MIS Bunion and Fusion Screws"), and don't
+    overlap: a repeated row would read as a second copy of that row. Prose
+    pieces overlap by up to `overlap` tokens of whole lines.
+    """
+    lines = paragraph.split("\n")
+    is_table = _is_table(lines)
+    pieces: list[str] = []
+    current: list[str] = []
+    header: list[str] = []
+
+    def fits(candidate: list[str]) -> bool:
+        return _token_count("\n".join(candidate)) <= chunk_size
+
+    def is_caption(position: int) -> bool:
+        """Whether the line at `position` labels the column header after it."""
+        return (
+            0 <= position < len(lines) - 1
+            and bool(_COLUMN_HEADER_PATTERN.search(lines[position + 1]))
+            and not _SKU_LIKE_PATTERN.search(lines[position])
+            and not _COLUMN_HEADER_PATTERN.search(lines[position])
+        )
+
+    def opens_a_table(position: int) -> bool:
+        return is_table and (bool(_COLUMN_HEADER_PATTERN.search(lines[position])) or is_caption(position))
+
+    # Where each line of `current` came from in `lines`; None for a header
+    # repeated at the top of a continuation piece.
+    current_positions: list[int | None] = []
+    for position, line in enumerate(lines):
+        is_header_line = is_table and bool(_COLUMN_HEADER_PATTERN.search(line))
+        if not fits([line]):
+            # A single line longer than the whole budget: the one case left
+            # where a token window is the only way to cut.
+            if current:
+                pieces.append("\n".join(current))
+                current, current_positions = [], []
+            pieces.extend(_token_windows(line, chunk_size, overlap))
+            continue
+        if current and not fits([*current, line]):
+            if is_table:
+                # A sub-table's caption and header never end a piece: they
+                # move down to open the next one, above their own rows.
+                moved: list[str] = []
+                while (
+                    len(current) > 1
+                    and current_positions[-1] is not None
+                    and opens_a_table(current_positions[-1])
+                ):
+                    moved.insert(0, current.pop())
+                    current_positions.pop()
+                pieces.append("\n".join(current))
+                if moved or opens_a_table(position) or not fits([*header, line]):
+                    current, current_positions = moved, [None] * len(moved)
+                else:
+                    current, current_positions = list(header), [None] * len(header)
+            else:
+                pieces.append("\n".join(current))
+                current = _line_overlap_tail(current, overlap)
+                if not fits([*current, line]):
+                    current = []
+                current_positions = [None] * len(current)
+        if is_header_line:
+            header = [lines[position - 1], line] if is_caption(position - 1) else [line]
+        current.append(line)
+        current_positions.append(position)
+    if current:
+        pieces.append("\n".join(current))
+    return pieces
+
+
+def _line_overlap_tail(lines: list[str], overlap: int) -> list[str]:
+    tail: list[str] = []
+    tokens = 0
+    for line in reversed(lines):
+        line_tokens = _token_count(line)
+        if tokens + line_tokens > overlap:
+            break
+        tail.insert(0, line)
+        tokens += line_tokens
     return tail
 
 
