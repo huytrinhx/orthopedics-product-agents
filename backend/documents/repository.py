@@ -9,11 +9,17 @@ for display names.
 A document has at most one Product Family and any number of Trays, all of
 which must belong to that family -- enforced here (TraysOutsideFamily), in
 the same transaction that writes them.
+
+No two documents share a filename, compared case-insensitively and after
+trimming whitespace (issue #31): a unique index on lower(btrim(filename))
+backs it, and a write it refuses raises DuplicateFilename.
 """
 import uuid
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime
+
+import psycopg
 
 from catalog.repository import TrayRecord
 from config.db import get_connection
@@ -52,6 +58,21 @@ class TraysOutsideFamily(Exception):
     def __init__(self, tray_ids: list[uuid.UUID]):
         super().__init__(f"Trays not in the document's product family: {tray_ids}")
         self.tray_ids = tray_ids
+
+
+# The unique index from ..._unique_document_filenames.py.
+_FILENAME_UNIQUE_INDEX = "documents_filename_unique_idx"
+
+
+class DuplicateFilename(Exception):
+    """A write that would give a document the same filename as another one
+    (issue #31) -- the routes check first, so this is the concurrent-upload
+    case the unique index caught. Carries the document that already has
+    the name, so the route's 409 can point at it."""
+
+    def __init__(self, existing: "DocumentRecord"):
+        super().__init__(f"A document named {existing.filename!r} already exists")
+        self.existing = existing
 
 
 _SELECT = """
@@ -128,6 +149,8 @@ async def create_document(
     uploaded_by: uuid.UUID,
     document_type_id: uuid.UUID | None = None,
 ) -> DocumentRecord:
+    """Raises DuplicateFilename (nothing written) if another document
+    already has this filename."""
     connection = await get_connection()
     try:
         async with connection.cursor() as cursor:
@@ -138,6 +161,9 @@ async def create_document(
             )
             (new_id,) = await cursor.fetchone()
         await connection.commit()
+    except psycopg.errors.UniqueViolation as error:
+        await _raise_duplicate_filename(error, filename, excluding_document_id=None)
+        raise
     finally:
         await connection.close()
     document = await get_document(new_id)
@@ -170,6 +196,47 @@ async def get_document(document_id: uuid.UUID) -> DocumentRecord | None:
         await connection.close()
 
 
+async def find_document_by_filename(
+    filename: str, excluding_document_id: uuid.UUID | None = None
+) -> DocumentRecord | None:
+    """The document whose filename matches `filename` ignoring case and
+    surrounding whitespace -- the same comparison as the unique index, so a
+    None here means the write will go through (barring a concurrent one).
+    `excluding_document_id` leaves one document out: replacing a document's
+    file with a file of its own name is allowed."""
+    connection = await get_connection()
+    try:
+        async with connection.cursor() as cursor:
+            await cursor.execute(
+                f"{_SELECT} WHERE lower(btrim(d.filename)) = lower(btrim(%s)) "
+                "AND d.id IS DISTINCT FROM %s",
+                (filename, excluding_document_id),
+            )
+            row = await cursor.fetchone()
+            if row is None:
+                return None
+            (document,) = await _attach_trays(cursor, [DocumentRecord(*row)])
+            return document
+    finally:
+        await connection.close()
+
+
+async def _raise_duplicate_filename(
+    error: psycopg.errors.UniqueViolation,
+    filename: str,
+    excluding_document_id: uuid.UUID | None,
+) -> None:
+    """Turns the filename index's UniqueViolation into DuplicateFilename,
+    naming the document that won the race. Returns (so the caller re-raises
+    the original error) for any other unique violation, or if that
+    document is already gone again."""
+    if error.diag.constraint_name != _FILENAME_UNIQUE_INDEX:
+        return
+    existing = await find_document_by_filename(filename, excluding_document_id)
+    if existing is not None:
+        raise DuplicateFilename(existing) from error
+
+
 async def replace_file(
     document_id: uuid.UUID, filename: str, storage_path: str
 ) -> DocumentRecord | None:
@@ -179,6 +246,9 @@ async def replace_file(
     the new storage_path the same way index/set_tags do, so chunks/graph
     entities keyed by this document_id get overwritten (upsert_document,
     upsert_chunks) rather than duplicated.
+
+    Raises DuplicateFilename (nothing written) if a *different* document
+    already has this filename; the document's own name is fine.
     """
     if await get_document(document_id) is None:
         return None
@@ -191,6 +261,9 @@ async def replace_file(
                 (filename, storage_path, document_id),
             )
         await connection.commit()
+    except psycopg.errors.UniqueViolation as error:
+        await _raise_duplicate_filename(error, filename, excluding_document_id=document_id)
+        raise
     finally:
         await connection.close()
     return await get_document(document_id)

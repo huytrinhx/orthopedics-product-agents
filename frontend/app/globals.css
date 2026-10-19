@@ -628,6 +628,13 @@ highlighter amber with the reason spelled out under the filename. */
   box-shadow: inset 3px 0 0 var(--highlighter);
 }
 
+/* The row a duplicate-upload alert's "Show document" scrolled to (issue
+#31), briefly washed in the verify teal so it's easy to spot. */
+.document-row-highlighted td {
+  background: var(--verify-wash);
+  transition: background 0.3s ease;
+}
+
 .document-incomplete-note {
   display: block;
   margin-top: 4px;
@@ -1223,6 +1230,40 @@ highlighter amber with the reason spelled out under the filename. */
   font-family: var(--font-body);
   font-size: 0.88rem;
   color: var(--ink-soft);
+}
+
+/* Early warning for chosen files another document already has the name
+of (issue #31); the server's 409 still enforces it. */
+.upload-precheck {
+  font-size: 0.82rem;
+  color: var(--highlighter);
+}
+
+/* The duplicate-upload alert lists every refused file and stays until
+dismissed, so it carries its own Dismiss control. */
+.alert-duplicates {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.alert-duplicates ul {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.alert-duplicates li + li {
+  margin-top: 6px;
+}
+
+.alert-duplicates .btn-text {
+  color: var(--danger);
+  text-decoration: underline;
+}
+
+.alert-dismiss {
+  flex-shrink: 0;
 }
 
 /* ---------------- chat ---------------- */

@@ -5,6 +5,7 @@ import Link from "next/link";
 import {
   checkSystemHealth,
   deleteDocument,
+  DuplicateFilenameError,
   downloadDocumentFile,
   indexDocument,
   listDocuments,
@@ -14,7 +15,12 @@ import {
 import { listDocumentTypes } from "../../lib/documents/tags/api";
 import { listProductFamilies } from "../../lib/catalog/api";
 import { useAuth } from "../../lib/auth-context";
-import type { ComponentHealth, DocumentRecord, SystemHealth } from "../../lib/documents/types";
+import type {
+  ComponentHealth,
+  DocumentRecord,
+  ExistingDocument,
+  SystemHealth,
+} from "../../lib/documents/types";
 import type { Tag } from "../../lib/documents/tags/types";
 import type { ProductFamily } from "../../lib/catalog/types";
 import { TagModal } from "./tag-modal";
@@ -144,6 +150,64 @@ function LastIndexed({ documentRecord }: { documentRecord: DocumentRecord }) {
   return <>{new Date(documentRecord.last_indexed_at).toLocaleString()}</>;
 }
 
+// Issue #31: a filename belongs to one document, compared ignoring case
+// and surrounding whitespace -- the server's rule (a 409 on upload and
+// Re-upload, backed by a unique index). This copy only warns early, against
+// the list the page already has; the server's 409 is what enforces it.
+function sameFilename(first: string, second: string): boolean {
+  return first.trim().toLowerCase() === second.trim().toLowerCase();
+}
+
+function asExistingDocument(documentRecord: DocumentRecord): ExistingDocument {
+  return {
+    id: documentRecord.id,
+    filename: documentRecord.filename,
+    document_type: documentRecord.document_type,
+    product_family: documentRecord.product_family,
+    uploaded_at: documentRecord.created_at,
+  };
+}
+
+// "Surgical Technique · REFLEX, uploaded Oct 9"
+function existingDocumentSummary(existing: ExistingDocument): string {
+  const tags = [existing.document_type?.name, existing.product_family?.display_name].filter(Boolean);
+  const uploaded = new Date(existing.uploaded_at).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  return `${tags.length > 0 ? tags.join(" · ") : "untagged"}, uploaded ${uploaded}`;
+}
+
+// Stays up until dismissed, listing every refused file -- a multi-file
+// upload keeps going past a duplicate, so one alert may name several.
+function DuplicateFilenameAlert({
+  duplicates,
+  onShow,
+  onDismiss,
+}: {
+  duplicates: ExistingDocument[];
+  onShow: (documentId: string) => void;
+  onDismiss: () => void;
+}) {
+  return (
+    <div className="alert alert-duplicates" role="alert">
+      <ul>
+        {duplicates.map((existing) => (
+          <li key={existing.id}>
+            <strong>{existing.filename}</strong> is already uploaded ({existingDocumentSummary(existing)}). To update
+            it, use Re-upload on that document.{" "}
+            <button type="button" className="btn-text" onClick={() => onShow(existing.id)}>
+              Show document
+            </button>
+          </li>
+        ))}
+      </ul>
+      <button type="button" className="btn-text alert-dismiss" aria-label="Dismiss" onClick={onDismiss}>
+        Dismiss
+      </button>
+    </div>
+  );
+}
+
+const HIGHLIGHT_MS = 2500;
+
 export default function DocumentsPage() {
   const { user, loading } = useAuth();
   const [documents, setDocuments] = useState<DocumentRecord[]>([]);
@@ -156,6 +220,12 @@ export default function DocumentsPage() {
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  // Files refused (or skipped) because another document has their name,
+  // as that existing document -- see DuplicateFilenameAlert.
+  const [duplicates, setDuplicates] = useState<ExistingDocument[]>([]);
+  // The early warning for the files currently chosen in the picker.
+  const [chosenDuplicates, setChosenDuplicates] = useState<ExistingDocument[]>([]);
+  const [highlightedId, setHighlightedId] = useState<string | null>(null);
 
   // Re-upload's hidden per-row file picker: one shared <input>, retargeted
   // at whichever row's button was clicked (see handleReuploadClick) rather
@@ -202,21 +272,75 @@ export default function DocumentsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user, refresh, documents.map((listedDocument) => listedDocument.status).join(",")]);
 
+  useEffect(() => {
+    if (!highlightedId) return;
+    const handle = setTimeout(() => setHighlightedId(null), HIGHLIGHT_MS);
+    return () => clearTimeout(handle);
+  }, [highlightedId]);
+
+  function existingDocumentNamed(filename: string, excludingId?: string): DocumentRecord | undefined {
+    return documents.find(
+      (listedDocument) => listedDocument.id !== excludingId && sameFilename(listedDocument.filename, filename)
+    );
+  }
+
+  function addDuplicates(found: ExistingDocument[]) {
+    if (found.length === 0) return;
+    setDuplicates((previous) => [
+      ...previous,
+      ...found.filter((existing) => !previous.some((shown) => shown.id === existing.id)),
+    ]);
+  }
+
+  function showDocument(documentId: string) {
+    document.getElementById(`document-row-${documentId}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
+    setHighlightedId(documentId);
+  }
+
+  function handleFilesChosen(event: FormEvent<HTMLInputElement>) {
+    const chosen = Array.from(event.currentTarget.files ?? []);
+    setChosenDuplicates(
+      chosen.flatMap((file) => {
+        const existing = existingDocumentNamed(file.name);
+        return existing ? [asExistingDocument(existing)] : [];
+      })
+    );
+  }
+
+  // Uploads each chosen file in turn. A duplicate doesn't stop the rest:
+  // one the page already knows about is skipped without a request, one the
+  // server refuses (a document this page hasn't loaded yet) is caught by
+  // its 409, and both end up in the duplicates alert.
   async function handleUpload(event: FormEvent) {
     event.preventDefault();
-    const file = fileInputRef.current?.files?.[0];
-    if (!file) return;
+    const files = Array.from(fileInputRef.current?.files ?? []);
+    if (files.length === 0) return;
     setUploading(true);
     setUploadError(null);
-    try {
-      await uploadDocument(file);
-      if (fileInputRef.current) fileInputRef.current.value = "";
-      await refresh();
-    } catch (caughtError) {
-      setUploadError(caughtError instanceof Error ? caughtError.message : "upload failed");
-    } finally {
-      setUploading(false);
+    const found: ExistingDocument[] = [];
+    const failures: string[] = [];
+    for (const file of files) {
+      const known = existingDocumentNamed(file.name);
+      if (known) {
+        found.push(asExistingDocument(known));
+        continue;
+      }
+      try {
+        await uploadDocument(file);
+      } catch (caughtError) {
+        if (caughtError instanceof DuplicateFilenameError) {
+          found.push(caughtError.existingDocument);
+        } else {
+          failures.push(`${file.name}: ${caughtError instanceof Error ? caughtError.message : "upload failed"}`);
+        }
+      }
     }
+    if (fileInputRef.current) fileInputRef.current.value = "";
+    setChosenDuplicates([]);
+    addDuplicates(found);
+    if (failures.length > 0) setUploadError(failures.join("; "));
+    await refresh();
+    setUploading(false);
   }
 
   async function handleDelete(documentRecord: DocumentRecord) {
@@ -253,12 +377,22 @@ export default function DocumentsPage() {
     const documentId = reuploadTargetId.current;
     event.currentTarget.value = ""; // allow picking the same filename again next time
     if (!file || !documentId) return;
+    // Its own name is fine (the usual case); another document's isn't.
+    const known = existingDocumentNamed(file.name, documentId);
+    if (known) {
+      addDuplicates([asExistingDocument(known)]);
+      return;
+    }
     setReuploadingId(documentId);
     try {
       const updated = await reuploadDocumentFile(documentId, file);
       setDocuments((previous) => previous.map((listedDocument) => (listedDocument.id === documentId ? updated : listedDocument)));
     } catch (caughtError) {
-      setListError(caughtError instanceof Error ? caughtError.message : "failed to reupload document");
+      if (caughtError instanceof DuplicateFilenameError) {
+        addDuplicates([caughtError.existingDocument]);
+      } else {
+        setListError(caughtError instanceof Error ? caughtError.message : "failed to reupload document");
+      }
     } finally {
       setReuploadingId(null);
     }
@@ -298,11 +432,20 @@ export default function DocumentsPage() {
       <HealthStrip health={health} error={healthError} />
 
       <form onSubmit={handleUpload} className="upload-row">
-        <input ref={fileInputRef} type="file" required />
+        <input ref={fileInputRef} type="file" multiple required onChange={handleFilesChosen} />
         <button type="submit" className="btn btn-primary" disabled={uploading}>
           {uploading ? "Uploading…" : "Upload"}
         </button>
+        {chosenDuplicates.length > 0 && (
+          <span className="upload-precheck">
+            Already uploaded, will be skipped:{" "}
+            {chosenDuplicates.map((existing) => existing.filename).join(", ")}
+          </span>
+        )}
       </form>
+      {duplicates.length > 0 && (
+        <DuplicateFilenameAlert duplicates={duplicates} onShow={showDocument} onDismiss={() => setDuplicates([])} />
+      )}
       {/* Shared hidden picker for every row's Re-upload button -- see
       handleReuploadClick/handleReuploadFileChosen above. */}
       <input
@@ -335,7 +478,18 @@ export default function DocumentsPage() {
               {documents.map((documentRecord) => {
                 const incomplete = documentRecord.missing_tags.length > 0;
                 return (
-                  <tr key={documentRecord.id} className={incomplete ? "document-row-incomplete" : undefined}>
+                  <tr
+                    key={documentRecord.id}
+                    id={`document-row-${documentRecord.id}`}
+                    className={
+                      [
+                        incomplete ? "document-row-incomplete" : "",
+                        highlightedId === documentRecord.id ? "document-row-highlighted" : "",
+                      ]
+                        .filter(Boolean)
+                        .join(" ") || undefined
+                    }
+                  >
                     <td>
                       {documentRecord.filename}
                       {incomplete && (

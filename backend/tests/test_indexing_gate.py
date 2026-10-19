@@ -15,6 +15,7 @@ import documents.service
 from api.main import app
 from documents.repository import set_status
 from tests.complete_tagging import seed_complete_tags, tag_completely
+from tests.unique_filenames import unique_filename
 
 client = TestClient(app)
 
@@ -29,7 +30,9 @@ def _admin_headers(monkeypatch, tmp_path) -> dict:
 
 def _upload(headers: dict, contents: bytes = b"x") -> str:
     upload = client.post(
-        "/documents/upload", headers=headers, files={"file": ("doc.txt", contents, "text/plain")}
+        "/documents/upload",
+        headers=headers,
+        files={"file": (unique_filename("doc.txt"), contents, "text/plain")},
     )
     assert upload.status_code == 200
     return upload.json()["id"]
@@ -125,18 +128,19 @@ def test_reupload_is_refused_for_an_incomplete_document(monkeypatch, tmp_path):
     before the new file is saved, leaving the old one in place."""
     headers = _admin_headers(monkeypatch, tmp_path)
     document_id = _upload(headers)
+    filename_before = _get(headers, document_id)["filename"]
     files_before = set(tmp_path.iterdir())
 
     response = client.post(
         f"/documents/{document_id}/file",
         headers=headers,
-        files={"file": ("replacement.txt", b"new", "text/plain")},
+        files={"file": (unique_filename("replacement.txt"), b"new", "text/plain")},
     )
 
     assert response.status_code == 409
     assert "Product Family" in response.json()["detail"]
     assert set(tmp_path.iterdir()) == files_before
-    assert _get(headers, document_id)["filename"] == "doc.txt"
+    assert _get(headers, document_id)["filename"] == filename_before
 
 
 def test_successful_index_stamps_last_indexed_at(monkeypatch, tmp_path):

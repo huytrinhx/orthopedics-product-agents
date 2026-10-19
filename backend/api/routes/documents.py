@@ -31,13 +31,17 @@ from documents.models import (
     ComponentHealth,
     DocumentOut,
     DocumentProductFamilyOut,
+    DuplicateFilenameDetail,
+    ExistingDocumentOut,
     SetDocumentTagsRequest,
     SystemHealthOut,
 )
 from documents.repository import (
+    DuplicateFilename,
     TraysOutsideFamily,
     create_document,
     delete_document,
+    find_document_by_filename,
     get_document,
     list_chunks,
     list_documents,
@@ -92,6 +96,48 @@ def _document_out(document) -> DocumentOut:
     )
 
 
+def _duplicate_filename_conflict(existing) -> HTTPException:
+    """The 409 for a file whose name another document already has (issue
+    #31), naming that document so the Document Manager can point at it."""
+    detail = DuplicateFilenameDetail(
+        message=(
+            f"{existing.filename} is already uploaded. "
+            "To update it, use Re-upload on that document."
+        ),
+        existing_document=ExistingDocumentOut(
+            id=existing.id,
+            filename=existing.filename,
+            document_type=(
+                TagOut(id=existing.document_type_id, name=existing.document_type_name)
+                if existing.document_type_id
+                else None
+            ),
+            product_family=(
+                DocumentProductFamilyOut(
+                    id=existing.product_family_id,
+                    name=existing.product_family_name,
+                    display_name=existing.product_family_display_name,
+                )
+                if existing.product_family_id
+                else None
+            ),
+            uploaded_at=existing.created_at,
+        ),
+    )
+    return HTTPException(status.HTTP_409_CONFLICT, detail.model_dump(mode="json"))
+
+
+async def _refuse_duplicate_filename(
+    filename: str, excluding_document_id: uuid.UUID | None = None
+) -> None:
+    """Checked before _save_upload, so a refused file never reaches disk or
+    the database. The unique index catches what this misses (two uploads
+    racing past it), as DuplicateFilename."""
+    existing = await find_document_by_filename(filename, excluding_document_id)
+    if existing is not None:
+        raise _duplicate_filename_conflict(existing)
+
+
 def _require_complete(document) -> None:
     """The indexing gate (issue #14), shared by every route that queues
     process_document. Refuses before anything is written or queued, naming
@@ -127,16 +173,26 @@ async def upload_document(
     untagged and "pending" (the row's default); an admin tags it in the
     Document Manager's tag modal (PATCH /{document_id}/tags) and then
     indexes it explicitly (POST /{document_id}/index).
+
+    Refuses a file whose name another document already has, with a 409
+    naming that document (issue #31): a second copy would be indexed
+    separately and show up twice in retrieval and citations. Updating a
+    document's file is Re-upload's job (POST /{document_id}/file).
     """
     if not file.filename:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Uploaded file has no filename")
+    await _refuse_duplicate_filename(file.filename)
 
     storage_path = await _save_upload(file)
-    document = await create_document(
-        filename=file.filename,
-        storage_path=str(storage_path),
-        uploaded_by=admin.id,
-    )
+    try:
+        document = await create_document(
+            filename=file.filename,
+            storage_path=str(storage_path),
+            uploaded_by=admin.id,
+        )
+    except DuplicateFilename as error:
+        storage_path.unlink(missing_ok=True)
+        raise _duplicate_filename_conflict(error.existing)
     return _document_out(document)
 
 
@@ -280,6 +336,9 @@ async def reupload_document_file(
     re-indexes, it's behind the same completeness gate as index_document --
     checked before the new file is saved, so a refused re-upload leaves the
     document (and its old file) exactly as it was.
+
+    The new file's name may be the document's own (the usual case) but not
+    another document's -- that's the same 409 as upload's (issue #31).
     """
     document = await get_document(document_id)
     if document is None:
@@ -287,10 +346,15 @@ async def reupload_document_file(
     _require_complete(document)
     if not file.filename:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Uploaded file has no filename")
+    await _refuse_duplicate_filename(file.filename, excluding_document_id=document_id)
 
     storage_path = await _save_upload(file)
     old_storage_path = document.storage_path
-    document = await replace_file(document_id, file.filename, str(storage_path))
+    try:
+        document = await replace_file(document_id, file.filename, str(storage_path))
+    except DuplicateFilename as error:
+        storage_path.unlink(missing_ok=True)
+        raise _duplicate_filename_conflict(error.existing)
     assert document is not None
     # Best-effort, same as delete_one_document below: the DB row (now
     # pointing at the new file) is the source of truth, so a missing/
