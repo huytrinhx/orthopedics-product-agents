@@ -8,7 +8,9 @@ catalog seed (backend/ingestion/seed_master_catalog.py), keyed on the stable
 catalog name. `display_name` starts out as that catalog name and is never
 touched by a re-seed after the row exists -- it's the admin-editable label
 (the "Do Not Edit" master file has typos, e.g. `Ankle Fracture Plating
-Sytem`, that get fixed here rather than in the file).
+Sytem`, that get fixed here rather than in the file). A family's
+`description_override` is the same kind of admin edit: the intent
+classifiers' description of it, in place of the generated one.
 """
 import uuid
 from dataclasses import dataclass, field
@@ -29,6 +31,9 @@ class ProductFamilyRecord:
     name: str
     display_name: str
     trays: list[TrayRecord] = field(default_factory=list)
+    # The admin's description for the intent classifiers; None means the
+    # generated one (catalog/family_descriptions.py).
+    description_override: str | None = None
 
 
 async def upsert_families_and_trays(trays_by_family: dict[str, list[str]]) -> None:
@@ -70,9 +75,13 @@ async def list_families_with_trays() -> list[ProductFamilyRecord]:
     try:
         async with connection.cursor() as cursor:
             await cursor.execute(
-                "SELECT id, name, display_name FROM product_families ORDER BY display_name"
+                "SELECT id, name, display_name, description_override FROM product_families "
+                "ORDER BY display_name"
             )
-            families = [ProductFamilyRecord(*row) for row in await cursor.fetchall()]
+            families = [
+                ProductFamilyRecord(family_id, name, display_name, description_override=override)
+                for family_id, name, display_name, override in await cursor.fetchall()
+            ]
             await cursor.execute(
                 "SELECT id, name, display_name, product_family_id FROM trays ORDER BY display_name"
             )
@@ -130,3 +139,29 @@ async def set_tray_display_name(tray_id: uuid.UUID, display_name: str | None) ->
     finally:
         await connection.close()
     return TrayRecord(*row) if row else None
+
+
+async def set_family_description_override(
+    family_id: uuid.UUID, description: str | None
+) -> ProductFamilyRecord | None:
+    """Sets the admin's description of a family for the intent classifiers.
+    A blank or missing one is stored as NULL, which means the generated
+    description again. Returns the updated family (its `trays` left empty),
+    or None if no family has that id.
+    """
+    connection = await get_connection()
+    try:
+        async with connection.cursor() as cursor:
+            await cursor.execute(
+                "UPDATE product_families SET description_override = NULLIF(btrim(%s), '') "
+                "WHERE id = %s RETURNING id, name, display_name, description_override",
+                (description, family_id),
+            )
+            row = await cursor.fetchone()
+        await connection.commit()
+    finally:
+        await connection.close()
+    if row is None:
+        return None
+    family_id, name, display_name, description_override = row
+    return ProductFamilyRecord(family_id, name, display_name, description_override=description_override)

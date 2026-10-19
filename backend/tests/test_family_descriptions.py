@@ -3,11 +3,16 @@ fixture catalog shaped like the real one (catalog/family_descriptions.py),
 and its in-process cache over a faked graph client.
 """
 import uuid
+from dataclasses import replace
 
 import pytest
 
 from catalog import family_descriptions
-from catalog.family_descriptions import describe_families, load_family_descriptions
+from catalog.family_descriptions import (
+    describe_families,
+    load_family_descriptions,
+    load_generated_family_descriptions,
+)
 from catalog.repository import ProductFamilyRecord, TrayRecord
 
 
@@ -196,3 +201,22 @@ async def test_an_unreachable_graph_falls_back_to_trays_and_isnt_cached(graph):
     graph.parts = _PARTS
     assert await load_family_descriptions(_FAMILIES) == _described()
     assert graph.calls == 2
+
+
+async def test_an_admins_description_replaces_the_generated_one_on_the_next_turn(graph):
+    generated = await load_family_descriptions(_FAMILIES)
+    edited = replace(
+        _REFLEX, description_override="Nitinol staples: TETRA, ULTRA, MINI; Dynamic Disc; stepped blades."
+    )
+    families = [edited if family.name == edited.name else family for family in _FAMILIES]
+
+    described = await load_family_descriptions(families)
+
+    assert described["REFLEX Foot Recon Systems"] == edited.description_override
+    assert {
+        name: description for name, description in described.items() if name != "REFLEX Foot Recon Systems"
+    } == {name: description for name, description in generated.items() if name != "REFLEX Foot Recon Systems"}
+    # The cached generated text stays what Settings shows beside the edit,
+    # and the edit didn't wait for the cache.
+    assert (await load_generated_family_descriptions(families)) == generated
+    assert graph.calls == 1

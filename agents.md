@@ -115,6 +115,15 @@ picking this repo up cold, read this before making structural changes.
       (`DECISION_SLOT_CHECKS`) must get valid option keys back. Any
       decision failure logs `slot_output_fallback` and runs the slot's
       default chat call.
+    - **Both intent classifiers see a description of each family, not
+      just its name** (issue #30). `catalog/family_descriptions.py`
+      generates it from the family's trays and Parts (cached an hour). An
+      admin can replace it in Settings → Families & trays; that's
+      `product_families.description_override`, which a re-seed keeps.
+      `load_family_descriptions` lays the overrides over the generated
+      text, so an edit applies on the next turn. Read descriptions through
+      it, never `describe_families` directly. A description edit changes
+      what both classifiers see, so it's worth an intent eval run.
     - The Eval tab's "Rerun with models" sends admin-only per-slot
       overrides with the chat request (`model_overrides`; a non-admin gets
       a 403). They're kept in that conversation's state only, and its

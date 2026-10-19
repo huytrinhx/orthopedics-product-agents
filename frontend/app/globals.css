@@ -900,6 +900,60 @@ highlighter amber with the reason spelled out under the filename. */
   font-size: 0.86rem;
 }
 
+/* A family's classifier description sits under its name, above its trays,
+   so the family row and its description read as one block. */
+.settings-tree-family td {
+  border-bottom: none;
+}
+
+.settings-tree-description td {
+  padding-top: 0;
+}
+
+.family-description-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.family-description-label {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--steel);
+}
+
+.family-description-text,
+.family-description-generated {
+  margin: 6px 0 0;
+  max-width: 72ch;
+  font-size: 0.86rem;
+  color: var(--ink-soft);
+}
+
+.family-description-generated {
+  color: var(--steel);
+}
+
+.family-description-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 6px;
+  max-width: 72ch;
+}
+
+.family-description-form textarea {
+  font-family: var(--font-body);
+  font-size: 0.86rem;
+  padding: 6px 10px;
+  border: 1px solid var(--steel-line);
+  border-radius: 3px;
+  resize: vertical;
+}
+
 /* ---------------- question types -> doc types hierarchy ---------------- */
 
 .hierarchy-cards {

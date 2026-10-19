@@ -29,9 +29,16 @@ the screws in the MIS set live. Each description has up to three parts:
 
 A description is keyed by the family's display name, the name the
 classifiers choose between. Generating them needs every family's Part
-descriptions from the graph, so load_family_descriptions caches them in
-process; they only change when the catalog is re-seeded (or a display name
-is edited, which changes the cache key).
+descriptions from the graph, so load_generated_family_descriptions caches
+them in process; they only change when the catalog is re-seeded (or a
+display name is edited, which changes the cache key).
+
+An admin can replace a family's generated description with their own from
+Settings (`product_families.description_override`). load_family_descriptions
+is what the classifiers read: the generated descriptions with every
+override laid over them. The overrides come with the families list each
+turn already reads, so an edit applies on the next turn, not after the
+cache expires.
 """
 import logging
 import re
@@ -246,7 +253,9 @@ def _cache_key(families: list[ProductFamilyRecord]) -> tuple:
     )
 
 
-async def load_family_descriptions(families: list[ProductFamilyRecord]) -> dict[str, str]:
+async def load_generated_family_descriptions(
+    families: list[ProductFamilyRecord],
+) -> dict[str, str]:
     """describe_families over the graph's Parts, cached in process. A graph
     failure is logged and answered with tray-only descriptions, uncached, so
     the next turn tries again: a classifier with thinner descriptions still
@@ -271,6 +280,17 @@ async def load_family_descriptions(families: list[ProductFamilyRecord]) -> dict[
     _cached_key = key
     _cached_at = time.monotonic()
     return _cached_descriptions
+
+
+async def load_family_descriptions(families: list[ProductFamilyRecord]) -> dict[str, str]:
+    """What the intent classifiers see: each family's generated description,
+    or the admin's override where one is saved.
+    """
+    descriptions = dict(await load_generated_family_descriptions(families))
+    for family in families:
+        if family.description_override:
+            descriptions[family.display_name] = family.description_override
+    return descriptions
 
 
 def clear_family_descriptions_cache() -> None:

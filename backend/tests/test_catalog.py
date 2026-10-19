@@ -110,6 +110,53 @@ def test_display_name_edits_are_admin_only(monkeypatch, tmp_path):
     assert client.patch(f"/catalog/trays/{some_id}", json=body).status_code == 401
 
 
+async def test_admin_replaces_a_family_description_and_blank_goes_back_to_generated(monkeypatch, tmp_path):
+    suffix = uuid.uuid4().hex[:8]
+    family, tray = f"Described Family {suffix}", f"Described Tray {suffix}"
+    await upsert_families_and_trays({family: [tray]})
+    headers = {"Authorization": f"Bearer {_signup_token(monkeypatch, tmp_path, admin=True)}"}
+    listed = _listed_family(family, headers)
+    assert listed["description_override"] is None
+    assert isinstance(listed["generated_description"], str)
+
+    response = client.patch(
+        f"/catalog/product-families/{listed['id']}/description",
+        json={"description": "  Nitinol staples and the Dynamic Disc.  "},
+        headers=headers,
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "id": listed["id"],
+        "description_override": "Nitinol staples and the Dynamic Disc.",
+    }
+    relisted = _listed_family(family, headers)
+    assert relisted["description_override"] == "Nitinol staples and the Dynamic Disc."
+    assert relisted["generated_description"] == listed["generated_description"]
+
+    for blank in ("", "   ", None):
+        reset = client.patch(
+            f"/catalog/product-families/{listed['id']}/description",
+            json={"description": blank},
+            headers=headers,
+        )
+        assert reset.json()["description_override"] is None
+
+
+def test_description_edits_404_for_unknown_ids_and_are_admin_only(monkeypatch, tmp_path):
+    some_id = uuid.uuid4()
+    body = {"description": "Anything"}
+    admin_headers = {"Authorization": f"Bearer {_signup_token(monkeypatch, tmp_path, admin=True)}"}
+    assert (
+        client.patch(f"/catalog/product-families/{some_id}/description", json=body, headers=admin_headers)
+    ).status_code == 404
+    user_headers = {"Authorization": f"Bearer {_signup_token(monkeypatch, tmp_path, admin=False)}"}
+    assert (
+        client.patch(f"/catalog/product-families/{some_id}/description", json=body, headers=user_headers)
+    ).status_code == 403
+    assert client.patch(f"/catalog/product-families/{some_id}/description", json=body).status_code == 401
+
+
 async def test_reseed_after_an_admin_edit_keeps_the_edited_display_names(monkeypatch, tmp_path):
     suffix = uuid.uuid4().hex[:8]
     family, tray = f"Reseed Family {suffix}", f"Reseed Tray {suffix}"
@@ -125,12 +172,18 @@ async def test_reseed_after_an_admin_edit_keeps_the_edited_display_names(monkeyp
     client.patch(
         f"/catalog/trays/{listed['trays'][0]['id']}", json={"display_name": "Edited Tray"}, headers=headers
     )
+    client.patch(
+        f"/catalog/product-families/{listed['id']}/description",
+        json={"description": "Edited description"},
+        headers=headers,
+    )
 
     await seed_master_catalog(graph, path)
 
     relisted = _listed_family(family, headers)
     assert relisted["id"] == listed["id"]
     assert relisted["display_name"] == "Edited Family"
+    assert relisted["description_override"] == "Edited description"
     assert [(listed_tray["name"], listed_tray["display_name"]) for listed_tray in relisted["trays"]] == [
         (tray, "Edited Tray")
     ]

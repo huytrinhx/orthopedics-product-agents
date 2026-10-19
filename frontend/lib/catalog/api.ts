@@ -1,5 +1,5 @@
 import { request } from "../api/client";
-import type { ProductFamily, ProductFamilySummary, Tray } from "./types";
+import type { FamilyDescription, ProductFamily, ProductFamilySummary, Tray } from "./types";
 
 export async function listProductFamilies(): Promise<ProductFamily[]> {
   return request("/catalog/product-families");
@@ -20,5 +20,13 @@ export async function setTrayDisplayName(trayId: string, displayName: string): P
   return request(`/catalog/trays/${trayId}`, {
     method: "PATCH",
     body: JSON.stringify({ display_name: displayName }),
+  });
+}
+
+// A blank description goes back to the generated one (server-side).
+export async function setFamilyDescription(familyId: string, description: string): Promise<FamilyDescription> {
+  return request(`/catalog/product-families/${familyId}/description`, {
+    method: "PATCH",
+    body: JSON.stringify({ description }),
   });
 }

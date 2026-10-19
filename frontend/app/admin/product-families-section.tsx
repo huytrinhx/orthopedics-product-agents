@@ -1,7 +1,12 @@
 "use client";
 
 import { Fragment, useEffect, useState, type FormEvent } from "react";
-import { listProductFamilies, setFamilyDisplayName, setTrayDisplayName } from "../../lib/catalog/api";
+import {
+  listProductFamilies,
+  setFamilyDescription,
+  setFamilyDisplayName,
+  setTrayDisplayName,
+} from "../../lib/catalog/api";
 import type { ProductFamily } from "../../lib/catalog/types";
 
 function errorMessage(caughtError: unknown, fallback: string): string {
@@ -102,6 +107,114 @@ function DisplayNameRow({
   );
 }
 
+// The family's description for the intent classifiers (issue #30), under its
+// name. It's generated from the catalog's trays and Parts; an admin can
+// replace it with their own, and Reset goes back to the generated text.
+// Saving text identical to the generated description saves no edit.
+function FamilyDescriptionRow({
+  familyId,
+  familyName,
+  generatedDescription,
+  descriptionOverride,
+  onSave,
+}: {
+  familyId: string;
+  familyName: string;
+  generatedDescription: string;
+  descriptionOverride: string | null;
+  onSave: (nextDescription: string) => Promise<void>;
+}) {
+  const [editing, setEditing] = useState(false);
+  const currentDescription = descriptionOverride ?? generatedDescription;
+  const [draftDescription, setDraftDescription] = useState(currentDescription);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  function startEditing() {
+    setDraftDescription(currentDescription);
+    setError(null);
+    setEditing(true);
+  }
+
+  async function save(nextDescription: string) {
+    setBusy(true);
+    setError(null);
+    try {
+      await onSave(nextDescription);
+      setEditing(false);
+    } catch (caughtError) {
+      setError(errorMessage(caughtError, "failed to update the family description"));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleSubmit(event: FormEvent) {
+    event.preventDefault();
+    const nextDescription = draftDescription.trim();
+    if (nextDescription === currentDescription) {
+      setEditing(false);
+      return;
+    }
+    await save(nextDescription === generatedDescription ? "" : nextDescription);
+  }
+
+  const edited = descriptionOverride !== null;
+  const textareaId = `family-description-${familyId}`;
+
+  return (
+    <tr className="settings-tree-description">
+      <td colSpan={3}>
+        <div className="family-description-head">
+          <span className="family-description-label">Classifier description</span>
+          <span className={edited ? "badge badge-processing" : "badge"}>{edited ? "Edited" : "Generated"}</span>
+          {!editing && (
+            <span className="actions-cell">
+              <button type="button" className="btn-text" onClick={startEditing}>
+                Edit
+              </button>
+              {edited && (
+                <button type="button" className="btn-text" disabled={busy} onClick={() => save("")}>
+                  Reset to generated
+                </button>
+              )}
+            </span>
+          )}
+        </div>
+        {editing ? (
+          <form onSubmit={handleSubmit} className="family-description-form">
+            <textarea
+              id={textareaId}
+              aria-label={`Classifier description for ${familyName}`}
+              value={draftDescription}
+              onChange={(event) => setDraftDescription(event.target.value)}
+              placeholder={generatedDescription || "Describe the family's products, trays and brand."}
+              rows={3}
+              autoFocus
+            />
+            <div className="tag-add-row">
+              <button type="submit" className="btn btn-ghost" disabled={busy}>
+                {busy ? "Saving…" : "Save"}
+              </button>
+              <button type="button" className="btn-text" disabled={busy} onClick={() => setEditing(false)}>
+                Cancel
+              </button>
+            </div>
+          </form>
+        ) : (
+          <p className="family-description-text">
+            {currentDescription || "No description: the classifiers see only the family's name."}
+          </p>
+        )}
+        {edited && !editing && generatedDescription && (
+          <p className="family-description-generated">Generated: {generatedDescription}</p>
+        )}
+        {error && <div className="tag-add-error">{error}</div>}
+      </td>
+    </tr>
+  );
+}
+
 // Settings section: the master catalog's Product Family > Tray tree (issue
 // #15). Which families and trays exist, and which tray sits under which
 // family, come from the master file and are read-only here; the display
@@ -131,6 +244,15 @@ export function ProductFamiliesSection() {
     );
   }
 
+  async function saveDescription(familyId: string, nextDescription: string) {
+    const updated = await setFamilyDescription(familyId, nextDescription);
+    setFamilies((previous) =>
+      previous.map((family) =>
+        family.id === updated.id ? { ...family, description_override: updated.description_override } : family
+      )
+    );
+  }
+
   async function saveTray(familyId: string, trayId: string, nextDisplayName: string) {
     const updated = await setTrayDisplayName(trayId, nextDisplayName);
     setFamilies((previous) =>
@@ -150,6 +272,12 @@ export function ProductFamiliesSection() {
         catalog file and can’t be changed here, but each display name can — it’s what users
         see everywhere, and re-seeding the catalog keeps it. Clearing a display name goes back
         to the catalog name.
+      </p>
+      <p className="settings-section-lede">
+        Each family’s classifier description is what the chat assistant reads when it works out
+        which family a question is about. It’s generated from the family’s trays and parts. Edit
+        it to add the product names reps use; the next question uses your wording, and
+        re-seeding the catalog keeps it.
       </p>
 
       {loadError && <p className="alert" role="alert">{loadError}</p>}
@@ -175,6 +303,13 @@ export function ProductFamiliesSection() {
                       displayName={family.display_name}
                       kind="family"
                       onSave={(nextDisplayName) => saveFamily(family.id, nextDisplayName)}
+                    />
+                    <FamilyDescriptionRow
+                      familyId={family.id}
+                      familyName={family.display_name}
+                      generatedDescription={family.generated_description}
+                      descriptionOverride={family.description_override}
+                      onSave={(nextDescription) => saveDescription(family.id, nextDescription)}
                     />
                     {family.trays.map((tray) => (
                       <DisplayNameRow
