@@ -1,7 +1,7 @@
 """create document skus table
 
 Revision ID: d4e8a1f37c25
-Revises: b5f05639dedf
+Revises: 66be285b2fa3
 Create Date: 2026-10-18 18:00:00.000000
 
 """
@@ -13,7 +13,7 @@ from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
 revision: str = 'd4e8a1f37c25'
-down_revision: str | Sequence[str] | None = 'b5f05639dedf'
+down_revision: str | Sequence[str] | None = '66be285b2fa3'
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
