@@ -153,6 +153,26 @@ async def test_list_part_descriptions_by_tray_groups_one_familys_parts():
     assert await client.list_part_descriptions_by_tray(family) == {tray: ["SCREW, CANN, HEADED, 5.5 X 40MM"]}
 
 
+async def test_list_catalog_parts_gives_every_family_a_part_sits_in():
+    """Issue #27: the SKU index validates against the whole catalog, so a
+    part in trays of two families carries both."""
+    client = get_graph_client()
+    first_family, second_family = sorted([_unique("FAMILY"), _unique("FAMILY")])
+    first_tray, second_tray = _unique("TRAY"), _unique("TRAY")
+    sku = _unique("SKU")
+    await client.upsert_tray(first_tray, first_family)
+    await client.upsert_tray(second_tray, second_family)
+    await client.upsert_part(sku, first_tray, description="SCREW, LOCKING, 3.5 X 40MM")
+    await client.upsert_part(sku, second_tray, description="SCREW, LOCKING, 3.5 X 40MM")
+
+    found = await client.list_catalog_parts(skus=[sku])
+
+    assert [(part["sku"], part["description"], sorted(part["families"])) for part in found] == [
+        (sku, "SCREW, LOCKING, 3.5 X 40MM", [first_family, second_family])
+    ]
+    assert any(part["sku"] == sku for part in await client.list_catalog_parts())
+
+
 async def test_synonym_groups_include_canonical_and_both_edge_types():
     client = get_graph_client()
     canonical = _unique("CANONICAL")

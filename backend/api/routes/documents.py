@@ -24,6 +24,8 @@ from fastapi.responses import FileResponse
 from auth.dependencies import get_current_user, require_admin
 from auth.repository import UserRecord
 from catalog.models import TrayOut
+from document_skus.models import DocumentSkuOut
+from document_skus.service import list_document_skus
 from documents.models import (
     ChunkOut,
     ComponentHealth,
@@ -212,6 +214,18 @@ async def get_document_chunks(
         )
         for chunk in await list_chunks(document_id)
     ]
+
+
+@router.get("/{document_id}/skus", response_model=list[DocumentSkuOut])
+async def get_document_skus(
+    document_id: uuid.UUID, admin: UserRecord = Depends(require_admin)
+) -> list[DocumentSkuOut]:
+    """The document's SKU index (issue #27): every SKU its chunks mention,
+    with chunk, page and catalog description, plus flagged tokens that
+    aren't in the catalog. Admin-only, for reviewing a document."""
+    if await get_document(document_id) is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Document not found")
+    return await list_document_skus(document_id)
 
 
 @router.get("/{document_id}/file")
