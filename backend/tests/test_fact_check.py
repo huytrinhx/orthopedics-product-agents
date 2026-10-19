@@ -38,6 +38,49 @@ def test_ignores_tokens_that_only_look_like_skus():
     assert _check("The MIS FT screw is 4.0mm, uses a T8 driver, part of REFLEX.") == []
 
 
+# Issue #29: catalog SKUs the SKU pattern can't produce -- no digit, too
+# short, a leading digit.
+_CATALOG_SKUS = frozenset({"MSK42020", "SNAPWIRE", "MSTJONES", "MA830", "0304-45"})
+_SNAPWIRE = {"sku": "SNAPWIRE", "description": "GUIDEWIRE, 1.1 X 50MM"}
+
+
+def _check_against_catalog(answer: str, *, source_text: str = "", parts=()) -> list[str]:
+    return check_answer(
+        answer, citation_ids=set(), source_text=source_text, parts=list(parts), catalog_skus=_CATALOG_SKUS
+    )
+
+
+def test_an_alpha_only_catalog_sku_in_the_turns_parts_passes():
+    assert _check_against_catalog("Place the SNAPWIRE first.", parts=[_SNAPWIRE]) == []
+
+
+def test_an_alpha_only_catalog_sku_in_a_passage_passes():
+    assert _check_against_catalog("Place the SNAPWIRE first.", source_text="SNAPWIRE Ø1.1 x 50mm Guidewire") == []
+
+
+def test_flags_an_alpha_only_catalog_sku_the_turn_never_saw():
+    issues = _check_against_catalog("Place the SNAPWIRE, then MA830 and 0304-45.", source_text="MSK42020")
+    assert issues == [
+        "SNAPWIRE doesn't appear in any catalog record or passage retrieved this turn.",
+        "MA830 doesn't appear in any catalog record or passage retrieved this turn.",
+        "0304-45 doesn't appear in any catalog record or passage retrieved this turn.",
+    ]
+
+
+def test_an_invented_alpha_only_token_that_isnt_a_catalog_sku_is_not_flagged():
+    # Ordinary capitals, an invented code, and near misses of real SKUs
+    # (a plural, a fragment) aren't catalog SKUs.
+    answer = "The MIS REFLEX SNAPGUIDE ships with SNAPWIRES; JONES and SNAP-WIRE are separate."
+    assert _check_against_catalog(answer) == []
+
+
+def test_digit_skus_are_checked_the_same_with_a_catalog():
+    answer = "Use MSK99999 and MSK42020, with a T8 driver and a 4.0mm screw."
+    issues = _check_against_catalog(answer, parts=[_FULL_THREAD])
+    assert issues == ["MSK99999 doesn't appear in any catalog record or passage retrieved this turn."]
+    assert issues == _check(answer, parts=[_FULL_THREAD])
+
+
 def test_ignores_hex_inside_a_citation_uuid():
     answer = "Torque to 1.2 Nm [ABCDEF12-3c1d-4e8a-9f2b-5d7c8e9a1b2c#0]."
     assert _check(answer, citation_ids={"ABCDEF12-3c1d-4e8a-9f2b-5d7c8e9a1b2c#0"}) == []

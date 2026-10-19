@@ -82,6 +82,7 @@ from agents.state import BaseAgentState, RetrievedPassage
 from agents.tools.part_lookup import part_lookup
 from agents.tools.term_extraction import extract_candidate_terms, with_singular_variants
 from agents.tools.vector_search import vector_search
+from catalog.catalog_skus import load_catalog_skus
 from catalog.display_names import CatalogDisplayNames, catalog_display_names_for
 from catalog.family_descriptions import load_family_descriptions
 from catalog.repository import ProductFamilyRecord, TrayRecord, list_families_with_trays
@@ -1350,6 +1351,9 @@ async def self_eval(state: DeterministicState) -> dict:
     did when this was an LLM judge (ticket 20/21/22's eval run): a claim
     correctly grounded in the catalog but absent from every passage is the
     graph-grounding ticket 20 exists for, not an unsupported claim.
+
+    The whole catalog's SKUs (cached, issue #29) only tell the check what
+    counts as a SKU, so an alpha-only one like SNAPWIRE gets checked too.
     """
     passages = state.get("reranked") or []
     issues = check_answer(
@@ -1360,6 +1364,7 @@ async def self_eval(state: DeterministicState) -> dict:
         ),
         parts=state.get("resolved_parts") or [],
         tray_names=set(state.get("family_tray_names") or []),
+        catalog_skus=await load_catalog_skus(),
     )
     return {"fact_check_issues": issues}
 

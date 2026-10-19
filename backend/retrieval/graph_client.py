@@ -646,6 +646,15 @@ class GraphClient:
             )
             return [dict(record) async for record in result]
 
+    async def list_part_skus(self) -> list[str]:
+        """Every Part's SKU across the whole catalog, nothing else -- what
+        catalog/catalog_skus.py caches so agents/fact_check.py can recognize
+        a SKU its pattern can't (`SNAPWIRE`, `MA830`), issue #29.
+        """
+        async with self._driver.session() as session:
+            result = await session.run("MATCH (p:Part) WHERE p.sku IS NOT NULL RETURN p.sku AS sku")
+            return [record["sku"] async for record in result]
+
     async def list_part_descriptions_by_family(self, product_families: list[str]) -> dict[str, list[str]]:
         """Family catalog name -> its Parts' descriptions, one per Part even
         when it sits in two of the family's trays, for every family given.

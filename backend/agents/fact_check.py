@@ -25,6 +25,12 @@ from agents.citations import extract_citations, strip_citations
 # skipping "MIS", "FT", "T8" and measurements like "4.0mm".
 _SKU_PATTERN = re.compile(r"\b[A-Z]{2,}[A-Z0-9-]*\d[A-Z0-9-]*\b")
 _MIN_SKU_LENGTH = 6
+# Issue #29: any whole token of capitals, digits and inner hyphens, not
+# touching another letter, digit or hyphen. One counts as a SKU only when
+# it's exactly a catalog SKU, which is how SNAPWIRE, MA830 and 0304-45 get
+# checked without "MIS" or "REFLEX" ever counting ("SNAPWIRES" isn't a
+# SNAPWIRE).
+_TOKEN_PATTERN = re.compile(r"(?<![A-Za-z0-9-])[A-Z0-9]+(?:-[A-Z0-9]+)*(?![A-Za-z0-9-])")
 
 # The abbreviations are case-sensitive on purpose ("ft" is also feet); the
 # spelled-out forms aren't.
@@ -55,11 +61,29 @@ def _check_citations(answer: str, citation_ids: set[str]) -> list[str]:
     ]
 
 
-def _check_skus(answer: str, source_text: str, known_skus: set[str]) -> list[str]:
+def _skus_named_in(text: str, catalog_skus: frozenset[str]) -> list[str]:
+    """Every SKU in `text`, in the order they appear: SKU-shaped tokens,
+    plus any token that's exactly a catalog SKU."""
+    pattern_matches = [
+        (match.start(), match.group(0))
+        for match in _SKU_PATTERN.finditer(text)
+        if len(match.group(0)) >= _MIN_SKU_LENGTH
+    ]
+    catalog_matches = [
+        (match.start(), match.group(0))
+        for match in _TOKEN_PATTERN.finditer(text)
+        if match.group(0) in catalog_skus
+    ]
+    return [sku for _, sku in sorted(pattern_matches + catalog_matches)]
+
+
+def _check_skus(
+    answer: str, source_text: str, known_skus: set[str], catalog_skus: frozenset[str]
+) -> list[str]:
     issues: list[str] = []
     seen: set[str] = set()
-    for sku in _SKU_PATTERN.findall(strip_citations(answer)):
-        if len(sku) < _MIN_SKU_LENGTH or sku in seen:
+    for sku in _skus_named_in(strip_citations(answer), catalog_skus):
+        if sku in seen:
             continue
         seen.add(sku)
         if sku not in known_skus and sku not in source_text:
@@ -149,6 +173,7 @@ def check_answer(
     source_text: str,
     parts: list[dict],
     tray_names: set[str] = frozenset(),
+    catalog_skus: frozenset[str] = frozenset(),
 ) -> list[str]:
     """Every problem found in `answer`, as sentences addressed to the model
     that wrote it; an empty list means it passed.
@@ -161,12 +186,15 @@ def check_answer(
     part_lookup's display names). `tray_names` are any other tray display
     names to recognize in the answer -- e.g. every tray of the turn's
     family, so a draft that puts a Part in a sibling tray no resolved Part
-    belongs to is still caught.
+    belongs to is still caught. `catalog_skus` is every SKU in the catalog
+    (catalog/catalog_skus.py): a token matching one exactly is checked even
+    when the SKU pattern wouldn't find it (`SNAPWIRE`). It only decides what
+    counts as a SKU; being in it doesn't make one grounded.
     """
     known_skus = {part["sku"] for part in parts if part.get("sku")}
     return [
         *_check_citations(answer, citation_ids),
-        *_check_skus(answer, source_text, known_skus),
+        *_check_skus(answer, source_text, known_skus, frozenset(catalog_skus)),
         *_check_thread_types(answer, parts),
         *_check_trays(answer, parts, tray_names),
     ]
