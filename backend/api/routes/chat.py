@@ -283,12 +283,14 @@ async def _stream_chat(
         # for every new turn. resolved_family/resolved_family_id are
         # deliberately not reset: detect_intent reads them back as the
         # thread's previous family, so a follow-up naming no family stays
-        # on it (issue #22).
+        # on it (issue #22). Neither is turn_memory (issue #7): its reducer
+        # appends, and it's the point of it to carry over.
         "search_query": body.message,
         "clarification_rounds": 0,
         "clarification_reply": None,
         "correction_rounds": 0,
         "fact_check_issues": [],
+        "memory_tokens": {},
     }
     # Only written when this request carries overrides, so a later turn
     # that doesn't keeps the conversation's.
@@ -425,6 +427,7 @@ async def _stream_graph(
                     handler.last_trace_id,
                     fact_check_issues=output.get("fact_check_issues"),
                     loop_count=loop_count,
+                    memory_tokens=output.get("memory_tokens"),
                 )
                 citations = await _resolve_citations(output.get("citations") or [])
                 # finalize (agents/workflows/deterministic.py) is the only

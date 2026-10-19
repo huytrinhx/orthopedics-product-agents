@@ -61,6 +61,13 @@ Screws, from a stated screw diameter; rerank gives documents tagged with
 one of them a small bonus, and each resolved Part's tray reaches generate
 in the catalog facts. Never asked for, and never a retrieval filter --
 most families have one tray, and real questions span trays.
+
+Earlier turns reach generate only as thread memory (issue #7,
+memory/thread_memory.py): finalize appends one small record per turn, and
+generate renders them into a token-capped "Earlier in this conversation"
+block instead of re-sending the whole message history. resolve_skus looks
+the previous turn's remembered SKUs up again, so a follow-up naming no SKU
+keeps the Parts the last answer was about.
 """
 import asyncio
 import logging
@@ -73,7 +80,7 @@ from langgraph.graph import END, StateGraph
 from langgraph.types import interrupt
 from pydantic import BaseModel, Field, PrivateAttr
 
-from agents.citations import extract_citations
+from agents.citations import extract_citations, strip_citations
 from agents.fact_check import check_answer, format_issues_for_correction
 from agents.intent_decisions import decide_intent, decide_or_fall_back, decide_question_type_reply
 from agents.question_types import QUESTION_TYPE_NAMES, QUESTION_TYPES, UNCLASSIFIED, QuestionType
@@ -88,6 +95,12 @@ from catalog.family_descriptions import load_family_descriptions
 from catalog.repository import ProductFamilyRecord, TrayRecord, list_families_with_trays
 from config.llm_clients import get_chat_model
 from doc_type_hierarchy.repository import RankedDocumentType, list_hierarchy
+from memory.thread_memory import (
+    build_turn_record,
+    remembered_part_lines,
+    remembered_parts,
+    render_thread_memory,
+)
 from model_assignments.runtime import SlotModel, invoke_with_output_fallback, slot_model_for_run
 from model_assignments.slots import Slot
 from retrieval.graph_client import get_graph_client
@@ -491,7 +504,10 @@ async def detect_intent(state: DeterministicState) -> dict:
     show which family it's about. One clearly naming a different family
     switches to it; one naming a family ambiguously still asks, offering
     the previous family first. The question type is always classified
-    fresh. #7's thread memory (Ticket A) may subsume this carry-over.
+    fresh. #7's thread memory (Ticket A) builds on this rather than
+    replacing it: each turn's record notes its family for generate's
+    "Earlier in this conversation" block, but which family a follow-up
+    stays on is still decided here, from resolved_family_id.
 
     Families come from the Postgres catalog mirror (catalog.repository),
     by display name, so an admin rename shows up here with no code change.
@@ -1148,24 +1164,66 @@ async def resolve_skus(state: DeterministicState) -> dict:
     query_parts and adds only the passage-derived lookup, so no query term
     is looked up twice, and the two together stay within
     MAX_TERMS_PER_TURN, query terms first.
-    """
-    if state.get("resolved_question_type") != "technique_procedural":
-        return {"resolved_parts": list(state.get("query_parts") or [])}
 
+    Issue #7 (thread memory) adds the previous turn's remembered SKUs, on
+    every question type, so a follow-up naming no SKU ("and the 3.5
+    version?") still has the Parts the last answer was about, with their
+    full catalog properties for generate and the fact check. They're
+    looked up after the query terms and before passage terms, inside the
+    same MAX_TERMS_PER_TURN, and scoped to this turn's family like the
+    rest: a follow-up that switched family doesn't drag the old one's
+    Parts along.
+    """
+    query_parts = list(state.get("query_parts") or [])
     query_terms = _query_terms(state)
+    # A display name -- part_lookup maps it back to the catalog name.
+    family = state.get("resolved_family")
+    previous_skus = _previous_turn_skus(state, {part["sku"] for part in query_parts})[
+        : max(MAX_TERMS_PER_TURN - len(query_terms), 0)
+    ]
+    previous_parts = await _lookup_exact_skus(previous_skus, family)
+
+    matched = {part["sku"]: part for part in query_parts}
+    for part in previous_parts:
+        matched.setdefault(part["sku"], part)
+    if state.get("resolved_question_type") != "technique_procedural":
+        return {"resolved_parts": list(matched.values())}
+
     passage_text = " ".join(passage["text"] for passage in (state.get("reranked") or []))
     passage_terms = [
         term
         for term in with_singular_variants(extract_candidate_terms(passage_text))
         if term not in query_terms
-    ][: MAX_TERMS_PER_TURN - len(query_terms)]
-    # A display name -- part_lookup maps it back to the catalog name.
-    passage_parts = await _lookup_parts(passage_terms, state.get("resolved_family"))
+    ][: max(MAX_TERMS_PER_TURN - len(query_terms) - len(previous_skus), 0)]
+    passage_parts = await _lookup_parts(passage_terms, family)
 
-    matched = {part["sku"]: part for part in state.get("query_parts") or []}
     for part in passage_parts:
         matched.setdefault(part["sku"], part)
     return {"resolved_parts": list(matched.values())}
+
+
+def _previous_turn_skus(state: DeterministicState, already_resolved: set[str]) -> list[str]:
+    """The SKUs the thread's last turn remembered (memory/thread_memory.py),
+    minus any this turn already resolved. Empty on a thread's first turn.
+    """
+    records = state.get("turn_memory") or []
+    if not records:
+        return []
+    return [part["sku"] for part in records[-1].get("parts") or [] if part["sku"] not in already_resolved]
+
+
+async def _lookup_exact_skus(skus: list[str], family: str | None) -> list[dict]:
+    """The Part each SKU names exactly. part_lookup also matches a term
+    against descriptions, which a remembered SKU has no reason to pull in.
+    """
+    results = await asyncio.gather(
+        *(part_lookup.ainvoke({"term": sku, "product_family": family}) for sku in skus)
+    )
+    exact_matches = (
+        next((part for part in parts if (part.get("sku") or "").upper() == sku.upper()), None)
+        for sku, parts in zip(skus, results)
+    )
+    return [part for part in exact_matches if part is not None]
 
 
 def _format_part(part: dict) -> str:
@@ -1298,24 +1356,26 @@ def _format_known_facts(aggregated_facts: str) -> str:
 
 async def generate(state: DeterministicState) -> dict:
     passages = state.get("reranked") or []
-    # state["messages"]'s last entry is this turn's raw HumanMessage (the
-    # API appends it before invoking, and the checkpointer restores every
-    # earlier turn's messages too) -- swap it for a context-augmented
-    # version so the model sees the retrieved passages, while keeping every
-    # earlier turn as real conversational history. This is a *draft*: on a
-    # clarification round, generate runs again with an enriched search
-    # (see request_clarification), and on a correction pass it runs again
-    # with self_eval's fact-check issues -- only the final version should
-    # become permanent conversation history -- see finalize below, not
-    # this node, for the actual `messages` append.
-    history = state["messages"][:-1]
+    # Earlier turns reach the model only as thread memory (issue #7): one
+    # "Earlier in this conversation" block of per-turn records, capped at
+    # THREAD_MEMORY_TOKEN_CAP -- not state["messages"], which re-sent every
+    # earlier Q&A pair verbatim and grew the prompt by one per turn.
+    # `messages` stays the transcript the UI shows. Order is system prompt,
+    # then memory, then this turn's facts, passages and question, so the
+    # system prompt stays a stable prefix for prompt caching. This is a
+    # *draft*: on a clarification round, generate runs again with an
+    # enriched search (see request_clarification), and on a correction
+    # pass it runs again with self_eval's fact-check issues -- only the
+    # final version becomes permanent history and memory, in finalize.
+    memory_block, memory_block_tokens = render_thread_memory(state.get("turn_memory") or [])
     clarification_reply = state.get("clarification_reply")
     clarification_note = (
         f"\n\nThe rep clarified: {clarification_reply}" if clarification_reply else ""
     )
     augmented_question = HumanMessage(
         content=(
-            f"Known catalog facts:\n{_format_known_facts(state.get('aggregated_facts', ''))}"
+            (f"{memory_block}\n\n" if memory_block else "")
+            + f"Known catalog facts:\n{_format_known_facts(state.get('aggregated_facts', ''))}"
             f"\n\nContext:\n{_format_context(passages)}\n\nQuestion: {state['query']}"
             f"{clarification_note}"
         )
@@ -1323,12 +1383,12 @@ async def generate(state: DeterministicState) -> dict:
     system_prompt = _GENERATE_SYSTEM_PROMPT
     if state.get("resolved_question_type") == "technique_procedural":
         system_prompt += _PROCEDURAL_FORMAT_ADDENDUM
-    prompt = [SystemMessage(content=system_prompt), *history, augmented_question]
+    prompt = [SystemMessage(content=system_prompt), augmented_question]
     # A correction pass (routed here by _should_correct): show the model
     # its own failed draft and exactly what the fact check found, rather
     # than re-asking from scratch and hoping it lands differently.
     issues = state.get("fact_check_issues") or []
-    update: dict = {}
+    update: dict = {"memory_tokens": {"thread_memory": memory_block_tokens}}
     if issues:
         prompt += [AIMessage(content=state["answer"]), HumanMessage(content=format_issues_for_correction(issues))]
         update["correction_rounds"] = state.get("correction_rounds", 0) + 1
@@ -1354,13 +1414,24 @@ async def self_eval(state: DeterministicState) -> dict:
 
     The whole catalog's SKUs (cached, issue #29) only tell the check what
     counts as a SKU, so an alpha-only one like SNAPWIRE gets checked too.
+
+    Thread memory's remembered Parts (issue #7) count as sources too: the
+    previous turn's are already in resolved_parts (resolve_skus looks them
+    up again), and every remembered SKU's line is in the source text, so a
+    SKU the memory block showed isn't flagged as invented. Earlier turns'
+    cited chunk ids are deliberately not citable: a citation still has to
+    point at a passage retrieved this turn.
     """
     passages = state.get("reranked") or []
     issues = check_answer(
         state["answer"],
         citation_ids={passage["chunk_id"] for passage in passages},
         source_text="\n".join(
-            [*(passage["text"] for passage in passages), state.get("aggregated_facts") or ""]
+            [
+                *(passage["text"] for passage in passages),
+                state.get("aggregated_facts") or "",
+                remembered_part_lines(state.get("turn_memory") or []),
+            ]
         ),
         parts=state.get("resolved_parts") or [],
         tray_names=set(state.get("family_tray_names") or []),
@@ -1433,11 +1504,26 @@ async def finalize(state: DeterministicState) -> dict:
     resolving is a display concern for the API layer
     (backend/api/routes/chat.py's _resolve_citations), not something every
     workflow architecture should have to know how to do.
+
+    Also appends this turn's thread-memory record (issue #7), built from
+    state alone with no model call: the question, the answer without its
+    citation brackets, the Parts it was about (remembered_parts), its
+    cited chunk ids and its family. Here for the same reason as the
+    message: only the shipped answer should be remembered.
     """
+    answer = state["answer"]
+    record = build_turn_record(
+        question=state["query"],
+        answer=strip_citations(answer),
+        parts=remembered_parts(
+            answer, state.get("resolved_parts") or [], state.get("query_parts") or []
+        ),
+        cited_chunk_ids=state.get("citations") or [],
+        family=state.get("resolved_family"),
+    )
     return {
-        "messages": [
-            AIMessage(content=state["answer"], additional_kwargs={"citations": state["citations"]})
-        ]
+        "messages": [AIMessage(content=answer, additional_kwargs={"citations": state["citations"]})],
+        "turn_memory": [record],
     }
 
 

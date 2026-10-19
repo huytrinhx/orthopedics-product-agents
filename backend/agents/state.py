@@ -4,12 +4,15 @@ Individual workflows may extend this with extra fields, but the API layer,
 streaming transport, and eval harness only rely on the fields defined here —
 that's what lets any workflow be run interchangeably.
 """
+import operator
 from typing import Annotated
 
 from langgraph.graph.message import add_messages
 from typing_extensions import (
     TypedDict,  # pydantic v2 needs this, not typing.TypedDict, on Python <3.12
 )
+
+from memory.thread_memory import TurnRecord
 
 
 # The four-axis rubric shared by agents/judge.py and human feedback
@@ -59,3 +62,12 @@ class BaseAgentState(TypedDict):
     # reads them back each request and hands nodes the resolved models
     # through the run config (model_assignments/runtime.py), not state.
     model_overrides: dict[str, dict]
+    # Thread memory (issue #7): one small record per finished turn, appended
+    # by the workflow's finalize (operator.add, so the API layer never
+    # resets it). generate renders it into the prompt's "Earlier in this
+    # conversation" block under a token cap -- see memory/thread_memory.py.
+    turn_memory: Annotated[list[TurnRecord], operator.add]
+    # Each memory block's token count on this turn's prompt, block name ->
+    # tokens (e.g. {"thread_memory": 412}), which the API layer records on
+    # the Langfuse trace beside fact_check_issues. Reset per turn there.
+    memory_tokens: dict[str, int]
