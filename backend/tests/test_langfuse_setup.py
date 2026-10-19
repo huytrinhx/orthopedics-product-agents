@@ -49,6 +49,17 @@ def test_score_trace_omits_scores_it_has_no_value_for():
     client.create_score.assert_not_called()
 
 
+def test_score_trace_writes_each_memory_blocks_token_count():
+    with patch("observability.langfuse_setup.get_client") as get_client:
+        client = MagicMock()
+        get_client.return_value = client
+
+        score_trace("trace-123", fact_check_issues=None, loop_count=None, memory_tokens={"thread_memory": 412})
+
+    calls_by_name = {call.kwargs["name"]: call.kwargs["value"] for call in client.create_score.call_args_list}
+    assert calls_by_name == {"thread_memory_tokens": 412}
+
+
 def test_score_trace_noops_without_a_trace_id():
     with patch("observability.langfuse_setup.get_client") as get_client:
         score_trace(None, fact_check_issues=[], loop_count=2)

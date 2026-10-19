@@ -62,12 +62,26 @@ def new_callback_handler(
     return handler, config_fragment
 
 
-def score_trace(trace_id: str | None, *, fact_check_issues: list[str] | None, loop_count: int | None) -> None:
+def score_trace(
+    trace_id: str | None,
+    *,
+    fact_check_issues: list[str] | None,
+    loop_count: int | None,
+    memory_tokens: dict[str, int] | None = None,
+) -> None:
     """Attaches the final answer's fact-check result (agents/fact_check.py)
     plus the workflow's loop count to one trace, as separate NUMERIC scores
     so each is independently filterable/sortable in Langfuse's UI (e.g.
     "traces where fact_check_issues > 0" -- answers that shipped with a
     problem still standing after their correction pass).
+
+    `memory_tokens` (issue #7) is each memory block's token count on the
+    turn's prompt, block name -> tokens; each becomes its own
+    "<block>_tokens" score (e.g. "thread_memory_tokens"), so a block's
+    growth shows up in the dashboard before it shows up on the bill. A
+    score rather than trace metadata, like the two above: scores are what
+    Langfuse can filter and chart, and they can be attached once the run
+    has finished.
 
     Call this exactly once per trace, after the graph run finishes, with the
     *final delivered* answer's result -- not once per correction pass.
@@ -84,6 +98,10 @@ def score_trace(trace_id: str | None, *, fact_check_issues: list[str] | None, lo
             )
         if loop_count is not None:
             client.create_score(trace_id=trace_id, name="loop_count", value=loop_count, data_type="NUMERIC")
+        for block_name, tokens in (memory_tokens or {}).items():
+            client.create_score(
+                trace_id=trace_id, name=f"{block_name}_tokens", value=tokens, data_type="NUMERIC"
+            )
     except Exception:
         logger.warning("Langfuse score_trace failed; continuing without it", exc_info=True)
 

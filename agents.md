@@ -184,6 +184,17 @@ picking this repo up cold, read this before making structural changes.
     locally only. There's no CI job for them, not even a manual one: a
     real answer eval needs a database with ingested documents, and the
     production credentials that implies stay out of GitHub.
+- **Earlier turns reach the model as thread memory, not as `messages`**
+  (issue #7, Ticket A; deterministic workflow only). `finalize` appends
+  one small record per turn to `turn_memory` (append reducer, built from
+  state with no model call), and `generate` sends one "Earlier in this
+  conversation" block rendered from it (`memory/thread_memory.py`), capped
+  at ~1,500 tokens by `memory/budget.py`, oldest dropped first. `messages`
+  is the UI's transcript only; don't put it back into the prompt. The
+  previous turn's SKUs are looked up again in `resolve_skus`, so the fact
+  check has their catalog records. Each block's token count is a Langfuse
+  score (`thread_memory_tokens`). Family carry-over (#22) is unchanged and
+  separate.
 - **Inline self-eval is a deterministic fact check, not the judge.** Every
   workflow's `self_eval` node runs `backend/agents/fact_check.py` — citation
   ids, SKUs, thread types, and trays checked against the turn's own retrieved
