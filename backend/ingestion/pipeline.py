@@ -15,6 +15,7 @@ leg's node properties vs. ids for the vector leg's denormalized filter
 columns) and fail independently, so they're kept as separate functions
 rather than merged into one.
 """
+import logging
 import os
 import uuid
 
@@ -25,6 +26,8 @@ from model_assignments.runtime import configured_slot_model, log_slot_models
 from model_assignments.slots import Slot
 from retrieval.graph_client import get_graph_client
 from retrieval.vector_store import get_vector_store
+
+logger = logging.getLogger(__name__)
 
 _SPLIT_SIZE = 2000
 
@@ -76,14 +79,34 @@ async def ingest_document(
     if not product_family:
         # Nothing to scope the known-parts/known-trays lookup to -- and
         # nothing in the master catalog to attach facts to either.
+        logger.warning(
+            "entity_extraction_skipped document_id=%s: the document has no product family",
+            document_id,
+            extra={"event": "entity_extraction_skipped", "document_id": document_id},
+        )
         return
 
     known_parts = await client.list_parts_for_family(product_family)
     known_trays = await client.list_trays_for_family(product_family)
     if not known_parts:
         # The master catalog (backend/ingestion/seed_master_catalog.py)
-        # hasn't been seeded for this family yet -- there's nothing to
-        # attach prose facts to.
+        # hasn't been seeded for this family yet, or the document is tagged
+        # with a family name the catalog no longer uses -- there's nothing
+        # to attach prose facts to. Logged, not silent (issue #27): a silent
+        # return here left documents with no extraction and no trace of why.
+        # The per-document SKU index (backend/document_skus/) doesn't depend
+        # on this and is built either way.
+        logger.warning(
+            "entity_extraction_skipped document_id=%s product_family=%r: "
+            "the family has no catalog parts",
+            document_id,
+            product_family,
+            extra={
+                "event": "entity_extraction_skipped",
+                "document_id": document_id,
+                "product_family": product_family,
+            },
+        )
         return
 
     # Read once per document (issue #24): a slot change only affects

@@ -5,7 +5,9 @@ with Index/Reindex or a re-upload (process_document).
 Extracts text once (backend/ingestion/text_extraction.py) and runs three
 ingestion legs against it (backend/ingestion/pipeline.py): the graph leg
 (ticket 07), the vector leg (ticket 06), and the tray-layout visual leg
-(ticket 25). An extraction failure -- including an unsupported file format
+(ticket 25). After the vector leg, the per-document SKU index
+(backend/document_skus/, issue #27) is rebuilt from the stored chunks.
+An extraction failure -- including an unsupported file format
 -- now fails the document instead of silently skipping any leg; the
 tray-layout leg is the one exception, since it's explicitly best-effort by
 design (backend/ingestion/tray_layout_extraction.py never raises itself,
@@ -17,6 +19,7 @@ import logging
 import uuid
 from pathlib import Path
 
+from document_skus.service import index_document_skus
 from documents.repository import (
     DocumentRecord,
     get_document,
@@ -114,6 +117,10 @@ async def process_document(document_id: uuid.UUID, storage_path: str) -> None:
             document_type_id=document.document_type_id,
             product_family_id=document.product_family_id,
         )
+        # Scans the chunks the vector leg just stored (issue #27), so it
+        # runs after it. Deterministic, no model call, and independent of
+        # whether the graph leg found any family parts.
+        await index_document_skus(document_id, product_family=document.product_family_name)
 
         try:
             await extract_tray_layout(

@@ -480,6 +480,26 @@ class GraphClient:
             )
             return {record["tray"]: record["descriptions"] async for record in result}
 
+    async def list_catalog_parts(self, skus: list[str] | None = None) -> list[dict]:
+        """Every Part across the whole catalog (or just `skus`), each with its
+        description and the catalog names of every family it sits in -- a
+        part can be in trays of several families. Backs the per-document
+        SKU index (backend/document_skus/, issue #27), which validates a
+        document's tokens against the whole catalog, not one family.
+        """
+        async with self._driver.session() as session:
+            result = await session.run(
+                """
+                MATCH (p:Part)
+                WHERE $skus IS NULL OR p.sku IN $skus
+                OPTIONAL MATCH (p)-[:BELONGS_TO_TRAY]->(:Tray)-[:BELONGS_TO_FAMILY]->(f:ProductFamily)
+                RETURN p.sku AS sku, p.description AS description,
+                       collect(DISTINCT f.name) AS families
+                """,
+                skus=skus,
+            )
+            return [dict(record) async for record in result]
+
     # ---- Query surface (backend/agents/tools/graph_query.py + synonym_resolve.py) ----
 
     async def query_related_entities(
