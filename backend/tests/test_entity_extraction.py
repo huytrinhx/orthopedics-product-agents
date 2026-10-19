@@ -15,7 +15,7 @@ needs_openai_key = pytest.mark.skipif(
 
 
 async def test_extract_entities_returns_empty_without_known_parts():
-    assert await extract_entities("some text", known_parts=[], known_trays=[]) == []
+    assert await extract_entities("some text", known_parts=[]) == []
 
 
 @needs_openai_key
@@ -30,7 +30,7 @@ async def test_extract_entities_finds_a_real_differentiation():
         "reserved for revision cases."
     )
 
-    result = await extract_entities(text, known_parts=known_parts, known_trays=[])
+    result = await extract_entities(text, known_parts=known_parts)
 
     differentiations = [item for item in result if item["type"] == "differentiation"]
     assert differentiations
@@ -43,6 +43,5 @@ async def test_extract_entities_ignores_text_about_unmentioned_parts():
     result = await extract_entities(
         "This paragraph is about tray sterilization procedures, not any specific part.",
         known_parts=known_parts,
-        known_trays=[],
     )
     assert result == []

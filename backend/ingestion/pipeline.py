@@ -14,11 +14,16 @@ land together) -- they take different auxiliary params (names for the graph
 leg's node properties vs. ids for the vector leg's denormalized filter
 columns) and fail independently, so they're kept as separate functions
 rather than merged into one.
+
+Since issue #28 the graph leg runs after the vector leg and the SKU index
+(backend/documents/service.py), because its scope is widened by the
+families that index found; the two still don't share any other state.
 """
 import logging
 import os
 import uuid
 
+from document_skus.service import indexed_families
 from ingestion.chunking import chunk_document, strip_page_markers
 from ingestion.embedding import embed_texts
 from ingestion.entity_extraction import extract_entities
@@ -64,8 +69,14 @@ async def ingest_document(
     doc_type: str | None,
 ) -> None:
     """`product_family`/`trays` are the document's catalog names (not
-    display names). Extraction is scoped to the whole family's parts and
-    trays, not just the document's own trays."""
+    display names). Extraction is scoped to the whole family's parts, not
+    just the document's own trays, plus the parts of every other family
+    the document's SKU index found (issue #28): the REFLEX document names
+    REFLEX HYBRID parts. So this runs after the SKU index is built.
+
+    A re-index replaces the document's differentiations: the edges carry
+    its `document_id`, and the old ones are deleted before the new ones
+    are written."""
     client = get_graph_client()
     await client.upsert_document(
         document_id, filename, doc_type=doc_type, product_family=product_family, trays=trays
@@ -87,7 +98,6 @@ async def ingest_document(
         return
 
     known_parts = await client.list_parts_for_family(product_family)
-    known_trays = await client.list_trays_for_family(product_family)
     if not known_parts:
         # The master catalog (backend/ingestion/seed_master_catalog.py)
         # hasn't been seeded for this family yet, or the document is tagged
@@ -109,22 +119,27 @@ async def ingest_document(
         )
         return
 
+    other_families = sorted(set(await indexed_families(document_id)) - {product_family})
+    if other_families:
+        known_skus = {part["sku"] for part in known_parts}
+        known_parts += [
+            part
+            for part in await client.list_parts_for_families(other_families)
+            if part["sku"] not in known_skus
+        ]
+
     # Read once per document (issue #24): a slot change only affects
     # documents ingested after it, and nothing is re-ingested for it.
     slot_model = await configured_slot_model(Slot.ENTITY_EXTRACTION)
     log_slot_models(
         "ingestion_models", {Slot.ENTITY_EXTRACTION.value: slot_model}, document_id=document_id
     )
+    differentiations: list[dict] = []
     for chunk in _split_for_extraction(strip_page_markers(text)):
-        for item in await extract_entities(
-            chunk, known_parts=known_parts, known_trays=known_trays, slot_model=slot_model
-        ):
-            if item["type"] == "differentiation":
-                await client.attach_differentiation(
-                    item["sku_a"], item["sku_b"], item["explanation"], document_id
-                )
-            elif item["type"] == "procedure_requirement":
-                await client.attach_procedure(item["procedure"], item["tray"], document_id)
+        differentiations += await extract_entities(
+            chunk, known_parts=known_parts, slot_model=slot_model
+        )
+    await client.replace_document_differentiations(document_id, differentiations)
 
 
 def _embedding_input(chunk: dict) -> str:

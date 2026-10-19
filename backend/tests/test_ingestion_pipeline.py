@@ -2,10 +2,16 @@
 Neo4j -- no mocking. The LLM-calling path (needs OPENAI_API_KEY, costs
 money) is exercised separately in test_entity_extraction.py, skipped there
 when that key isn't configured; here we only exercise the guard rails that
-don't need a real LLM call, so this file runs in CI with no secret.
+don't need a real LLM call, so this file runs in CI with no secret. The
+one exception swaps extract_entities for a stub, to check what scope it's
+given and that a re-index replaces its edges (issue #28).
 """
 import uuid
 
+from auth.repository import create_user
+from document_skus.repository import DocumentSkuRow, replace_document_skus
+from documents.repository import create_document, delete_document
+from ingestion import pipeline
 from ingestion.pipeline import ingest_document
 from retrieval.graph_client import get_graph_client
 
@@ -84,3 +90,56 @@ async def test_ingest_document_skips_extraction_when_catalog_not_seeded(monkeypa
     )
 
     assert await get_graph_client().document_exists(document_id)
+
+
+async def test_extraction_scope_widens_to_indexed_families_and_reindex_replaces_edges(monkeypatch):
+    """Issue #28: the known parts are the family's plus every family the
+    SKU index found parts of, and a re-index leaves only the new run's
+    differentiations. The model is stubbed out."""
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-dummy")
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    graph = get_graph_client()
+    family, other_family = _unique("FAMILY"), _unique("OTHER-FAMILY")
+    family_tray, other_tray = _unique("TRAY"), _unique("TRAY")
+    family_sku, other_sku, unrelated_sku = _unique("SKU"), _unique("SKU"), _unique("SKU")
+    await graph.upsert_tray(family_tray, family)
+    await graph.upsert_tray(other_tray, other_family)
+    await graph.upsert_part(family_sku, family_tray, description="FAMILY PART")
+    await graph.upsert_part(other_sku, other_tray, description="OTHER FAMILY PART")
+    await graph.upsert_part(unrelated_sku, _unique("TRAY"), description="NEVER MENTIONED")
+
+    user = await create_user(f"user-{uuid.uuid4().hex[:10]}@example.com", None, False, True)
+    document = await create_document(
+        filename="reflex.pdf", storage_path=f"/tmp/{uuid.uuid4().hex}.pdf", uploaded_by=user.id
+    )
+    document_id = str(document.id)
+    await replace_document_skus(
+        document.id, [DocumentSkuRow(0, other_sku, other_sku, "exact", False, None, other_sku)]
+    )
+
+    calls: list[list[str]] = []
+    explanations = iter(["first run", "second run"])
+
+    async def fake_extract_entities(chunk_text, *, known_parts, slot_model=None):
+        calls.append(sorted(part["sku"] for part in known_parts))
+        return [
+            {"type": "differentiation", "sku_a": family_sku, "sku_b": other_sku,
+             "explanation": next(explanations)}
+        ]
+
+    monkeypatch.setattr(pipeline, "extract_entities", fake_extract_entities)
+    try:
+        for _ in range(2):
+            await pipeline.ingest_document(
+                document_id, "One paragraph.", filename="reflex.pdf", product_family=family,
+                doc_type=None,
+            )
+
+        assert calls == [sorted([family_sku, other_sku])] * 2
+        [edge] = await graph.query_related_entities(family_sku, "DIFFERENTIATES_FROM")
+        assert edge["relationship_properties"] == {
+            "document_id": document_id,
+            "explanation": "second run",
+        }
+    finally:
+        await delete_document(document.id)

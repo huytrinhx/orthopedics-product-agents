@@ -292,6 +292,14 @@ re-run whenever they apply:
    no hand-run Cypher after a rename. Both are otherwise `MERGE`s, so they're
    idempotent — safe to rerun (e.g. after fixing a bad row in a source file)
    without duplicating anything.
+
+   Once, after the deploy carrying issue #28 (technique steps): delete the
+   prose facts written before it, which no re-index can remove (they carry
+   no `document_id`), then re-index the Surgical Technique documents:
+
+   ```bash
+   railway ssh -- python -m ingestion.cleanup_graph_facts
+   ```
 3. **A new environment variable was added to the app.** Set its value in
    the Railway dashboard, then also add its name to `.railway/railway.ts`'s
    `env` block (as `preserve()`) and run `railway config plan` then

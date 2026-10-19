@@ -31,7 +31,8 @@ _PARSED_OUTPUTS = {
     "_IntentClassification": {"product_family": None, "question_type": ["unclassified"]},
     "_QuestionTypeReply": {"question_type": "technique_procedural"},
     "_JudgeScores": {"faithfulness": 1, "relevance": 1, "style": 1, "citation": 1},
-    "_ExtractionOutput": {"differentiations": [], "procedure_requirements": []},
+    "_ExtractionOutput": {"differentiations": []},
+    "TechniqueOutline": {"techniques": []},
     "_TrayLayoutExtraction": {"groups": []},
 }
 
