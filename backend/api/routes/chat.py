@@ -53,7 +53,7 @@ from chat_threads.repository import (
     owns_thread,
     touch_thread,
 )
-from documents.repository import get_document
+from documents.repository import ChunkRecord, get_document
 from documents.repository import list_chunks as list_document_chunks
 from feedback.repository import get_feedback_for_thread, to_feedback_out
 from model_assignments.models import ModelChoice
@@ -174,7 +174,7 @@ async def _resolve_citations(raw_citations: list[str]) -> list[ChatCitationOut]:
     shown), which a rep can't tell apart without clicking through both.
     """
     filenames: dict[str, str] = {}
-    section_titles: dict[str, dict[int, str | None]] = {}
+    chunks_by_document: dict[str, dict[int, ChunkRecord]] = {}
     resolved: list[ChatCitationOut] = []
     for raw in raw_citations:
         document_id, _, chunk_index = raw.rpartition("#")
@@ -192,13 +192,15 @@ async def _resolve_citations(raw_citations: list[str]) -> list[ChatCitationOut]:
             # a real filename to click through to.
             filenames[document_id] = document.filename if document else "(document removed)"
             chunks = await list_document_chunks(uuid.UUID(document_id))
-            section_titles[document_id] = {chunk.chunk_index: chunk.section_title for chunk in chunks}
+            chunks_by_document[document_id] = {chunk.chunk_index: chunk for chunk in chunks}
+        chunk = chunks_by_document[document_id].get(int(chunk_index))
         resolved.append(
             ChatCitationOut(
                 document_id=uuid.UUID(document_id),
                 filename=filenames[document_id],
                 chunk_index=int(chunk_index),
-                section_title=section_titles[document_id].get(int(chunk_index)),
+                section_title=chunk.section_title if chunk else None,
+                heading_path=chunk.heading_path if chunk else [],
             )
         )
     return resolved

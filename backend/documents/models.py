@@ -57,6 +57,10 @@ class ChunkOut(BaseModel):
     # 26) -- None for non-PDF documents and for chunks written before this
     # shipped (no backfill migration).
     page_number: int | None
+    # The chunk's headings, outermost first: [technique, step] for a step
+    # under a technique title (issue #26). section_title is its last
+    # element. Empty for chunks indexed before this shipped.
+    heading_path: list[str] = []
 
 
 class ComponentHealth(BaseModel):

@@ -104,6 +104,16 @@ async def ingest_document(
                 await client.attach_procedure(item["procedure"], item["tray"], document_id)
 
 
+def _embedding_input(chunk: dict) -> str:
+    """The chunk's heading path above its content (issue #26): REFLEX's
+    three techniques each have a "Step 1", and only the path says which
+    one a chunk is. Embedded only -- the stored content, the keyword leg's
+    tsvector and what answers quote stay the document's own text."""
+    if not chunk.get("heading_path"):
+        return chunk["content"]
+    return " > ".join(chunk["heading_path"]) + "\n\n" + chunk["content"]
+
+
 async def ingest_document_vectors(
     document_id: str,
     text: str,
@@ -120,7 +130,7 @@ async def ingest_document_vectors(
     chunks = chunk_document(text)
     if not chunks:
         return
-    vectors = await embed_texts([chunk["content"] for chunk in chunks])
+    vectors = await embed_texts([_embedding_input(chunk) for chunk in chunks])
     for chunk, vector in zip(chunks, vectors):
         chunk["embedding"] = vector
         chunk["document_type_id"] = document_type_id

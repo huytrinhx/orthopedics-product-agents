@@ -34,6 +34,9 @@ class ChatCitationOut(BaseModel):
     # index so two citations into the same document are never shown
     # identically (see _resolve_citations' docstring).
     section_title: str | None = None
+    # The chunk's headings, outermost first (issue #26) -- tells "Step 1"
+    # of one technique from "Step 1" of another in the same document.
+    heading_path: list[str] = []
 
 
 class ChatMessageOut(BaseModel):

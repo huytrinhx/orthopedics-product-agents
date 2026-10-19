@@ -38,6 +38,9 @@ export interface ChatCitation {
   filename: string;
   chunk_index: number;
   section_title: string | null;
+  // The chunk's headings, outermost first (issue #26): [technique, step]
+  // for a step under a technique title. Empty for chunks indexed earlier.
+  heading_path: string[];
 }
 
 // Mirrors backend/api/routes/chat.py's SSE event payloads.
