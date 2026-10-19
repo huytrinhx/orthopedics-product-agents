@@ -48,6 +48,8 @@ from documents.service import missing_index_tags, process_document, retag_docume
 from retrieval.graph_client import get_graph_client
 from retrieval.vector_store import get_vector_store
 from tags.models import TagOut
+from techniques.models import TechniqueOut
+from techniques.service import list_document_techniques
 
 router = APIRouter()
 
@@ -227,6 +229,18 @@ async def get_document_skus(
     if await get_document(document_id) is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Document not found")
     return await list_document_skus(document_id)
+
+
+@router.get("/{document_id}/techniques", response_model=list[TechniqueOut])
+async def get_document_techniques(
+    document_id: uuid.UUID, admin: UserRecord = Depends(require_admin)
+) -> list[TechniqueOut]:
+    """The document's extracted techniques (issue #28): ordered steps,
+    each item's resolved SKU set with catalog descriptions, and citation
+    ids. Admin-only, for reviewing a document."""
+    if await get_document(document_id) is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Document not found")
+    return await list_document_techniques(document_id)
 
 
 @router.get("/{document_id}/file")

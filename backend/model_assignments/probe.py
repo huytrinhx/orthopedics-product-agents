@@ -48,6 +48,7 @@ from agents.workflows.deterministic import _IntentClassification, _QuestionTypeR
 from agents.workflows.react_agent import _AGENT_SYSTEM_PROMPT, _TOOLS
 from config.llm_clients import DecisionClient, get_decision_client, openrouter_chat_model
 from ingestion.entity_extraction import _ExtractionOutput
+from ingestion.technique_extraction import TechniqueOutline
 from ingestion.tray_layout_extraction import _SYSTEM_PROMPT as _TRAY_SYSTEM_PROMPT
 from ingestion.tray_layout_extraction import _TrayLayoutExtraction
 from model_assignments.runtime import SlotModel, decision_slot_model
@@ -140,6 +141,25 @@ async def check_entity_extraction(model: Any) -> str:
     return f"differentiations={len(_require_schema(result, _ExtractionOutput).differentiations)}"
 
 
+async def check_technique_outline(model: Any) -> str:
+    """The technique outline (issue #28) is the entity-extraction slot's
+    other call, on a much larger schema."""
+    result = await model.with_structured_output(TechniqueOutline).ainvoke(
+        [
+            ("system", "Outline the surgical techniques in the step chunks given."),
+            (
+                "user",
+                (
+                    "Step chunks:\n\n[chunk 3] Lisfranc Homerun > Step 5. Drill\n"
+                    "Drill over the guidewire with the Ø2.6mm drill bit for Ø3.7mm screws, "
+                    "or the Ø2.8mm drill bit for Ø4.1mm screws."
+                ),
+            ),
+        ]
+    )
+    return f"techniques={len(_require_schema(result, TechniqueOutline).techniques)}"
+
+
 def tray_image_b64() -> str:
     """A stand-in tray photo: two labeled regions with SKUs printed in them,
     enough for the model to have something to read.
@@ -224,7 +244,10 @@ SLOT_CHECKS: dict[Slot, dict[str, Check]] = {
     Slot.DETERMINISTIC_ANSWER: {"generate (streamed text)": check_streamed_generate},
     Slot.REACT_AGENT: {"react_agent (bind_tools, 2 rounds)": check_react_agent_tools},
     Slot.JUDGE: {"judge (structured)": check_judge},
-    Slot.ENTITY_EXTRACTION: {"entity extraction (structured)": check_entity_extraction},
+    Slot.ENTITY_EXTRACTION: {
+        "entity extraction (structured)": check_entity_extraction,
+        "technique outline (structured)": check_technique_outline,
+    },
     Slot.TRAY_LAYOUT_EXTRACTION: {"tray layout (structured + image)": check_tray_layout},
 }
 

@@ -3,10 +3,13 @@ re-tag (retag_document), and the background indexing an admin triggers
 with Index/Reindex or a re-upload (process_document).
 
 Extracts text once (backend/ingestion/text_extraction.py) and runs three
-ingestion legs against it (backend/ingestion/pipeline.py): the graph leg
-(ticket 07), the vector leg (ticket 06), and the tray-layout visual leg
+ingestion legs against it (backend/ingestion/pipeline.py): the vector leg
+(ticket 06), the graph leg (ticket 07), and the tray-layout visual leg
 (ticket 25). After the vector leg, the per-document SKU index
-(backend/document_skus/, issue #27) is rebuilt from the stored chunks.
+(backend/document_skus/, issue #27) is rebuilt from the stored chunks; the
+graph leg reads it to widen its scope, and after the graph leg the
+document's techniques and steps (backend/techniques/, issue #28) are
+rebuilt from the step chunks and the index.
 An extraction failure -- including an unsupported file format
 -- now fails the document instead of silently skipping any leg; the
 tray-layout leg is the one exception, since it's explicitly best-effort by
@@ -31,6 +34,7 @@ from ingestion.pipeline import ingest_document, ingest_document_vectors
 from ingestion.text_extraction import extract_text
 from ingestion.tray_layout_extraction import extract_tray_layout
 from retrieval.graph_client import get_graph_client
+from techniques.service import index_document_techniques
 
 logger = logging.getLogger(__name__)
 
@@ -101,16 +105,6 @@ async def process_document(document_id: uuid.UUID, storage_path: str) -> None:
 
         text = extract_text(path, document.filename)
 
-        # Graph-side lookups go by the document's own Product Family
-        # (catalog name).
-        await ingest_document(
-            document_id=str(document_id),
-            text=text,
-            filename=document.filename,
-            product_family=document.product_family_name,
-            trays=[tray.name for tray in document.trays],
-            doc_type=document.document_type_name,
-        )
         await ingest_document_vectors(
             document_id=str(document_id),
             text=text,
@@ -119,8 +113,22 @@ async def process_document(document_id: uuid.UUID, storage_path: str) -> None:
         )
         # Scans the chunks the vector leg just stored (issue #27), so it
         # runs after it. Deterministic, no model call, and independent of
-        # whether the graph leg found any family parts.
+        # whether the graph leg finds any family parts.
         await index_document_skus(document_id, product_family=document.product_family_name)
+        # Graph-side lookups go by the document's own Product Family
+        # (catalog name), widened by the SKU index (issue #28), so the graph
+        # leg runs after the index now.
+        await ingest_document(
+            document_id=str(document_id),
+            text=text,
+            filename=document.filename,
+            product_family=document.product_family_name,
+            trays=[tray.name for tray in document.trays],
+            doc_type=document.document_type_name,
+        )
+        # Reads the step chunks and the SKU index (issue #28), and links its
+        # Procedures to the Document node the graph leg just upserted.
+        await index_document_techniques(document_id, product_family=document.product_family_name)
 
         try:
             await extract_tray_layout(

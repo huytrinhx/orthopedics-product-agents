@@ -250,7 +250,26 @@ picking this repo up cold, read this before making structural changes.
   `backend/evals/golden_datasets/build_dataset.py` maps it to families
   (REFLEX questions naming HYBRID go to REFLEX HYBRID) and raises on any
   value it has no mapping for. Rerun it after new rows land in the CSV,
-  and don't hand-edit the JSONL.
+  and don't hand-edit the JSONL. The one hand-written file is
+  `technique_steps/step_skus.jsonl` (issue #28), the step -> SKU sets
+  from the 2026-10-18 evaluation; it sits in a subdirectory so the
+  answer eval's directory glob doesn't read it as QA rows.
+- **Technique steps are extracted as an outline and resolved to SKUs in
+  code** (issue #28, `backend/techniques/`). One model call per document,
+  on the entity-extraction slot, outlines techniques and steps from the
+  step-bearing vector chunks (`chunk_index` kept, so every step cites a
+  real `{document_id}#{chunk_index}`). The model names instruments and
+  specs ("Ø2.6mm drill for Ø3.7mm screws"), never a SKU it wasn't shown
+  printed; `techniques/resolution.py` turns each item into a SKU set from
+  the catalog's structured specs and the document's SKU index, bound to
+  the parameter values it's for (`applies_when`). Don't move resolution
+  into the prompt. Storage is Postgres (`techniques`, `technique_steps`,
+  `technique_step_items`), replaced as a whole on re-index; the graph only
+  gets one `Procedure` per document and technique (keyed
+  `<document_id>::<name>`) with REQUIRES edges to its trays, and every
+  `DIFFERENTIATES_FROM` edge carries its `document_id`. Read steps through
+  `techniques.service.technique_steps(family, technique, parameters)`,
+  which `python -m evals.harness steps` scores too.
 - **Auth is JWT-based, stateless, client-held.** `backend/auth/` issues a
   signed JWT on signup/login (`JWT_SECRET`); the frontend stores it in
   `localStorage` (`frontend/lib/auth/token.ts`) and attaches it as a Bearer

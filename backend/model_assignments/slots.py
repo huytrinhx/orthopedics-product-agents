@@ -109,7 +109,7 @@ SLOT_DEFINITIONS: dict[Slot, SlotDefinition] = {
         SlotDefinition(
             Slot.ENTITY_EXTRACTION,
             "Entity extraction",
-            "ingestion/entity_extraction.py",
+            "ingestion/entity_extraction.py, ingestion/technique_extraction.py",
             (Need.STRUCTURED_OUTPUT,),
             "low",
         ),
