@@ -1,7 +1,7 @@
 """unique document filenames
 
 Revision ID: a3f81c6e5d24
-Revises: d9d071ea3bda
+Revises: a5c8e2f17b94
 Create Date: 2026-10-19 10:00:00.000000
 
 """
@@ -12,7 +12,7 @@ from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = 'a3f81c6e5d24'
-down_revision: str | Sequence[str] | None = 'd9d071ea3bda'
+down_revision: str | Sequence[str] | None = 'a5c8e2f17b94'
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
