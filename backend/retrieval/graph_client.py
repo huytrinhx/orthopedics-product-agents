@@ -15,8 +15,12 @@ Schema (see CONTEXT.md's glossary for the domain story behind these):
                                                           not pixel position
     (Part)-[:COMPATIBLE_WITH]->(Part)                -- e.g. plate <-> screw family
     (Part)-[:REQUIRES_TOOL]->(Part)                  -- e.g. screw <-> guidewire/driver
-    (Part)-[:DIFFERENTIATES_FROM {explanation}]->(Part)
-    (Procedure)-[:REQUIRES]->(Tray)
+    (Part)-[:DIFFERENTIATES_FROM {explanation, document_id}]->(Part)
+    (Procedure {key, name, document_id})-[:REQUIRES]->(Tray)
+                                                     -- issue #28: one per
+                                                        document and
+                                                        technique, keyed
+                                                        "<document_id>::<name>"
     (Part|Procedure)-[:SOURCED_FROM]->(Document)
     (Term)-[:ALIAS_OF|ABBREVIATION_OF]->(CanonicalTerm)
 
@@ -57,6 +61,7 @@ _RELATIONSHIP_TYPES = (
 class GraphClient:
     def __init__(self, uri: str, user: str, password: str):
         self._driver = AsyncGraphDatabase.driver(uri, auth=(user, password))
+        self._legacy_procedure_constraint_dropped = False
 
     async def ensure_constraints(self) -> None:
         """Uniqueness constraints doubling as the schema declaration — Neo4j
@@ -67,7 +72,11 @@ class GraphClient:
             "CREATE CONSTRAINT part_sku IF NOT EXISTS FOR (p:Part) REQUIRE p.sku IS UNIQUE",
             "CREATE CONSTRAINT tray_name IF NOT EXISTS FOR (t:Tray) REQUIRE t.name IS UNIQUE",
             "CREATE CONSTRAINT family_name IF NOT EXISTS FOR (f:ProductFamily) REQUIRE f.name IS UNIQUE",
-            "CREATE CONSTRAINT procedure_name IF NOT EXISTS FOR (pr:Procedure) REQUIRE pr.name IS UNIQUE",
+            # A Procedure is one document's technique (issue #28), so its
+            # name isn't unique any more: two documents can both describe
+            # a Lapidus. The old name constraint is dropped first.
+            "DROP CONSTRAINT procedure_name IF EXISTS",
+            "CREATE CONSTRAINT procedure_key IF NOT EXISTS FOR (pr:Procedure) REQUIRE pr.key IS UNIQUE",
             "CREATE CONSTRAINT document_id IF NOT EXISTS FOR (d:Document) REQUIRE d.id IS UNIQUE",
             "CREATE CONSTRAINT canonical_term_name IF NOT EXISTS FOR (c:CanonicalTerm) REQUIRE c.name IS UNIQUE",
             "CREATE CONSTRAINT term_name IF NOT EXISTS FOR (t:Term) REQUIRE t.name IS UNIQUE",
@@ -332,13 +341,19 @@ class GraphClient:
         to known parts, it never mints new ones. Returns whether it wrote
         anything, so callers can tell a hallucinated/unknown SKU from a
         successful attach.
+
+        The edge is keyed by `document_id` too (issue #28), the way
+        replace_tray_sections keys LOCATED_IN: a second document explaining
+        the same pair gets its own edge instead of overwriting the first's
+        explanation, and replace_document_differentiations can remove
+        exactly one document's edges on re-index.
         """
         async with self._driver.session() as session:
             result = await session.run(
                 """
                 MATCH (a:Part {sku: $sku_a})
                 MATCH (b:Part {sku: $sku_b})
-                MERGE (a)-[r:DIFFERENTIATES_FROM]->(b)
+                MERGE (a)-[r:DIFFERENTIATES_FROM {document_id: $document_id}]->(b)
                 SET r.explanation = $explanation
                 WITH a, b
                 MATCH (d:Document {id: $document_id})
@@ -353,16 +368,44 @@ class GraphClient:
             )
             return await result.single() is not None
 
+    async def replace_document_differentiations(
+        self, document_id: str, differentiations: list[dict]
+    ) -> int:
+        """Deletes this document's DIFFERENTIATES_FROM edges, then attaches
+        `differentiations` (`[{"sku_a", "sku_b", "explanation"}, ...]`).
+        Returns how many attached."""
+        async with self._driver.session() as session:
+            await session.run(
+                "MATCH (:Part)-[r:DIFFERENTIATES_FROM {document_id: $document_id}]->(:Part) DELETE r",
+                document_id=document_id,
+            )
+        attached = 0
+        for differentiation in differentiations:
+            attached += await self.attach_differentiation(
+                differentiation["sku_a"],
+                differentiation["sku_b"],
+                differentiation["explanation"],
+                document_id,
+            )
+        return attached
+
+    @staticmethod
+    def procedure_key(document_id: str, procedure: str) -> str:
+        return f"{document_id}::{procedure}"
+
     async def attach_procedure(self, procedure: str, tray: str, document_id: str) -> bool:
         """Only writes if `tray` already exists (from the master catalog
         seed) — a hallucinated tray name is dropped rather than minting a
-        new, unanchored Tray node.
+        new, unanchored Tray node. The Procedure is this document's
+        (issue #28), keyed by document and technique name.
         """
+        await self._drop_legacy_procedure_constraint()
         async with self._driver.session() as session:
             result = await session.run(
                 """
                 MATCH (t:Tray {name: $tray})
-                MERGE (p:Procedure {name: $procedure})
+                MERGE (p:Procedure {key: $key})
+                SET p.name = $procedure, p.document_id = $document_id
                 MERGE (p)-[:REQUIRES]->(t)
                 WITH p
                 MATCH (d:Document {id: $document_id})
@@ -370,10 +413,81 @@ class GraphClient:
                 RETURN p.name AS attached
                 """,
                 tray=tray,
+                key=self.procedure_key(document_id, procedure),
                 procedure=procedure,
                 document_id=document_id,
             )
             return await result.single() is not None
+
+    async def replace_document_procedures(self, document_id: str, procedures: list[dict]) -> None:
+        """Deletes this document's Procedure nodes, then writes one per
+        technique (`[{"name", "trays"}, ...]`, trays already resolved to
+        catalog names), each REQUIRES-linked to the trays that exist and
+        SOURCED_FROM the document. The steps themselves live in Postgres
+        (backend/techniques/); this is the part a graph traversal reads.
+        """
+        await self._drop_legacy_procedure_constraint()
+        async with self._driver.session() as session:
+            await session.run(
+                "MATCH (p:Procedure {document_id: $document_id}) DETACH DELETE p",
+                document_id=document_id,
+            )
+            for procedure in procedures:
+                await session.run(
+                    """
+                    MERGE (p:Procedure {key: $key})
+                    SET p.name = $name, p.document_id = $document_id
+                    WITH p
+                    OPTIONAL MATCH (d:Document {id: $document_id})
+                    FOREACH (_ IN CASE WHEN d IS NULL THEN [] ELSE [1] END |
+                        MERGE (p)-[:SOURCED_FROM]->(d))
+                    WITH p
+                    UNWIND $trays AS tray_name
+                    MATCH (t:Tray {name: tray_name})
+                    MERGE (p)-[:REQUIRES]->(t)
+                    """,
+                    key=self.procedure_key(document_id, procedure["name"]),
+                    name=procedure["name"],
+                    document_id=document_id,
+                    trays=list(procedure.get("trays") or []),
+                )
+
+    async def _drop_legacy_procedure_constraint(self) -> None:
+        """The pre-#28 unique constraint on Procedure.name would refuse a
+        second document's same-named technique. ensure_constraints drops
+        it too, but that only runs from the seed scripts, so the first
+        procedure write in a process makes sure."""
+        if self._legacy_procedure_constraint_dropped:
+            return
+        async with self._driver.session() as session:
+            await session.run("DROP CONSTRAINT procedure_name IF EXISTS")
+        self._legacy_procedure_constraint_dropped = True
+
+    async def delete_unattributed_prose_facts(self) -> tuple[int, int]:
+        """One-off cleanup for what prose extraction wrote before issue #28:
+        DIFFERENTIATES_FROM edges with no `document_id` (no re-index could
+        ever remove them) and Procedure nodes keyed by a global name.
+        Returns (edges deleted, procedures deleted)."""
+        async with self._driver.session() as session:
+            result = await session.run(
+                """
+                MATCH (:Part)-[r:DIFFERENTIATES_FROM]->(:Part)
+                WHERE r.document_id IS NULL
+                DELETE r
+                RETURN count(*) AS deleted
+                """
+            )
+            edges = (await result.single())["deleted"]
+            result = await session.run(
+                """
+                MATCH (p:Procedure)
+                WHERE p.key IS NULL
+                DETACH DELETE p
+                RETURN count(*) AS deleted
+                """
+            )
+            procedures = (await result.single())["deleted"]
+        return edges, procedures
 
     async def document_exists(self, document_id: str) -> bool:
         async with self._driver.session() as session:
@@ -464,6 +578,33 @@ class GraphClient:
             )
             return [record["name"] async for record in result]
 
+    async def list_parts_for_families(self, product_families: list[str]) -> list[dict]:
+        """list_parts_for_family over several families, each Part once.
+        Prose extraction's scope (issue #28): the document's family plus
+        every family its SKU index found parts of."""
+        async with self._driver.session() as session:
+            result = await session.run(
+                """
+                MATCH (p:Part)-[:BELONGS_TO_TRAY]->(:Tray)-[:BELONGS_TO_FAMILY]->(f:ProductFamily)
+                WHERE f.name IN $families
+                RETURN DISTINCT p.sku AS sku, p.description AS description
+                """,
+                families=product_families,
+            )
+            return [dict(record) async for record in result]
+
+    async def list_trays_by_family(self) -> dict[str, list[str]]:
+        """Every family's catalog name -> its trays' names. What a
+        technique's "requires <tray>" text is matched against."""
+        async with self._driver.session() as session:
+            result = await session.run(
+                """
+                MATCH (t:Tray)-[:BELONGS_TO_FAMILY]->(f:ProductFamily)
+                RETURN f.name AS family, collect(t.name) AS trays
+                """
+            )
+            return {record["family"]: sorted(record["trays"]) async for record in result}
+
     async def list_part_descriptions_by_tray(self, product_family: str) -> dict[str, list[str]]:
         """Tray catalog name -> its Parts' descriptions, for one family
         (its catalog name). The deterministic workflow reads a tray's screw
@@ -485,7 +626,9 @@ class GraphClient:
         description and the catalog names of every family it sits in -- a
         part can be in trays of several families. Backs the per-document
         SKU index (backend/document_skus/, issue #27), which validates a
-        document's tokens against the whole catalog, not one family.
+        document's tokens against the whole catalog, not one family, and
+        technique step resolution (backend/techniques/, issue #28), which
+        reads the structured specs the seed stored.
         """
         async with self._driver.session() as session:
             result = await session.run(
@@ -494,6 +637,9 @@ class GraphClient:
                 WHERE $skus IS NULL OR p.sku IN $skus
                 OPTIONAL MATCH (p)-[:BELONGS_TO_TRAY]->(:Tray)-[:BELONGS_TO_FAMILY]->(f:ProductFamily)
                 RETURN p.sku AS sku, p.description AS description,
+                       p.item_type AS item_type, p.thread AS thread,
+                       p.guidewire_spec AS guidewire_spec, p.pre_drill_spec AS pre_drill_spec,
+                       p.driver_spec AS driver_spec,
                        collect(DISTINCT f.name) AS families
                 """,
                 skus=skus,

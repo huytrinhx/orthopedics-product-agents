@@ -95,6 +95,28 @@ async def replace_document_skus(document_id: uuid.UUID | str, rows: list[Documen
         await connection.close()
 
 
+async def list_sku_chunk_indexes(document_id: uuid.UUID | str) -> dict[str, list[int]]:
+    """Catalog SKU -> the chunks it's in, for one document. Flagged tokens
+    (`not_in_catalog`) are left out: they're for review, not resolution.
+    What technique step resolution (backend/techniques/, issue #28) reads
+    to tell a document's own parts from the rest of the catalog."""
+    connection = await get_connection()
+    try:
+        async with connection.cursor() as cursor:
+            await cursor.execute(
+                """
+                SELECT sku, array_agg(DISTINCT chunk_index ORDER BY chunk_index)
+                FROM document_skus
+                WHERE document_id = %s AND match_kind <> 'not_in_catalog'
+                GROUP BY sku
+                """,
+                (document_id,),
+            )
+            return {sku: list(chunk_indexes) for sku, chunk_indexes in await cursor.fetchall()}
+    finally:
+        await connection.close()
+
+
 async def list_document_skus(document_id: uuid.UUID | str) -> list[DocumentSkuRecord]:
     """A document's rows in chunk order, each with its chunk's page number
     and section title. LEFT JOIN, so a row still comes back if its chunk is

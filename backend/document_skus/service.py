@@ -316,6 +316,17 @@ async def index_document_skus(document_id: uuid.UUID | str, *, product_family: s
     )
 
 
+async def indexed_families(document_id: uuid.UUID | str) -> list[str]:
+    """Every family a catalog SKU the document's index found belongs to:
+    the evidence a document uses another family's parts (issue #28), which
+    widens what prose extraction and step resolution may reference."""
+    skus = sorted(await repository.list_sku_chunk_indexes(document_id))
+    if not skus:
+        return []
+    parts = await get_graph_client().list_catalog_parts(skus=skus)
+    return sorted({family for part in parts for family in part.get("families") or []})
+
+
 async def list_document_skus(document_id: uuid.UUID | str) -> list[DocumentSkuOut]:
     """A document's index with each catalog SKU's description read from the
     catalog now."""

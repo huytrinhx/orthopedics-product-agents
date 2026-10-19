@@ -212,3 +212,114 @@ async def test_synonym_groups_include_canonical_and_both_edge_types():
     group = next(candidate_group for candidate_group in groups if candidate_group[0] == canonical)
     assert alias in group
     assert abbreviation in group
+
+
+# ---- Per-document prose facts (issue #28) ----
+
+
+async def _differentiation_documents(client, sku: str) -> list[str]:
+    return sorted(
+        entry["relationship_properties"].get("document_id")
+        for entry in await client.query_related_entities(sku, "DIFFERENTIATES_FROM")
+    )
+
+
+async def test_each_document_gets_its_own_differentiation_edge_and_replaces_only_its_own():
+    client = get_graph_client()
+    tray = _unique("TRAY")
+    sku_a, sku_b = _unique("A"), _unique("B")
+    first_document, second_document = _unique("DOC"), _unique("DOC")
+    await client.upsert_tray(tray, "MIS")
+    await client.upsert_part(sku_a, tray)
+    await client.upsert_part(sku_b, tray)
+    for document_id in (first_document, second_document):
+        await client.upsert_document(document_id, "guide.pdf", doc_type=None, product_family="MIS")
+        await client.replace_document_differentiations(
+            document_id, [{"sku_a": sku_a, "sku_b": sku_b, "explanation": f"from {document_id}"}]
+        )
+
+    assert await _differentiation_documents(client, sku_a) == sorted([first_document, second_document])
+
+    attached = await client.replace_document_differentiations(first_document, [])
+
+    assert attached == 0
+    [remaining] = await client.query_related_entities(sku_a, "DIFFERENTIATES_FROM")
+    assert remaining["relationship_properties"] == {
+        "document_id": second_document,
+        "explanation": f"from {second_document}",
+    }
+
+
+async def _procedure_keys(client, document_id: str) -> list[str]:
+    async with client._driver.session() as session:
+        result = await session.run(
+            "MATCH (p:Procedure)-[:SOURCED_FROM]->(:Document {id: $id}) RETURN p.key AS key",
+            id=document_id,
+        )
+        return sorted([record["key"] async for record in result])
+
+
+async def test_procedures_are_keyed_per_document_and_replaced_on_reindex():
+    client = get_graph_client()
+    await client.ensure_constraints()
+    tray = _unique("TRAY")
+    first_document, second_document = _unique("DOC"), _unique("DOC")
+    await client.upsert_tray(tray, "Core Foot Plating System")
+    for document_id in (first_document, second_document):
+        await client.upsert_document(document_id, "guide.pdf", doc_type=None, product_family=None)
+        # The same technique name in two documents is two Procedures.
+        await client.replace_document_procedures(
+            document_id, [{"name": "Lapidus", "trays": [tray, _unique("UNKNOWN-TRAY")]}]
+        )
+
+    requiring = sorted(
+        entry["related_properties"]["key"]
+        for entry in await client.query_related_entities(tray, "REQUIRES")
+    )
+    assert requiring == sorted(
+        f"{document_id}::Lapidus" for document_id in (first_document, second_document)
+    )
+
+    await client.replace_document_procedures(first_document, [{"name": "Akin", "trays": []}])
+
+    assert [
+        entry["related_properties"]["key"]
+        for entry in await client.query_related_entities(tray, "REQUIRES")
+    ] == [f"{second_document}::Lapidus"]
+    assert await _procedure_keys(client, first_document) == [f"{first_document}::Akin"]
+    assert await _procedure_keys(client, second_document) == [f"{second_document}::Lapidus"]
+
+
+async def test_unattributed_prose_facts_are_cleaned_up_and_attributed_ones_kept():
+    client = get_graph_client()
+    tray = _unique("TRAY")
+    sku_a, sku_b = _unique("A"), _unique("B")
+    document_id = _unique("DOC")
+    await client.upsert_tray(tray, "MIS")
+    await client.upsert_part(sku_a, tray)
+    await client.upsert_part(sku_b, tray)
+    await client.upsert_document(document_id, "guide.pdf", doc_type=None, product_family="MIS")
+    await client.replace_document_differentiations(
+        document_id, [{"sku_a": sku_a, "sku_b": sku_b, "explanation": "kept"}]
+    )
+    legacy_procedure = _unique("PROCEDURE")
+    async with client._driver.session() as session:
+        # What extraction wrote before issue #28: no document_id on the
+        # edge, a Procedure keyed by its name alone.
+        await session.run(
+            """
+            MATCH (a:Part {sku: $sku_b}), (b:Part {sku: $sku_a})
+            CREATE (a)-[:DIFFERENTIATES_FROM {explanation: 'stale'}]->(b)
+            CREATE (:Procedure {name: $procedure})
+            """,
+            sku_a=sku_a,
+            sku_b=sku_b,
+            procedure=legacy_procedure,
+        )
+
+    edges, procedures = await client.delete_unattributed_prose_facts()
+
+    assert edges >= 1 and procedures >= 1
+    assert await _differentiation_documents(client, sku_a) == [document_id]
+    assert await client.query_related_entities(legacy_procedure) == []
+    assert await client.delete_unattributed_prose_facts() == (0, 0)
