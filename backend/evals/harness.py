@@ -1,4 +1,5 @@
-"""Offline eval entry point (issue #25). Two slices:
+"""Offline eval entry point (issue #25). Two slices, plus the step -> SKU
+set eval:
 
 - `intent` (Slice 1, evals/intent_eval.py): runs intent_detection.jsonl's
   queries through the deterministic workflow's own intent classifier and
@@ -15,6 +16,11 @@
   scripted from its own labels. Needs OPENAI_API_KEY, a DATABASE_URL with
   ingested documents and the catalog mirror, and Neo4j; it only reads
   them, and keeps its threads in memory.
+- `steps` (evals/step_sku_eval.py, issue #28): scores the technique steps
+  ingestion stored (backend/techniques/) against the hand-built step ->
+  SKU sets in golden_datasets/technique_steps/, as set precision and
+  recall per document. It makes no model call, so it needs no
+  OPENAI_API_KEY: only a DATABASE_URL with indexed documents and Neo4j.
 
 Not run in CI: a real model call costs money, so an admin runs it by hand
 (issue #25 comment; agents.md). Results are a CLI report, optionally also
@@ -41,6 +47,7 @@ Usage (from backend/):
     python -m evals.harness answers --workflow deterministic
     python -m evals.harness answers --workflow react_agent \\
         --dataset evals/golden_datasets/reflex-hybrid.jsonl --output answer-results.json
+    python -m evals.harness steps --output step-results.json
     python -m evals.harness intent --model intent_classification=openai/gpt-5-mini@low
     python -m evals.harness answers --workflow deterministic --model deterministic_answer=openai/gpt-5-mini
     python -m evals.harness intent --model intent_classification=typesafe/jev-1.13-20260917 \\
@@ -62,7 +69,7 @@ from catalog.family_descriptions import load_family_descriptions
 from catalog.repository import list_families_with_trays
 from config.llm_clients import OPENAI_MODEL_PREFIX
 from documents.repository import list_documents
-from evals import answer_eval
+from evals import answer_eval, step_sku_eval
 from evals.intent_eval import (
     format_report,
     load_intent_dataset,
@@ -308,10 +315,36 @@ def _add_answers_command(commands) -> None:
     _add_model_argument(answers_parser)
 
 
+async def _run_steps(dataset_path: Path, output_path: Path | None) -> None:
+    rows = step_sku_eval.load_step_dataset(dataset_path)
+    print(f"Dataset: {dataset_path} ({len(rows)} rows)")
+    print()
+    results = await step_sku_eval.run_step_eval(rows)
+    report = step_sku_eval.summarize(results)
+    print(step_sku_eval.format_report(report, results))
+    if output_path is not None:
+        step_sku_eval.write_results(output_path, report, results)
+        print()
+        print(f"Wrote per-row results to {output_path}")
+
+
+def _add_steps_command(commands) -> None:
+    steps_parser = commands.add_parser(
+        "steps",
+        help="Score the stored technique steps' SKU sets against the step -> SKU golden set "
+        "(no model calls)",
+    )
+    steps_parser.add_argument("--dataset", type=Path, default=step_sku_eval.DEFAULT_STEP_DATASET)
+    steps_parser.add_argument(
+        "--output", type=Path, help="Also write the report and per-row results as JSON here"
+    )
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="python -m evals.harness", description="Offline evals")
     commands = parser.add_subparsers(dest="command", required=True)
     _add_answers_command(commands)
+    _add_steps_command(commands)
     intent_parser = commands.add_parser(
         "intent", help="Score detect_intent/clarify_question_type against intent_detection.jsonl"
     )
@@ -327,6 +360,12 @@ def main(argv: list[str] | None = None) -> None:
     # usage above runs from backend/); variables already set in the shell
     # (e.g. under `railway run`) win.
     load_dotenv(find_dotenv(usecwd=True))
+    if arguments.command == "steps":
+        # Reads what indexing stored; no model call, so no key needed.
+        if sys.platform == "win32":
+            asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+        asyncio.run(_run_steps(arguments.dataset, arguments.output))
+        return
     if not os.environ.get("OPENAI_API_KEY"):
         parser.exit(2, "OPENAI_API_KEY is not set -- the evals make real model calls\n")
     gateway_only = [

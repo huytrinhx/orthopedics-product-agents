@@ -17,3 +17,14 @@ rows land in the CSV; don't hand-edit the JSONL):
 scored by `python -m evals.harness answers --workflow <name>`
 (`backend/evals/answer_eval.py`, Slice 2), with the shared judge
 (`backend/agents/judge.py`).
+
+`technique_steps/step_skus.jsonl` is the exception: hand-written, not
+generated, from the step -> SKU sets built by hand in the 2026-10-18
+evaluation (issue #28). Each row has `product_family`, `technique` (words
+of its name, or null), `step` (words of its label) and/or `step_number`
+(neither means the whole technique), the surgeon's `parameters`, and
+`expected_skus`. `evaluation_citations` and `notes` are for people. It's
+scored by `python -m evals.harness steps` (`backend/evals/step_sku_eval.py`)
+against the techniques ingestion stored, with no model call. Add rows here
+as more steps are checked by hand. It's in a subdirectory so `answers`,
+which reads every `*.jsonl` in this directory, never picks it up.
