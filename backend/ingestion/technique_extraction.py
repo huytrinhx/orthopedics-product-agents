@@ -83,8 +83,9 @@ for_screw_diameter = "3.7mm");
 "for Ø3.7mm screws"), copied as written;
 - `applies_when`: the parameter values this item is for, as name/value \
 pairs using the parameter names above (e.g. screw_diameter = "3.7mm"). \
-When the text gives one instrument per option ("Ø2.6mm for Ø3.7mm screws; Ø2.8mm for Ø4.1mm \
-screws"), give one item per option, each with its own applies_when;
+When the text gives one instrument per option ("Ø2.6mm for Ø3.7mm \
+screws; Ø2.8mm for Ø4.1mm screws"), give one item per option, each with \
+its own applies_when;
 - `optional`: whether the text says it's optional.
 
 Use only the given text. Include only steps that are in it, and only chunk \

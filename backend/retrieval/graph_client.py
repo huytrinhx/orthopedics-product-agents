@@ -439,7 +439,7 @@ class GraphClient:
                     SET p.name = $name, p.document_id = $document_id
                     WITH p
                     OPTIONAL MATCH (d:Document {id: $document_id})
-                    FOREACH (_ IN CASE WHEN d IS NULL THEN [] ELSE [1] END |
+                    FOREACH (present IN CASE WHEN d IS NULL THEN [] ELSE [1] END |
                         MERGE (p)-[:SOURCED_FROM]->(d))
                     WITH p
                     UNWIND $trays AS tray_name
