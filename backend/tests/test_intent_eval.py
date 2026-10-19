@@ -59,6 +59,7 @@ class _FakeClassifier:
         self.classifications = classifications
         self.calls: list[tuple[str, list[str]]] = []
         self.hints: list[tuple[str | None, str | None]] = []
+        self.family_descriptions: list[dict[str, str] | None] = []
 
     async def __call__(
         self,
@@ -66,9 +67,11 @@ class _FakeClassifier:
         family_names: list[str],
         previous_family: str | None = None,
         previous_message: str | None = None,
+        family_descriptions: dict[str, str] | None = None,
     ) -> _IntentClassification:
         self.calls.append((query, family_names))
         self.hints.append((previous_family, previous_message))
+        self.family_descriptions.append(family_descriptions)
         return self.classifications[query]
 
 
@@ -356,3 +359,41 @@ async def test_a_follow_up_row_replays_earlier_turns_and_carries_the_family():
     assert result.family_correct
     assert not result.would_clarify_family
     assert classifier.hints == [(None, None), ("MIS Foot Recon", "What screws are in the MIS set?")]
+
+
+async def test_every_turn_is_classified_with_the_family_descriptions():
+    # Issue #30: the eval passes the classifier what detect_intent does.
+    classifier = _FakeClassifier(
+        {
+            "What screws are in the MIS set?": _IntentClassification(product_family="MIS Foot Recon"),
+            "What about the 3.5 PT?": _IntentClassification(),
+        }
+    )
+    row = _row("What about the 3.5 PT?", "MIS - Foot Recon System", [])
+    row["turns"] = [{"role": "user", "content": "What screws are in the MIS set?"}, *row["turns"]]
+    descriptions = {"MIS Foot Recon": "Parts include hv chamfer ft.", "Reflex Hybrid": ""}
+
+    await run_intent_eval([row], _FAMILIES, classifier, descriptions)
+
+    assert classifier.family_descriptions == [descriptions, descriptions]
+
+
+async def test_a_decision_models_family_probabilities_are_saved_and_shown_for_a_miss(tmp_path):
+    missed = _IntentClassification(product_family="Reflex Hybrid")
+    missed._family_probabilities = {"Reflex Hybrid": 0.52, "MIS Foot Recon": 0.31, "unclear": 0.1}
+    classify = _FakeClassifier({"Torque?": missed})
+
+    results = await run_intent_eval([_row("Torque?", "MIS - Foot Recon System", [])], _FAMILIES, classify)
+    report = summarize(results)
+    output_path = tmp_path / "results.json"
+    write_results(output_path, report, results)
+
+    written = json.loads(output_path.read_text(encoding="utf-8"))
+    assert written["rows"][0]["family_probabilities"] == {
+        "Reflex Hybrid": 0.52,
+        "MIS Foot Recon": 0.31,
+        "unclear": 0.1,
+    }
+    assert "family probabilities: Reflex Hybrid 0.52, MIS Foot Recon 0.31, unclear 0.10" in format_report(
+        report, results
+    )

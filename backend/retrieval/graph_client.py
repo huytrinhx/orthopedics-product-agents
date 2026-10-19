@@ -500,6 +500,24 @@ class GraphClient:
             )
             return [dict(record) async for record in result]
 
+    async def list_part_descriptions_by_family(self, product_families: list[str]) -> dict[str, list[str]]:
+        """Family catalog name -> its Parts' descriptions, one per Part even
+        when it sits in two of the family's trays, for every family given.
+        What catalog/family_descriptions.py describes the families from
+        (issue #30) -- one query for all of them.
+        """
+        async with self._driver.session() as session:
+            result = await session.run(
+                """
+                MATCH (p:Part)-[:BELONGS_TO_TRAY]->(:Tray)-[:BELONGS_TO_FAMILY]->(f:ProductFamily)
+                WHERE f.name IN $families
+                WITH DISTINCT f, p
+                RETURN f.name AS family, collect(coalesce(p.description, '')) AS descriptions
+                """,
+                families=product_families,
+            )
+            return {record["family"]: record["descriptions"] async for record in result}
+
     # ---- Query surface (backend/agents/tools/graph_query.py + synonym_resolve.py) ----
 
     async def query_related_entities(

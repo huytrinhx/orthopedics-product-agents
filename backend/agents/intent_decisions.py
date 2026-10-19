@@ -11,10 +11,13 @@ all 35 labelled rows can tune.
 - Product family: one option per family display name, plus UNCLEAR_FAMILY
   (the question points at a family but doesn't settle on one) and
   NO_FAMILY (it names none at all -- what lets a follow-up stay on the
-  previous family, issue #22). A family is picked only when it's the answer
-  with at least the slot's family confidence threshold; otherwise the
-  families above CANDIDATE_PROBABILITY_FLOOR, most likely first, become the
-  clarification's candidates.
+  previous family, issue #22). Each family's criteria carries its generated
+  description (catalog/family_descriptions.py, issue #30) -- trays,
+  distinctive parts, and which family a shared brand means -- since bare
+  names were too thin to choose between. A family is picked only when it's
+  the answer with at least the slot's family confidence threshold;
+  otherwise the families above CANDIDATE_PROBABILITY_FLOOR, most likely
+  first, become the clarification's candidates.
 - Question type: one option per QUESTION_TYPES slug, criteria from their
   descriptions. When the runner-up is within the slot's margin of the
   answer, both count as detected, and clarify_question_type asks which
@@ -29,7 +32,7 @@ as they do for a chat model, and the intent eval scores this path through
 the same code.
 """
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TypeVar
 
 from agents.question_types import QUESTION_TYPE_NAMES, QUESTION_TYPES, UNCLASSIFIED
@@ -51,14 +54,18 @@ NO_FAMILY = "no_family"
 # clarification candidate. Not a tuned threshold: it only trims options a
 # rep would never mean.
 CANDIDATE_PROBABILITY_FLOOR = 0.05
+# How many of the family Choice's most likely options IntentDecision
+# carries. Only the intent eval reads them: it saves them per row (issue
+# #30), so a tuning round doesn't need a dump of its own.
+REPORTED_FAMILY_PROBABILITIES = 5
 
 FAMILY_QUESTION_ID = "product_family"
 QUESTION_TYPE_QUESTION_ID = "question_type"
 
 _FAMILY_INSTRUCTIONS = (
     "Which product family is `question` about? Pick a family only if `question` clearly "
-    "names or implies exactly that one. Several families can share a brand name (MIS, "
-    "REFLEX): pick the one that actually matches, and don't switch families on incidental "
+    "names or implies exactly that one, by its name or by a tray or part its description "
+    "lists. Several families can share a brand name (MIS, REFLEX): pick the one that actually matches, and don't switch families on incidental "
     "word overlap -- a question about a screw, wire or guidepin is about the implant or "
     "consumable family, not a powered-instrument family, unless it asks about the powered "
     f"tool itself. Pick {UNCLEAR_FAMILY} if `question` points at a product family or brand "
@@ -91,6 +98,9 @@ class IntentDecision:
     candidate_families: list[str]
     mentions_family: bool
     question_types: list[str]
+    # Display name (or UNCLEAR_FAMILY/NO_FAMILY) -> probability, the
+    # REPORTED_FAMILY_PROBABILITIES most likely, for the intent eval.
+    family_probabilities: dict[str, float] = field(default_factory=dict)
 
 
 def _is_number(text: str) -> bool:
@@ -115,8 +125,21 @@ def family_option_keys(family_names: list[str]) -> dict[str, str]:
     return keys
 
 
-def family_question(family_keys: dict[str, str], *, follow_up: bool) -> dict:
-    criteria = {key: f"The {name} product family." for key, name in family_keys.items()}
+def family_question(
+    family_keys: dict[str, str],
+    *,
+    follow_up: bool,
+    family_descriptions: dict[str, str] | None = None,
+) -> dict:
+    """`family_descriptions` is display name -> description
+    (catalog/family_descriptions.py); a family without one is described by
+    its name alone.
+    """
+    family_descriptions = family_descriptions or {}
+    criteria = {
+        key: " ".join(filter(None, [f"The {name} product family.", family_descriptions.get(name)]))
+        for key, name in family_keys.items()
+    }
     criteria[UNCLEAR_FAMILY] = (
         "The question points at a product family or brand, but not clearly at exactly one."
     )
@@ -160,6 +183,17 @@ def pick_family(
     return None, candidates, mentions_family
 
 
+def top_family_probabilities(answer: ChoiceAnswer, family_keys: dict[str, str]) -> dict[str, float]:
+    """The family Choice's REPORTED_FAMILY_PROBABILITIES most likely
+    options, keyed by family display name (sentinels as themselves).
+    """
+    ranked = sorted(answer.probabilities.items(), key=lambda entry: entry[1], reverse=True)
+    return {
+        family_keys.get(key, key): probability
+        for key, probability in ranked[:REPORTED_FAMILY_PROBABILITIES]
+    }
+
+
 def pick_question_types(answer: ChoiceAnswer, margin: float) -> list[str]:
     """The answer, plus the runner-up when it's within `margin` of it --
     two readings close enough that the rep should say which.
@@ -196,6 +230,7 @@ async def decide_intent(
     previous_family: str | None,
     previous_message: str | None,
     max_candidates: int,
+    family_descriptions: dict[str, str] | None = None,
 ) -> IntentDecision:
     """Both of detect_intent's decisions in one request. With no families
     configured only the question type is asked: there's nothing to choose
@@ -210,19 +245,21 @@ async def decide_intent(
     questions = {QUESTION_TYPE_QUESTION_ID: question_type_question()}
     if family_keys:
         questions[FAMILY_QUESTION_ID] = family_question(
-            family_keys, follow_up=bool(previous_message or previous_family)
+            family_keys,
+            follow_up=bool(previous_message or previous_family),
+            family_descriptions=family_descriptions,
         )
 
     response = await _decide(client, slot_model, state, questions)
 
     product_family, candidate_families, mentions_family = None, [], False
+    family_probabilities: dict[str, float] = {}
     if family_keys:
+        family_answer = response.answers[FAMILY_QUESTION_ID]
         product_family, candidate_families, mentions_family = pick_family(
-            response.answers[FAMILY_QUESTION_ID],
-            family_keys,
-            slot_model.family_confidence_threshold,
-            max_candidates,
+            family_answer, family_keys, slot_model.family_confidence_threshold, max_candidates
         )
+        family_probabilities = top_family_probabilities(family_answer, family_keys)
     return IntentDecision(
         product_family=product_family,
         candidate_families=candidate_families,
@@ -230,6 +267,7 @@ async def decide_intent(
         question_types=pick_question_types(
             response.answers[QUESTION_TYPE_QUESTION_ID], slot_model.question_type_margin
         ),
+        family_probabilities=family_probabilities,
     )
 
 

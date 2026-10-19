@@ -3,8 +3,11 @@
 - `intent` (Slice 1, evals/intent_eval.py): runs intent_detection.jsonl's
   queries through the deterministic workflow's own intent classifier and
   scores the family, the question types, and whether each clarification
-  would fire. Needs OPENAI_API_KEY and a DATABASE_URL whose catalog mirror
-  is seeded (ingestion.seed_master_catalog); no documents or vector store.
+  would fire. Needs OPENAI_API_KEY, a DATABASE_URL whose catalog mirror
+  is seeded (ingestion.seed_master_catalog), and Neo4j for the family
+  descriptions' Parts (unreachable, they fall back to tray names, as
+  detect_intent's would); no documents or vector store. A decision model's top family
+  probabilities are printed for each family miss and saved per row.
 - `answers` / run_eval (Slice 2, evals/answer_eval.py): a full answer eval
   of a registered workflow over the per-family QA files, scored by the
   shared judge (agents/judge.py), the workflow's fact check, and citation
@@ -55,6 +58,7 @@ from dotenv import find_dotenv, load_dotenv
 
 from agents.registry import is_functional, list_workflows
 from agents.workflows.deterministic import _classify_intent
+from catalog.family_descriptions import load_family_descriptions
 from catalog.repository import list_families_with_trays
 from config.llm_clients import OPENAI_MODEL_PREFIX
 from documents.repository import list_documents
@@ -214,8 +218,9 @@ async def _run_intent(dataset_path: Path, output_path: Path | None, model_select
     print(f"Dataset: {dataset_path} ({len(rows)} rows), {len(families)} families mirrored")
     print()
 
+    family_descriptions = await load_family_descriptions(families) if families else {}
     classify = partial(_classify_intent, slot_model=slot_models[Slot.INTENT_CLASSIFICATION])
-    results = await run_intent_eval(rows, families, classify)
+    results = await run_intent_eval(rows, families, classify, family_descriptions)
     report = summarize(results)
     print(format_report(report, results))
     if output_path is not None:

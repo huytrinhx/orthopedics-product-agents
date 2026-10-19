@@ -56,14 +56,21 @@ class _Harness:
         """
         self.classifier_family_names: list[list[str]] = []
         self.classifier_hints: list[tuple[str | None, str | None]] = []
+        self.classifier_family_descriptions: list[dict[str, str] | None] = []
         self.search = _RecordingVectorSearch()
 
         async def fake_list_families_with_trays():
             return list(families)
 
-        async def fake_classify_intent(query, family_names, previous_family=None, previous_message=None):
+        async def fake_load_family_descriptions(described_families):
+            return {family.display_name: f"About {family.display_name}." for family in described_families}
+
+        async def fake_classify_intent(
+            query, family_names, previous_family=None, previous_message=None, family_descriptions=None
+        ):
             self.classifier_family_names.append(family_names)
             self.classifier_hints.append((previous_family, previous_message))
+            self.classifier_family_descriptions.append(family_descriptions)
             turn_classification = classification[query] if isinstance(classification, dict) else classification
             return turn_classification.model_copy(deep=True)
 
@@ -89,6 +96,7 @@ class _Harness:
             return {"fact_check_issues": []}
 
         monkeypatch.setattr(det, "list_families_with_trays", fake_list_families_with_trays)
+        monkeypatch.setattr(det, "load_family_descriptions", fake_load_family_descriptions)
         monkeypatch.setattr(det, "_classify_intent", fake_classify_intent)
         monkeypatch.setattr(det, "list_hierarchy", fake_list_hierarchy)
         monkeypatch.setattr(det, "vector_search", self.search)
@@ -135,8 +143,12 @@ async def test_a_confident_classification_never_interrupts_and_scopes_retrieval(
     assert result["answer"] == "final answer"
     assert result["resolved_family"] == "Reflex Hybrid"
     assert result["resolved_family_id"] == str(_HYBRID.id)
-    # The classifier chooses among display names, not catalog names.
+    # The classifier chooses among display names, not catalog names, each
+    # with its generated description (issue #30).
     assert harness.classifier_family_names == [[family.display_name for family in _FAMILIES]]
+    assert harness.classifier_family_descriptions == [
+        {family.display_name: f"About {family.display_name}." for family in _FAMILIES}
+    ]
     assert [call["product_family_id"] for call in harness.search.calls] == [str(_HYBRID.id)]
 
 

@@ -542,7 +542,12 @@ def test_a_follow_up_naming_no_family_stays_on_the_threads_family_across_request
     async def fake_list_families_with_trays():
         return [foot_recon, power]
 
-    async def fake_classify_intent(query, family_names, previous_family=None, previous_message=None):
+    async def fake_load_family_descriptions(described_families):
+        return {}
+
+    async def fake_classify_intent(
+        query, family_names, previous_family=None, previous_message=None, family_descriptions=None
+    ):
         classifier_hints.append((previous_family, previous_message))
         return classifications[query].model_copy(deep=True)
 
@@ -569,6 +574,7 @@ def test_a_follow_up_naming_no_family_stays_on_the_threads_family_across_request
         return {"fact_check_issues": []}
 
     monkeypatch.setattr(det, "list_families_with_trays", fake_list_families_with_trays)
+    monkeypatch.setattr(det, "load_family_descriptions", fake_load_family_descriptions)
     monkeypatch.setattr(det, "_classify_intent", fake_classify_intent)
     monkeypatch.setattr(det, "resolve_synonyms", fake_resolve_synonyms)
     monkeypatch.setattr(det, "hybrid_retrieve", fake_hybrid_retrieve)
