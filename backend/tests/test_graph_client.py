@@ -153,6 +153,32 @@ async def test_list_part_descriptions_by_tray_groups_one_familys_parts():
     assert await client.list_part_descriptions_by_tray(family) == {tray: ["SCREW, CANN, HEADED, 5.5 X 40MM"]}
 
 
+async def test_list_part_descriptions_by_family_counts_a_part_in_two_trays_once():
+    # Issue #30: what the family descriptions are generated from.
+    client = get_graph_client()
+    family, other_family, unasked_family = _unique("FAMILY"), _unique("FAMILY"), _unique("FAMILY")
+    first_tray, second_tray, other_tray, unasked_tray = (_unique("TRAY") for _ in range(4))
+    await client.upsert_tray(first_tray, family)
+    await client.upsert_tray(second_tray, family)
+    await client.upsert_tray(other_tray, other_family)
+    await client.upsert_tray(unasked_tray, unasked_family)
+    shared_sku = _unique("SKU")
+    await client.upsert_part(shared_sku, first_tray, description="STAPLE, REFLEX TETRA, LAPIDUS, 30MM")
+    await client.upsert_part(shared_sku, second_tray, description="STAPLE, REFLEX TETRA, LAPIDUS, 30MM")
+    await client.upsert_part(_unique("SKU"), second_tray, description="DYNAMIC DISC, NITINOL, REFLEX, 7MM")
+    await client.upsert_part(_unique("SKU"), other_tray, description="BURR, BROPHY, 2.0X12MM")
+    await client.upsert_part(_unique("SKU"), unasked_tray, description="PICKUPS")
+
+    found = await client.list_part_descriptions_by_family([family, other_family])
+
+    assert set(found) == {family, other_family}
+    assert sorted(found[family]) == [
+        "DYNAMIC DISC, NITINOL, REFLEX, 7MM",
+        "STAPLE, REFLEX TETRA, LAPIDUS, 30MM",
+    ]
+    assert found[other_family] == ["BURR, BROPHY, 2.0X12MM"]
+
+
 async def test_synonym_groups_include_canonical_and_both_edge_types():
     client = get_graph_client()
     canonical = _unique("CANONICAL")

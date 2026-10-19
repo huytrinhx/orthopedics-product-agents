@@ -205,6 +205,20 @@ def test_the_family_question_offers_every_family_plus_unclear_and_none():
     assert set(intent_decisions.question_type_question()["criteria"]) == set(QUESTION_TYPE_NAMES)
 
 
+def test_each_family_option_carries_its_description():
+    # Issue #30: a bare name was too thin to choose between families.
+    question = intent_decisions.family_question(
+        intent_decisions.family_option_keys(_FAMILY_NAMES),
+        follow_up=False,
+        family_descriptions={"REFLEX HYBRID": "Parts include template.", "REFLEX Foot Recon": ""},
+    )
+
+    assert question["criteria"]["REFLEX HYBRID"] == "The REFLEX HYBRID product family. Parts include template."
+    # A family with no description (or an empty one) keeps the bare sentence.
+    assert question["criteria"]["REFLEX Foot Recon"] == "The REFLEX Foot Recon product family."
+    assert question["criteria"]["MIS - Foot Recon System"] == "The MIS - Foot Recon System product family."
+
+
 _FAMILY_KEYS = intent_decisions.family_option_keys(_FAMILY_NAMES)
 
 
@@ -288,6 +302,73 @@ async def test_classify_intent_on_a_decision_model_asks_choices_and_never_calls_
         "previous_family": "MIS - Foot Recon System",
     }
     assert set(request["questions"]) == {"product_family", "question_type"}
+
+
+async def test_the_decision_path_sends_descriptions_and_reports_the_top_family_probabilities(monkeypatch):
+    client = _FakeDecisionClient(
+        _intent_answers(
+            (
+                "REFLEX Foot Recon",
+                {
+                    "REFLEX Foot Recon": 0.4,
+                    "unclear": 0.2,
+                    "REFLEX HYBRID": 0.15,
+                    "MIS - Foot Recon System": 0.1,
+                    "no_family": 0.1,
+                    "family: 2024": 0.05,
+                },
+            )
+        )
+    )
+    monkeypatch.setattr(intent_decisions, "get_decision_client", lambda: client)
+
+    result = await det._classify_intent(
+        "tetra staple sizes?",
+        [*_FAMILY_NAMES, "2024"],
+        family_descriptions={"REFLEX Foot Recon": "Parts include tetra."},
+        slot_model=_DECISION_MODEL,
+    )
+
+    criteria = client.requests[0]["questions"]["product_family"]["criteria"]
+    assert criteria["REFLEX Foot Recon"] == "The REFLEX Foot Recon product family. Parts include tetra."
+    # Under the 0.6 default, so no pick -- but the eval still sees why.
+    assert result.product_family is None
+    assert result.family_probabilities == {
+        "REFLEX Foot Recon": 0.4,
+        "unclear": 0.2,
+        "REFLEX HYBRID": 0.15,
+        "MIS - Foot Recon System": 0.1,
+        "no_family": 0.1,
+    }
+
+
+async def test_the_chat_path_lists_each_family_with_its_description(monkeypatch):
+    prompts: list = []
+
+    class _ChatModel:
+        def with_structured_output(self, schema):
+            class _Runnable:
+                async def ainvoke(self, messages):
+                    prompts.append(messages)
+                    return schema.model_validate({"product_family": "REFLEX HYBRID"})
+
+            return _Runnable()
+
+    monkeypatch.setattr(det, "get_chat_model", lambda *arguments: _ChatModel())
+
+    result = await det._classify_intent(
+        "hybrid template?",
+        _FAMILY_NAMES,
+        family_descriptions={"REFLEX HYBRID": "Parts include template."},
+        slot_model=runtime.SlotModel(Slot.INTENT_CLASSIFICATION),
+    )
+
+    system_prompt = prompts[0][0].content
+    assert "- REFLEX HYBRID: Parts include template.\n" in system_prompt
+    assert "- MIS - Foot Recon System\n" in system_prompt
+    # The chat path reports no probabilities, and none leak into its schema.
+    assert result.family_probabilities == {}
+    assert "family_probabilities" not in det._IntentClassification.model_json_schema()["properties"]
 
 
 async def test_with_no_families_only_the_question_type_is_asked(monkeypatch):

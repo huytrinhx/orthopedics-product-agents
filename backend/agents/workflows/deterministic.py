@@ -71,7 +71,7 @@ from typing import Literal
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langgraph.graph import END, StateGraph
 from langgraph.types import interrupt
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, PrivateAttr
 
 from agents.citations import extract_citations
 from agents.fact_check import check_answer, format_issues_for_correction
@@ -83,6 +83,7 @@ from agents.tools.part_lookup import part_lookup
 from agents.tools.term_extraction import extract_candidate_terms, with_singular_variants
 from agents.tools.vector_search import vector_search
 from catalog.display_names import CatalogDisplayNames, catalog_display_names_for
+from catalog.family_descriptions import load_family_descriptions
 from catalog.repository import ProductFamilyRecord, TrayRecord, list_families_with_trays
 from config.llm_clients import get_chat_model
 from doc_type_hierarchy.repository import RankedDocumentType, list_hierarchy
@@ -258,6 +259,14 @@ class _IntentClassification(BaseModel):
             "none of the others clearly applies."
         ),
     )
+    # A decision model's most likely families with their probabilities
+    # (issue #30), which the intent eval saves per row; a chat model
+    # reports none. Private, so it never joins the structured-output schema.
+    _family_probabilities: dict[str, float] = PrivateAttr(default_factory=dict)
+
+    @property
+    def family_probabilities(self) -> dict[str, float]:
+        return self._family_probabilities
 
 
 def _resolve_family(
@@ -356,15 +365,20 @@ async def _classify_intent(
     previous_family: str | None = None,
     previous_message: str | None = None,
     *,
+    family_descriptions: dict[str, str] | None = None,
     slot_model: SlotModel | None = None,
 ) -> _IntentClassification:
     """`slot_model` defaults to the intent-classification slot of the graph
     run this is called from (issue #24); the intent eval passes its own.
+    `family_descriptions` is display name -> the family's generated
+    description (catalog/family_descriptions.py, issue #30), which both
+    paths show beside its name.
 
     A decision model in the slot (issue #23) answers through
     agents/intent_decisions.py instead, in the same shape. If that call
     fails, the slot's default chat path below runs.
     """
+    family_descriptions = family_descriptions or {}
     slot_model = slot_model or slot_model_for_run(Slot.INTENT_CLASSIFICATION)
     if slot_model.is_decision_model:
         decision = await decide_or_fall_back(
@@ -377,16 +391,23 @@ async def _classify_intent(
                 previous_family,
                 previous_message,
                 MAX_FAMILY_CANDIDATES,
+                family_descriptions,
             ),
         )
         if decision is not None:
-            return _IntentClassification(
+            classification = _IntentClassification(
                 product_family=decision.product_family,
                 candidate_families=decision.candidate_families,
                 mentions_family=decision.mentions_family,
                 question_type=decision.question_types,
             )
+            classification._family_probabilities = decision.family_probabilities
+            return classification
         slot_model = SlotModel(slot_model.slot)
+    family_listing = "\n".join(
+        f"- {name}: {family_descriptions[name]}" if family_descriptions.get(name) else f"- {name}"
+        for name in family_names
+    )
     question_type_listing = "\n".join(f"- {question_type.name}: {question_type.description}" for question_type in QUESTION_TYPES)
     # Hints only (issue #22): product_family still comes from what the new
     # question itself says, and detect_intent -- not the model -- decides
@@ -407,11 +428,14 @@ async def _classify_intent(
         SystemMessage(
             content=(
                 "Classify the sales rep's question below.\n\n"
-                f"Allowed product families: {', '.join(family_names) or '(none configured)'}\n"
+                "Allowed product families, each with its trays and "
+                "distinctive parts from the catalog:\n"
+                f"{family_listing or '(none configured)'}\n"
                 f"Allowed question types:\n{question_type_listing}\n\n"
                 "Set product_family to null if the question doesn't "
                 "clearly name or imply exactly one of the allowed "
-                "product families -- when genuinely unclear, always "
+                "product families, by its name or by a tray or part "
+                "listed for it -- when genuinely unclear, always "
                 "prefer null over guessing, even if only one family is "
                 "configured. When it's null, list in candidate_families "
                 f"the (at most {MAX_FAMILY_CANDIDATES}) allowed families "
@@ -470,7 +494,9 @@ async def detect_intent(state: DeterministicState) -> dict:
 
     Families come from the Postgres catalog mirror (catalog.repository),
     by display name, so an admin rename shows up here with no code change.
-    If none are mirrored yet (a fresh environment before the catalog
+    The classifier sees each with its description, generated from the
+    catalog's trays and Parts and cached (catalog/family_descriptions.py,
+    issue #30). If none are mirrored yet (a fresh environment before the catalog
     seed), there's nothing to disambiguate against, so this skips straight
     past the interrupt and leaves resolved_family None.
 
@@ -498,6 +524,7 @@ async def detect_intent(state: DeterministicState) -> dict:
         [family.display_name for family in families],
         previous_family=previous_family.display_name if previous_family else None,
         previous_message=_previous_user_message(state),
+        family_descriptions=await load_family_descriptions(families) if families else {},
     )
     family = _family_for_turn(result, families, display_names, previous_family)
 

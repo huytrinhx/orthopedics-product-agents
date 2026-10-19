@@ -4,7 +4,9 @@ which Product Family, which question types, and whether each node would
 pause to ask -- against intent_detection.jsonl's labels. No answer is
 generated, so there's no pause to resolve and no documents or vector store
 to stand up; the only data it needs is the families list (the catalog
-mirror, catalog.repository), the same list detect_intent classifies among.
+mirror, catalog.repository), the same list detect_intent classifies among,
+and their descriptions (catalog.family_descriptions, which reads the
+graph's Parts), the same ones detect_intent passes the classifier.
 
 Every decision here is the workflow's own code, not a copy of it: the
 classifier call is deterministic._classify_intent (same prompt, same
@@ -42,7 +44,8 @@ from catalog.repository import ProductFamilyRecord
 from config.llm_clients import DecisionUsage, collect_decision_usage
 
 # Called like deterministic._classify_intent: (query, family_names) plus
-# the previous_family/previous_message keyword hints (issue #22).
+# the previous_family/previous_message keyword hints (issue #22) and
+# family_descriptions (issue #30).
 IntentClassifier = Callable[..., Awaitable[_IntentClassification]]
 
 
@@ -86,6 +89,10 @@ class IntentRowResult:
     # Keyed by model name, as LangChain's usage metadata reports it. Empty
     # when the provider reported none (or a fake classifier ran).
     token_usage: dict[str, TokenUsage] = field(default_factory=dict)
+    # A decision model's most likely families for the scored turn, display
+    # name (or unclear/no_family) -> probability (issue #30). Empty on the
+    # chat path, which reports no probabilities.
+    family_probabilities: dict[str, float] = field(default_factory=dict)
 
 
 @dataclass
@@ -151,8 +158,14 @@ def _add_decision_usage(
 
 
 async def evaluate_row(
-    row: dict, families: list[ProductFamilyRecord], classify: IntentClassifier = _classify_intent
+    row: dict,
+    families: list[ProductFamilyRecord],
+    classify: IntentClassifier = _classify_intent,
+    family_descriptions: dict[str, str] | None = None,
 ) -> IntentRowResult:
+    """`family_descriptions` is what detect_intent passes the classifier
+    too (catalog.family_descriptions.load_family_descriptions).
+    """
     display_names = catalog_display_names_for(families)
     family_names = [family.display_name for family in families]
     user_messages = [turn["content"] for turn in row["turns"] if turn["role"] == "user"]
@@ -172,6 +185,7 @@ async def evaluate_row(
             family_names,
             previous_family=_display_name(previous_family),
             previous_message=previous_message,
+            family_descriptions=family_descriptions,
         )
         previous_family = _family_for_turn(
             earlier_classification, families, display_names, previous_family
@@ -185,6 +199,7 @@ async def evaluate_row(
             family_names,
             previous_family=_display_name(previous_family),
             previous_message=previous_message,
+            family_descriptions=family_descriptions,
         )
     latency_seconds = time.perf_counter() - started
 
@@ -219,6 +234,7 @@ async def evaluate_row(
         token_usage=_add_decision_usage(
             _token_usage_by_model(usage_callback.usage_metadata), decision_usage
         ),
+        family_probabilities=classification.family_probabilities,
     )
 
 
@@ -226,10 +242,11 @@ async def run_intent_eval(
     rows: list[dict],
     families: list[ProductFamilyRecord],
     classify: IntentClassifier = _classify_intent,
+    family_descriptions: dict[str, str] | None = None,
 ) -> list[IntentRowResult]:
     # One row at a time, not gathered: latency is part of the report, and
     # concurrent calls would measure rate limiting as much as the model.
-    return [await evaluate_row(row, families, classify) for row in rows]
+    return [await evaluate_row(row, families, classify, family_descriptions) for row in rows]
 
 
 def _fraction(numerator: int, denominator: int) -> float | None:
@@ -366,6 +383,14 @@ def format_report(report: IntentReport, results: list[IntentRowResult]) -> str:
                 f"    family: {result.resolved_family!r} (expected "
                 f"{result.expected_product_family!r})"
             )
+            if result.family_probabilities and not result.family_correct:
+                lines.append(
+                    "    family probabilities: "
+                    + ", ".join(
+                        f"{name} {probability:.2f}"
+                        for name, probability in result.family_probabilities.items()
+                    )
+                )
             lines.append(
                 f"    question types: {result.detected_question_types} (expected "
                 f"{result.expected_question_types})"
