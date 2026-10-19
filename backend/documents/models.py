@@ -38,6 +38,26 @@ class DocumentOut(BaseModel):
     missing_tags: list[str]
 
 
+class ExistingDocumentOut(BaseModel):
+    """The document a refused upload's filename already belongs to (issue
+    #31) -- enough for the Document Manager to name it and point at its
+    row."""
+
+    id: uuid.UUID
+    filename: str
+    document_type: TagOut | None
+    product_family: DocumentProductFamilyOut | None
+    uploaded_at: datetime
+
+
+class DuplicateFilenameDetail(BaseModel):
+    """The `detail` of the 409 an upload or file replacement gets when
+    another document already has the file's name."""
+
+    message: str
+    existing_document: ExistingDocumentOut
+
+
 class SetDocumentTagsRequest(BaseModel):
     """A field left out of the request body keeps its current value; one
     sent as null clears it. `product_family_id` and `tray_ids` travel

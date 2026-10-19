@@ -20,6 +20,7 @@ from api.main import app
 from auth.repository import set_user_active
 from catalog.repository import list_families_with_trays, upsert_families_and_trays
 from tests.complete_tagging import tag_completely
+from tests.unique_filenames import unique_filename
 
 needs_openai_key = pytest.mark.skipif(
     not os.environ.get("OPENAI_API_KEY"), reason="requires a real OPENAI_API_KEY"
@@ -194,10 +195,11 @@ def test_full_pipeline_answers_with_citations_from_a_real_indexed_document(monke
             b"The REFLEX HYBRID driver requires 1.2 Nm of torque when seating the "
             b"4.0mm locking screw. Do not exceed 1.5 Nm or the screw head may strip."
         )
+        filename = unique_filename("torque-spec.txt")
         upload = client.post(
             "/documents/upload",
             headers=admin_headers,
-            files={"file": ("torque-spec.txt", content, "text/plain")},
+            files={"file": (filename, content, "text/plain")},
         )
         document_id = upload.json()["id"]
         tag_completely(client, admin_headers, document_id)
@@ -220,7 +222,7 @@ def test_full_pipeline_answers_with_citations_from_a_real_indexed_document(monke
     assert "1.2" in done["answer"]
     assert done["citations"]
     assert all(citation["document_id"] == document_id for citation in done["citations"])
-    assert all(citation["filename"] == "torque-spec.txt" for citation in done["citations"])
+    assert all(citation["filename"] == filename for citation in done["citations"])
     # Judge scores no longer ship to the client -- self_eval is a
     # deterministic fact check now, reported to Langfuse only.
     assert "eval_scores" not in done
@@ -263,7 +265,7 @@ def test_citations_survive_a_thread_resume(monkeypatch, tmp_path):
         upload = client.post(
             "/documents/upload",
             headers=admin_headers,
-            files={"file": ("mira-apex-torque-spec.txt", content, "text/plain")},
+            files={"file": (unique_filename("mira-apex-torque-spec.txt"), content, "text/plain")},
         )
         document_id = upload.json()["id"]
         tag_completely(client, admin_headers, document_id)

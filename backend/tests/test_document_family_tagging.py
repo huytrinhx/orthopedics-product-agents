@@ -15,6 +15,7 @@ from catalog.repository import (
 from documents.repository import set_status
 from retrieval.graph_client import get_graph_client
 from retrieval.vector_store import get_vector_store
+from tests.unique_filenames import unique_filename
 
 client = TestClient(app)
 
@@ -44,7 +45,9 @@ async def _seed_family(tray_count: int) -> ProductFamilyRecord:
 
 def _upload(headers: dict) -> str:
     upload = client.post(
-        "/documents/upload", headers=headers, files={"file": ("doc.txt", b"x", "text/plain")}
+        "/documents/upload",
+        headers=headers,
+        files={"file": (unique_filename("doc.txt"), b"x", "text/plain")},
     )
     assert upload.status_code == 200
     assert upload.json()["product_family"] is None

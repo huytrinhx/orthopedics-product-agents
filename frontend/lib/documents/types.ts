@@ -37,6 +37,24 @@ export interface DocumentRecord {
   missing_tags: string[];
 }
 
+// Mirrors backend/documents/models.py's ExistingDocumentOut: the document
+// a refused upload's filename already belongs to (issue #31).
+export interface ExistingDocument {
+  id: string;
+  filename: string;
+  document_type: Tag | null;
+  product_family: DocumentProductFamily | null;
+  uploaded_at: string;
+}
+
+// Mirrors backend/documents/models.py's DuplicateFilenameDetail, the
+// `detail` of an upload's or Re-upload's 409 when another document already
+// has the file's name.
+export interface DuplicateFilenameDetail {
+  message: string;
+  existing_document: ExistingDocument;
+}
+
 // Mirrors backend/documents/models.py's ChunkOut -- backs the chat citation
 // viewer's right-hand pane (frontend/app/chat/page.tsx).
 export interface DocumentChunk {

@@ -1,8 +1,39 @@
 import { API_BASE, authHeaders, handleUnauthorized, request, unwrap } from "../api/client";
-import type { DocumentChunk, DocumentRecord, SystemHealth } from "./types";
+import type {
+  DocumentChunk,
+  DocumentRecord,
+  DuplicateFilenameDetail,
+  ExistingDocument,
+  SystemHealth,
+} from "./types";
+
+// Thrown by uploadDocument/reuploadDocumentFile when another document
+// already has the file's name (issue #31) -- carries that document so the
+// Document Manager can name it and point at its row.
+export class DuplicateFilenameError extends Error {
+  readonly existingDocument: ExistingDocument;
+
+  constructor(detail: DuplicateFilenameDetail) {
+    super(detail.message);
+    this.name = "DuplicateFilenameError";
+    this.existingDocument = detail.existing_document;
+  }
+}
+
+// A 409 is also what an incomplete document's Re-upload gets (a plain
+// string detail, issue #14), so only one naming an existing document is a
+// DuplicateFilenameError; everything else goes through unwrap as usual.
+async function unwrapFileUpload(response: Response): Promise<DocumentRecord> {
+  if (response.status === 409) {
+    const body = await response.clone().json().catch(() => ({}));
+    if (body.detail?.existing_document) throw new DuplicateFilenameError(body.detail);
+  }
+  return unwrap<DocumentRecord>(response);
+}
 
 // File only -- a new upload lands untagged and "pending", and gets its tags
 // in the Document Manager's tag modal before it's indexed (issue #13).
+// Throws DuplicateFilenameError if a document with this name exists.
 export async function uploadDocument(file: File): Promise<DocumentRecord> {
   const form = new FormData();
   form.append("file", file);
@@ -11,7 +42,7 @@ export async function uploadDocument(file: File): Promise<DocumentRecord> {
     headers: authHeaders(), // no Content-Type: fetch sets the multipart boundary itself
     body: form,
   });
-  return unwrap<DocumentRecord>(response);
+  return unwrapFileUpload(response);
 }
 
 export async function listDocuments(): Promise<DocumentRecord[]> {
@@ -55,6 +86,8 @@ export async function indexDocument(documentId: string): Promise<DocumentRecord>
 
 // Re-upload: swaps this document's underlying file (same id/tags/history)
 // and queues it for reindexing, same multipart shape as uploadDocument.
+// The file may keep this document's own name, but another document's name
+// throws DuplicateFilenameError.
 export async function reuploadDocumentFile(
   documentId: string,
   file: File
@@ -66,7 +99,7 @@ export async function reuploadDocumentFile(
     headers: authHeaders(), // no Content-Type: fetch sets the multipart boundary itself
     body: form,
   });
-  return unwrap<DocumentRecord>(response);
+  return unwrapFileUpload(response);
 }
 
 export async function getDocumentChunks(documentId: string): Promise<DocumentChunk[]> {

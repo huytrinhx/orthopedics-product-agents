@@ -12,6 +12,7 @@ from api.main import app
 from config.db import get_connection
 from doc_type_hierarchy.repository import list_hierarchy, set_document_types
 from tests.complete_tagging import tag_completely
+from tests.unique_filenames import unique_filename
 
 client = TestClient(app)
 
@@ -46,7 +47,9 @@ def _upload_tagged(headers: dict, **tags: str) -> str:
     """Upload takes no tags (issue #13) -- a document gets them afterward,
     through the tag modal's PATCH."""
     upload = client.post(
-        "/documents/upload", headers=headers, files={"file": ("a.txt", b"x", "text/plain")}
+        "/documents/upload",
+        headers=headers,
+        files={"file": (unique_filename("a.txt"), b"x", "text/plain")},
     )
     assert upload.status_code == 200
     document_id = upload.json()["id"]
@@ -172,7 +175,7 @@ def test_upload_takes_no_tags_and_lands_pending(monkeypatch, tmp_path):
         "/documents/upload",
         headers=headers,
         data={"document_type_id": document_type["id"]},
-        files={"file": ("tagged.txt", b"contents", "text/plain")},
+        files={"file": (unique_filename("tagged.txt"), b"contents", "text/plain")},
     )
 
     assert upload.status_code == 200
@@ -201,7 +204,9 @@ def test_tagging_with_unknown_tag_id_rejected(monkeypatch, tmp_path):
     token = _admin_token(monkeypatch, tmp_path)
     headers = {"Authorization": f"Bearer {token}"}
     upload = client.post(
-        "/documents/upload", headers=headers, files={"file": ("a.txt", b"x", "text/plain")}
+        "/documents/upload",
+        headers=headers,
+        files={"file": (unique_filename("a.txt"), b"x", "text/plain")},
     )
 
     edit = client.patch(
@@ -219,7 +224,7 @@ def test_edit_tags_after_upload(monkeypatch, tmp_path):
     upload = client.post(
         "/documents/upload",
         headers=headers,
-        files={"file": ("untagged.txt", b"x", "text/plain")},
+        files={"file": (unique_filename("untagged.txt"), b"x", "text/plain")},
     )
     document_id = upload.json()["id"]
     assert upload.json()["document_type"] is None
@@ -242,7 +247,7 @@ def test_edit_tags_on_an_indexed_document_does_not_reindex(monkeypatch, tmp_path
     upload = client.post(
         "/documents/upload",
         headers=headers,
-        files={"file": ("retag-me.txt", b"x", "text/plain")},
+        files={"file": (unique_filename("retag-me.txt"), b"x", "text/plain")},
     )
     document_id = upload.json()["id"]
     tag_completely(client, headers, document_id)
