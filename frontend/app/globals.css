@@ -1584,56 +1584,107 @@ dismissed, so it carries its own Dismiss control. */
   color: var(--danger);
 }
 
-.chat-doc-pane {
-  flex: 1 1 0;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  max-height: calc(100vh - 160px);
-  overflow-y: auto;
-  border-left: 1px solid var(--steel-line);
-  padding-left: 20px;
-  position: sticky;
-  top: 24px;
+/* Citation viewer modal (app/chat/citation-viewer-modal.tsx), a native
+   <dialog> like .tag-modal. Fixed size while open, so the PDF inside never
+   redraws because the chat behind it changed width. */
+.citation-modal {
+  width: min(960px, calc(100vw - 32px));
+  height: calc(100vh - 48px);
+  padding: 0;
+  border: 1px solid var(--steel-line);
+  background: var(--surface);
+  color: var(--ink);
+  overflow: hidden;
 }
 
-.chat-doc-pane-header {
+.citation-modal[open] {
+  display: flex;
+  flex-direction: column;
+}
+
+.citation-modal::backdrop {
+  background: rgba(13, 26, 34, 0.45);
+}
+
+.citation-modal-header {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
-  position: sticky;
-  top: 0;
-  background: var(--diffuser);
-  padding-bottom: 8px;
+  padding: 16px 20px 12px;
+  border-bottom: 1px solid var(--steel-line);
 }
 
-.chat-doc-pane-title {
+.citation-modal-heading {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.citation-modal-title {
   font-family: var(--font-mono);
-  font-size: 0.82rem;
+  font-size: 0.86rem;
   color: var(--ink);
-  word-break: break-word;
+  overflow-wrap: anywhere;
 }
 
-.chat-doc-pane-close {
+.citation-modal-subtitle {
+  font-size: 0.8rem;
+  color: var(--ink-soft);
+  overflow-wrap: anywhere;
+}
+
+.citation-modal-close {
   flex-shrink: 0;
   background: none;
   border: none;
   cursor: pointer;
-  font-size: 1.2rem;
+  font-size: 1.4rem;
   line-height: 1;
   color: var(--steel);
   padding: 0 2px;
 }
 
-.chat-doc-pane-close:hover {
+.citation-modal-close:hover {
   color: var(--ink);
 }
 
-.chat-doc-pane-body {
+.citation-modal > .alert,
+.citation-modal > .empty-state {
+  margin: 20px;
+}
+
+.citation-modal-chunks {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0 20px;
+}
+
+/* The PDF's scroll container: a stable scrollbar gutter, so the page width
+   never changes as pages above or below are drawn. */
+.citation-viewer-pages {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow-y: scroll;
+  scrollbar-gutter: stable;
+  background: var(--diffuser);
+}
+
+.citation-viewer-pages .react-pdf__Document {
   display: flex;
   flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 0;
+}
+
+.citation-viewer-page {
+  flex-shrink: 0;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(13, 26, 34, 0.18);
 }
 
 .chat-doc-chunk {
@@ -1668,11 +1719,6 @@ dismissed, so it carries its own Dismiss control. */
 
 .chat-doc-chunk-active .chat-doc-chunk-text {
   color: var(--ink);
-}
-
-.chat-pdf-viewer {
-  display: flex;
-  justify-content: center;
 }
 
 /* Same highlight treatment as .chat-doc-chunk-active, applied to the
