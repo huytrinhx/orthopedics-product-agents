@@ -213,6 +213,15 @@ picking this repo up cold, read this before making structural changes.
   separate signal from the judge rubric, not a fork of it; extend it with
   new checks that can be proven from the sources, and keep anything that
   needs judgment (style, relevance) in the judge.
+- **A document request is answered with the document, not a summary of
+  it** (deterministic workflow). A turn resolved to `documents_lookup` goes
+  to `lookup_document`, which matches the request against indexed
+  documents' filename, document type, family and tray tags
+  (`agents/tools/document_lookup.py`'s `single_best_match`, within the
+  turn's family). One clear winner answers with a fixed sentence citing
+  it, with no retrieval, model call or fact check; a tie or a thin match
+  carries on through the normal pipeline. Keep it a match in code, not a
+  model call: a rep asking for a document should get it with no LLM in the way.
 - **Workflow registry pattern.** Each agent architecture is its own
   LangGraph graph registered in `backend/agents/registry.py` under a shared
   state schema (`agents/state.py`) — the API and eval harness select by
