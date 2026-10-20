@@ -60,8 +60,48 @@ _RELATIONSHIP_TYPES = (
 
 class GraphClient:
     def __init__(self, uri: str, user: str, password: str):
-        self._driver = AsyncGraphDatabase.driver(uri, auth=(user, password))
+        # Pooled connections go stale while idle: Aura (or the network
+        # between Railway and Aura) drops them silently, and the driver only
+        # finds out when a query reads from one -- "Failed to read from
+        # defunct connection ... TimeoutError('read timed out')" in the
+        # production logs, surfacing as a 503 on a tag save. The driver
+        # defaults hand out a pooled connection unchecked
+        # (liveness_check_timeout=None) and keep it for an hour
+        # (max_connection_lifetime=3600). Instead: ping any connection idle
+        # longer than 30s before handing it out, replacing it if the ping
+        # fails, and retire every connection after 5 minutes so few live
+        # long enough to be dropped.
+        self._driver = AsyncGraphDatabase.driver(
+            uri,
+            auth=(user, password),
+            liveness_check_timeout=30,
+            max_connection_lifetime=300,
+            keep_alive=True,
+        )
         self._legacy_procedure_constraint_dropped = False
+
+    async def _write(self, statement: str, **parameters) -> list[dict]:
+        """Runs one write statement in a managed transaction and returns its
+        records. Writes go through `execute_write` rather than
+        `session.run` because only a managed transaction is retried when
+        its connection dies mid-flight (ServiceUnavailable, SessionExpired,
+        transient errors); an auto-commit `session.run` fails on the first
+        dead connection. A retry re-runs the statement, so every write here
+        is MERGE/MATCH-based and safe to repeat."""
+
+        async def work(tx) -> list[dict]:
+            result = await tx.run(statement, **parameters)
+            return [record.data() async for record in result]
+
+        async with self._driver.session() as session:
+            return await session.execute_write(work)
+
+    async def _write_transaction(self, work):
+        """`work(tx)` in one managed write transaction -- for writes of
+        several dependent statements (delete-then-recreate, read a count
+        then act on it), which commit or retry together."""
+        async with self._driver.session() as session:
+            return await session.execute_write(work)
 
     async def ensure_constraints(self) -> None:
         """Uniqueness constraints doubling as the schema declaration — Neo4j
@@ -82,17 +122,13 @@ class GraphClient:
             "CREATE CONSTRAINT term_name IF NOT EXISTS FOR (t:Term) REQUIRE t.name IS UNIQUE",
             "CREATE CONSTRAINT tray_section_key IF NOT EXISTS FOR (s:TraySection) REQUIRE s.key IS UNIQUE",
         ]
-        async with self._driver.session() as session:
-            for statement in statements:
-                await session.run(statement)
+        for statement in statements:
+            await self._write(statement)
 
     # ---- Master catalog seed (backend/ingestion/seed_master_catalog.py) ----
 
     async def upsert_product_family(self, name: str) -> None:
-        async with self._driver.session() as session:
-            await session.run(
-                "MERGE (:ProductFamily {name: $name})", name=name
-            )
+        await self._write("MERGE (:ProductFamily {name: $name})", name=name)
 
     async def upsert_tray(self, name: str, product_family: str) -> None:
         """A Tray belongs to exactly one ProductFamily, so any
@@ -100,22 +136,21 @@ class GraphClient:
         earlier catalog, or a tray moved between families) is dropped
         rather than merged alongside the new one.
         """
-        async with self._driver.session() as session:
-            await session.run(
-                """
-                MERGE (t:Tray {name: $name})
-                WITH t
-                CALL (t) {
-                    MATCH (t)-[r:BELONGS_TO_FAMILY]->(other:ProductFamily)
-                    WHERE other.name <> $family
-                    DELETE r
-                }
-                MERGE (f:ProductFamily {name: $family})
-                MERGE (t)-[:BELONGS_TO_FAMILY]->(f)
-                """,
-                name=name,
-                family=product_family,
-            )
+        await self._write(
+            """
+            MERGE (t:Tray {name: $name})
+            WITH t
+            CALL (t) {
+                MATCH (t)-[r:BELONGS_TO_FAMILY]->(other:ProductFamily)
+                WHERE other.name <> $family
+                DELETE r
+            }
+            MERGE (f:ProductFamily {name: $family})
+            MERGE (t)-[:BELONGS_TO_FAMILY]->(f)
+            """,
+            name=name,
+            family=product_family,
+        )
 
     async def upsert_part(self, sku: str, tray: str, **properties: str | int | None) -> None:
         await self.upsert_parts([(sku, tray, properties)])
@@ -154,9 +189,8 @@ class GraphClient:
         UPSERT_BATCH_SIZE slice of `rows`, each slice its own transaction --
         small enough that one batch never holds locks for long, large enough
         that round trips stop dominating."""
-        async with self._driver.session() as session:
-            for start in range(0, len(rows), UPSERT_BATCH_SIZE):
-                await session.run(statement, rows=rows[start : start + UPSERT_BATCH_SIZE])
+        for start in range(0, len(rows), UPSERT_BATCH_SIZE):
+            await self._write(statement, rows=rows[start : start + UPSERT_BATCH_SIZE])
 
     async def prune_stale_tray_memberships(
         self, trays_by_sku: dict[str, list[str]]
@@ -175,8 +209,9 @@ class GraphClient:
         Returns (edges removed, trays deleted, emptied trays kept).
         """
         memberships = [{"sku": sku, "trays": trays} for sku, trays in trays_by_sku.items()]
-        async with self._driver.session() as session:
-            result = await session.run(
+
+        async def work(tx) -> tuple[dict[str, int], list[str]]:
+            result = await tx.run(
                 """
                 UNWIND $memberships AS membership
                 MATCH (:Part {sku: membership.sku})-[r:BELONGS_TO_TRAY]->(t:Tray)
@@ -189,9 +224,9 @@ class GraphClient:
             )
             removed_by_tray = {record["tray"]: record["removed"] async for record in result}
             if not removed_by_tray:
-                return 0, [], []
+                return {}, []
 
-            result = await session.run(
+            result = await tx.run(
                 """
                 MATCH (t:Tray) WHERE t.name IN $trays
                   AND NOT EXISTS { MATCH (t)-[r]-() WHERE type(r) <> 'BELONGS_TO_FAMILY' }
@@ -201,8 +236,11 @@ class GraphClient:
                 """,
                 trays=list(removed_by_tray),
             )
-            deleted_trays = [record["tray"] async for record in result]
+            return removed_by_tray, [record["tray"] async for record in result]
 
+        removed_by_tray, deleted_trays = await self._write_transaction(work)
+        if not removed_by_tray:
+            return 0, [], []
         kept_trays = sorted(set(removed_by_tray) - set(deleted_trays))
         return sum(removed_by_tray.values()), sorted(deleted_trays), kept_trays
 
@@ -239,32 +277,30 @@ class GraphClient:
     async def upsert_synonym_cluster(
         self, canonical: str, terms: list[str], notes: str | None = None
     ) -> None:
-        async with self._driver.session() as session:
-            await session.run(
-                """
-                MERGE (c:CanonicalTerm {name: $canonical})
-                SET c.notes = coalesce($notes, c.notes)
-                WITH c
-                UNWIND $terms AS term_name
-                MERGE (t:Term {name: term_name})
-                MERGE (t)-[:ALIAS_OF]->(c)
-                """,
-                canonical=canonical,
-                terms=terms,
-                notes=notes,
-            )
+        await self._write(
+            """
+            MERGE (c:CanonicalTerm {name: $canonical})
+            SET c.notes = coalesce($notes, c.notes)
+            WITH c
+            UNWIND $terms AS term_name
+            MERGE (t:Term {name: term_name})
+            MERGE (t)-[:ALIAS_OF]->(c)
+            """,
+            canonical=canonical,
+            terms=terms,
+            notes=notes,
+        )
 
     async def upsert_abbreviation(self, canonical: str, abbreviation: str) -> None:
-        async with self._driver.session() as session:
-            await session.run(
-                """
-                MERGE (c:CanonicalTerm {name: $canonical})
-                MERGE (t:Term {name: $abbreviation})
-                MERGE (t)-[:ABBREVIATION_OF]->(c)
-                """,
-                canonical=canonical,
-                abbreviation=abbreviation,
-            )
+        await self._write(
+            """
+            MERGE (c:CanonicalTerm {name: $canonical})
+            MERGE (t:Term {name: $abbreviation})
+            MERGE (t)-[:ABBREVIATION_OF]->(c)
+            """,
+            canonical=canonical,
+            abbreviation=abbreviation,
+        )
 
     # ---- Prose extraction writes (backend/ingestion/entity_extraction.py) ----
 
@@ -281,20 +317,19 @@ class GraphClient:
         `system` property a pre-family ingestion wrote is still REMOVEd
         here and in set_document_tags, so any node that predates Product
         Families sheds it on its next re-index or re-tag."""
-        async with self._driver.session() as session:
-            await session.run(
-                """
-                MERGE (d:Document {id: $id})
-                SET d.filename = $filename, d.doc_type = $doc_type,
-                    d.product_family = $product_family, d.trays = $trays
-                REMOVE d.system
-                """,
-                id=document_id,
-                filename=filename,
-                doc_type=doc_type,
-                product_family=product_family,
-                trays=list(trays or []),
-            )
+        await self._write(
+            """
+            MERGE (d:Document {id: $id})
+            SET d.filename = $filename, d.doc_type = $doc_type,
+                d.product_family = $product_family, d.trays = $trays
+            REMOVE d.system
+            """,
+            id=document_id,
+            filename=filename,
+            doc_type=doc_type,
+            product_family=product_family,
+            trays=list(trays or []),
+        )
 
     async def set_document_tags(
         self,
@@ -309,21 +344,20 @@ class GraphClient:
         than merges: a never-indexed document gets its node on first
         ingestion. Returns whether a node was there to update.
         """
-        async with self._driver.session() as session:
-            result = await session.run(
-                """
-                MATCH (d:Document {id: $id})
-                SET d.doc_type = $doc_type,
-                    d.product_family = $product_family, d.trays = $trays
-                REMOVE d.system
-                RETURN d.id AS id
-                """,
-                id=document_id,
-                doc_type=doc_type,
-                product_family=product_family,
-                trays=list(trays),
-            )
-            return await result.single() is not None
+        records = await self._write(
+            """
+            MATCH (d:Document {id: $id})
+            SET d.doc_type = $doc_type,
+                d.product_family = $product_family, d.trays = $trays
+            REMOVE d.system
+            RETURN d.id AS id
+            """,
+            id=document_id,
+            doc_type=doc_type,
+            product_family=product_family,
+            trays=list(trays),
+        )
+        return bool(records)
 
     async def get_document_properties(self, document_id: str) -> dict | None:
         async with self._driver.session() as session:
@@ -348,25 +382,24 @@ class GraphClient:
         explanation, and replace_document_differentiations can remove
         exactly one document's edges on re-index.
         """
-        async with self._driver.session() as session:
-            result = await session.run(
-                """
-                MATCH (a:Part {sku: $sku_a})
-                MATCH (b:Part {sku: $sku_b})
-                MERGE (a)-[r:DIFFERENTIATES_FROM {document_id: $document_id}]->(b)
-                SET r.explanation = $explanation
-                WITH a, b
-                MATCH (d:Document {id: $document_id})
-                MERGE (a)-[:SOURCED_FROM]->(d)
-                MERGE (b)-[:SOURCED_FROM]->(d)
-                RETURN a.sku AS attached
-                """,
-                sku_a=sku_a,
-                sku_b=sku_b,
-                explanation=explanation,
-                document_id=document_id,
-            )
-            return await result.single() is not None
+        records = await self._write(
+            """
+            MATCH (a:Part {sku: $sku_a})
+            MATCH (b:Part {sku: $sku_b})
+            MERGE (a)-[r:DIFFERENTIATES_FROM {document_id: $document_id}]->(b)
+            SET r.explanation = $explanation
+            WITH a, b
+            MATCH (d:Document {id: $document_id})
+            MERGE (a)-[:SOURCED_FROM]->(d)
+            MERGE (b)-[:SOURCED_FROM]->(d)
+            RETURN a.sku AS attached
+            """,
+            sku_a=sku_a,
+            sku_b=sku_b,
+            explanation=explanation,
+            document_id=document_id,
+        )
+        return bool(records)
 
     async def replace_document_differentiations(
         self, document_id: str, differentiations: list[dict]
@@ -374,11 +407,10 @@ class GraphClient:
         """Deletes this document's DIFFERENTIATES_FROM edges, then attaches
         `differentiations` (`[{"sku_a", "sku_b", "explanation"}, ...]`).
         Returns how many attached."""
-        async with self._driver.session() as session:
-            await session.run(
-                "MATCH (:Part)-[r:DIFFERENTIATES_FROM {document_id: $document_id}]->(:Part) DELETE r",
-                document_id=document_id,
-            )
+        await self._write(
+            "MATCH (:Part)-[r:DIFFERENTIATES_FROM {document_id: $document_id}]->(:Part) DELETE r",
+            document_id=document_id,
+        )
         attached = 0
         for differentiation in differentiations:
             attached += await self.attach_differentiation(
@@ -400,24 +432,23 @@ class GraphClient:
         (issue #28), keyed by document and technique name.
         """
         await self._drop_legacy_procedure_constraint()
-        async with self._driver.session() as session:
-            result = await session.run(
-                """
-                MATCH (t:Tray {name: $tray})
-                MERGE (p:Procedure {key: $key})
-                SET p.name = $procedure, p.document_id = $document_id
-                MERGE (p)-[:REQUIRES]->(t)
-                WITH p
-                MATCH (d:Document {id: $document_id})
-                MERGE (p)-[:SOURCED_FROM]->(d)
-                RETURN p.name AS attached
-                """,
-                tray=tray,
-                key=self.procedure_key(document_id, procedure),
-                procedure=procedure,
-                document_id=document_id,
-            )
-            return await result.single() is not None
+        records = await self._write(
+            """
+            MATCH (t:Tray {name: $tray})
+            MERGE (p:Procedure {key: $key})
+            SET p.name = $procedure, p.document_id = $document_id
+            MERGE (p)-[:REQUIRES]->(t)
+            WITH p
+            MATCH (d:Document {id: $document_id})
+            MERGE (p)-[:SOURCED_FROM]->(d)
+            RETURN p.name AS attached
+            """,
+            tray=tray,
+            key=self.procedure_key(document_id, procedure),
+            procedure=procedure,
+            document_id=document_id,
+        )
+        return bool(records)
 
     async def replace_document_procedures(self, document_id: str, procedures: list[dict]) -> None:
         """Deletes this document's Procedure nodes, then writes one per
@@ -427,13 +458,14 @@ class GraphClient:
         (backend/techniques/); this is the part a graph traversal reads.
         """
         await self._drop_legacy_procedure_constraint()
-        async with self._driver.session() as session:
-            await session.run(
+
+        async def work(tx) -> None:
+            await tx.run(
                 "MATCH (p:Procedure {document_id: $document_id}) DETACH DELETE p",
                 document_id=document_id,
             )
             for procedure in procedures:
-                await session.run(
+                await tx.run(
                     """
                     MERGE (p:Procedure {key: $key})
                     SET p.name = $name, p.document_id = $document_id
@@ -452,6 +484,8 @@ class GraphClient:
                     trays=list(procedure.get("trays") or []),
                 )
 
+        await self._write_transaction(work)
+
     async def _drop_legacy_procedure_constraint(self) -> None:
         """The pre-#28 unique constraint on Procedure.name would refuse a
         second document's same-named technique. ensure_constraints drops
@@ -459,8 +493,7 @@ class GraphClient:
         procedure write in a process makes sure."""
         if self._legacy_procedure_constraint_dropped:
             return
-        async with self._driver.session() as session:
-            await session.run("DROP CONSTRAINT procedure_name IF EXISTS")
+        await self._write("DROP CONSTRAINT procedure_name IF EXISTS")
         self._legacy_procedure_constraint_dropped = True
 
     async def delete_unattributed_prose_facts(self) -> tuple[int, int]:
@@ -468,8 +501,8 @@ class GraphClient:
         DIFFERENTIATES_FROM edges with no `document_id` (no re-index could
         ever remove them) and Procedure nodes keyed by a global name.
         Returns (edges deleted, procedures deleted)."""
-        async with self._driver.session() as session:
-            result = await session.run(
+        async def work(tx) -> tuple[int, int]:
+            result = await tx.run(
                 """
                 MATCH (:Part)-[r:DIFFERENTIATES_FROM]->(:Part)
                 WHERE r.document_id IS NULL
@@ -478,7 +511,7 @@ class GraphClient:
                 """
             )
             edges = (await result.single())["deleted"]
-            result = await session.run(
+            result = await tx.run(
                 """
                 MATCH (p:Procedure)
                 WHERE p.key IS NULL
@@ -486,8 +519,9 @@ class GraphClient:
                 RETURN count(*) AS deleted
                 """
             )
-            procedures = (await result.single())["deleted"]
-        return edges, procedures
+            return edges, (await result.single())["deleted"]
+
+        return await self._write_transaction(work)
 
     async def document_exists(self, document_id: str) -> bool:
         async with self._driver.session() as session:
@@ -527,14 +561,14 @@ class GraphClient:
         delete on the next re-ingestion). Keying the MERGE on document_id
         too gives each document its own edge for the same fact.
         """
-        async with self._driver.session() as session:
-            await session.run(
+        async def work(tx) -> None:
+            await tx.run(
                 "MATCH (:Part)-[r:LOCATED_IN {document_id: $document_id}]->(:TraySection) DELETE r",
                 document_id=document_id,
             )
             for group in groups:
                 key = f"{group['tray']}::{group.get('level', '')}::{group['region']}"
-                await session.run(
+                await tx.run(
                     """
                     MERGE (s:TraySection {key: $key})
                     SET s.tray = $tray, s.level = $level, s.region = $region
@@ -550,6 +584,8 @@ class GraphClient:
                     skus=group["skus"],
                     document_id=document_id,
                 )
+
+        await self._write_transaction(work)
 
     # ---- Lookups used to keep the LLM prompt scoped to real SKUs/trays ----
 
