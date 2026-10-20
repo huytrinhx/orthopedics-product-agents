@@ -4,12 +4,9 @@
 // parsed by hand in lib/chat/api.ts -- native EventSource is GET-only).
 // Tickets 11/12 (per-message 4-axis feedback) extend this. Ticket 10 added
 // the history sidebar (past threads, resuming a transcript, a separate
-// "New conversation" action). A citation chip opens the cited document's
-// chunks on the right, scrolled to and highlighting the exact one the
-// answer drew from (GET /documents/{id}/chunks) -- "the paragraph", in the
-// sense of backend/ingestion/chunking.py's chunk boundaries, which is the
-// finest-grained unit actually stored; there's no PDF page/position
-// tracked to scroll a rendered original to instead.
+// "New conversation" action). A citation chip opens the cited document in
+// a modal (citation-viewer-modal.tsx): the whole PDF at the cited page with
+// the passage highlighted, or a non-PDF's chunks with the cited one marked.
 //
 // Ticket 09 (clarification interrupt()/resume): a "clarification" SSE
 // event (consumeStream below) means detect_intent couldn't confidently
@@ -31,17 +28,11 @@ import Link from "next/link";
 import ReactMarkdown from "react-markdown";
 import { getChatThread, listChatThreads, resumeChat, streamChat } from "../../lib/chat/api";
 import { useAuth } from "../../lib/auth-context";
-import { STATUS_LABELS, citationLabel, headingLabel, stripCitationMarkers } from "../../lib/chat/format";
+import { STATUS_LABELS, citationLabel, stripCitationMarkers } from "../../lib/chat/format";
 import type { ChatCitation, ChatMessage, ChatStreamEvent, ChatThread } from "../../lib/chat/types";
-import { getDocumentChunks, getDocumentFile } from "../../lib/documents/api";
-import type { DocumentChunk } from "../../lib/documents/types";
 import type { ModelOverrides, SlotModelUsed } from "../../lib/model-assignments/types";
 import { MessageFeedback } from "./message-feedback";
-import { PdfCitationViewer } from "./pdf-citation-viewer";
-
-function isPdfFilename(filename: string): boolean {
-  return filename.toLowerCase().endsWith(".pdf");
-}
+import { CitationViewerModal } from "./citation-viewer-modal";
 
 function uniqueId(): string {
   return Math.random().toString(36).slice(2);
@@ -104,18 +95,6 @@ export default function ChatPage() {
   const [pendingClarification, setPendingClarification] = useState<string | null>(null);
 
   const [openCitation, setOpenCitation] = useState<ChatCitation | null>(null);
-  const [documentChunks, setDocumentChunks] = useState<DocumentChunk[] | null>(null);
-  const [documentPaneLoading, setDocumentPaneLoading] = useState(false);
-  const [documentPaneError, setDocumentPaneError] = useState<string | null>(null);
-  const loadedDocumentIdRef = useRef<string | null>(null);
-  const activeChunkRef = useRef<HTMLDivElement>(null);
-
-  // Ticket 26: the PDF file itself, fetched separately from its chunks
-  // (an authenticated Blob fetch, not a bare <iframe src> -- see
-  // lib/documents/api.ts's getDocumentFile) and only for .pdf citations.
-  const [documentFileData, setDocumentFileData] = useState<{ data: Uint8Array } | null>(null);
-  const [documentFileError, setDocumentFileError] = useState<string | null>(null);
-  const loadedFileDocumentIdRef = useRef<string | null>(null);
 
   const threadIdRef = useRef<string | undefined>(undefined);
   // Guards the `?ask=` auto-send against running twice (React strict mode
@@ -147,10 +126,6 @@ export default function ChatPage() {
     // once, on the first render with a user.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user]);
-
-  useEffect(() => {
-    activeChunkRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
-  }, [openCitation, documentChunks]);
 
   function startNewConversation() {
     if (sending) return;
@@ -192,55 +167,6 @@ export default function ChatPage() {
 
   function closeCitation() {
     setOpenCitation(null);
-    setDocumentChunks(null);
-    setDocumentPaneError(null);
-    loadedDocumentIdRef.current = null;
-    setDocumentFileData(null);
-    setDocumentFileError(null);
-    loadedFileDocumentIdRef.current = null;
-  }
-
-  async function openCitationPane(citation: ChatCitation) {
-    setOpenCitation(citation);
-    const chunksAlreadyLoaded = loadedDocumentIdRef.current === citation.document_id;
-    const needsFile =
-      isPdfFilename(citation.filename) && loadedFileDocumentIdRef.current !== citation.document_id;
-
-    if (!chunksAlreadyLoaded) {
-      setDocumentPaneLoading(true);
-      setDocumentPaneError(null);
-    }
-    if (needsFile) {
-      setDocumentFileData(null);
-      setDocumentFileError(null);
-    }
-
-    const chunksPromise = chunksAlreadyLoaded
-      ? Promise.resolve(null)
-      : getDocumentChunks(citation.document_id)
-          .then((chunks) => {
-            loadedDocumentIdRef.current = citation.document_id;
-            setDocumentChunks(chunks);
-          })
-          .catch((caughtError) => {
-            setDocumentChunks(null);
-            setDocumentPaneError(caughtError instanceof Error ? caughtError.message : "Couldn't load that document");
-          })
-          .finally(() => setDocumentPaneLoading(false));
-
-    const filePromise = needsFile
-      ? getDocumentFile(citation.document_id)
-          .then((blob) => blob.arrayBuffer())
-          .then((buffer) => {
-            loadedFileDocumentIdRef.current = citation.document_id;
-            setDocumentFileData({ data: new Uint8Array(buffer) });
-          })
-          .catch((caughtError) => {
-            setDocumentFileError(caughtError instanceof Error ? caughtError.message : "Couldn't load the PDF");
-          })
-      : Promise.resolve(null);
-
-    await Promise.all([chunksPromise, filePromise]);
   }
 
   function updateMessage(id: string, patch: Partial<ChatMessage>) {
@@ -495,7 +421,7 @@ export default function ChatPage() {
                               ? " chat-citation-active"
                               : ""
                           }`}
-                          onClick={() => openCitationPane(citation)}
+                          onClick={() => setOpenCitation(citation)}
                           title={citationLabel(citation)}
                         >
                           {citationLabel(citation)}
@@ -534,65 +460,13 @@ export default function ChatPage() {
         </div>
 
         {openCitation && (
-          <aside className="chat-doc-pane">
-            <div className="chat-doc-pane-header">
-              <span className="chat-doc-pane-title">{openCitation.filename}</span>
-              <button
-                type="button"
-                className="chat-doc-pane-close"
-                onClick={closeCitation}
-                aria-label="Close document viewer"
-              >
-                ×
-              </button>
-            </div>
-            {documentPaneLoading && <div className="empty-state">Loading document…</div>}
-            {documentPaneError && <p className="alert" role="alert">{documentPaneError}</p>}
-            {documentChunks && isPdfFilename(openCitation.filename) && (
-              <>
-                {documentFileError && <p className="alert" role="alert">{documentFileError}</p>}
-                {!documentFileError && documentFileData && (
-                  <PdfCitationViewer
-                    file={documentFileData}
-                    pageNumber={
-                      documentChunks.find((chunk) => chunk.chunk_index === openCitation.chunk_index)
-                        ?.page_number ?? 1
-                    }
-                    searchText={
-                      documentChunks.find((chunk) => chunk.chunk_index === openCitation.chunk_index)
-                        ?.content ?? ""
-                    }
-                    onError={() => setDocumentFileError("This PDF couldn't be displayed.")}
-                  />
-                )}
-                {!documentFileError && !documentFileData && (
-                  <div className="empty-state">Loading PDF…</div>
-                )}
-              </>
-            )}
-            {documentChunks && !isPdfFilename(openCitation.filename) && (
-              <div className="chat-doc-pane-body">
-                {documentChunks.map((chunk) => {
-                  const isActive = chunk.chunk_index === openCitation.chunk_index;
-                  return (
-                    <div
-                      key={chunk.chunk_index}
-                      ref={isActive ? activeChunkRef : undefined}
-                      className={`chat-doc-chunk${isActive ? " chat-doc-chunk-active" : ""}`}
-                    >
-                      {headingLabel(chunk.heading_path, chunk.section_title) && (
-                        <div className="chat-doc-chunk-section">
-                          {headingLabel(chunk.heading_path, chunk.section_title)}
-                        </div>
-                      )}
-                      <div className="chat-doc-chunk-text">{chunk.content}</div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </aside>
+          <CitationViewerModal
+            key={`${openCitation.document_id}#${openCitation.chunk_index}`}
+            citation={openCitation}
+            onClose={closeCitation}
+          />
         )}
+
       </div>
     </main>
   );
