@@ -138,6 +138,14 @@ picking this repo up cold, read this before making structural changes.
 - **Neo4j is AuraDB in production, Docker locally** — this is independent
   of the Railway/AKS decision above; AuraDB is Neo4j's own managed control
   plane either way, not something provisioned through app infra.
+  - **Graph writes go through `GraphClient._write` /
+    `_write_transaction`** (managed `execute_write` transactions), never a
+    bare `session.run`: only a managed transaction is retried when Aura
+    drops a pooled connection, so an auto-commit write fails the request
+    instead (seen in production as a 503 on a tag save). The driver's
+    `liveness_check_timeout`/`max_connection_lifetime` settings in
+    `GraphClient.__init__` exist for the same reason; keep them. A retried
+    transaction re-runs every statement, so writes stay MERGE/MATCH-based.
 - **Judge rubric is shared between offline evals and human feedback.**
   `backend/agents/judge.py` scores faithfulness/relevance/style/citation for
   the offline eval harness (`backend/evals/harness.py`) and the human

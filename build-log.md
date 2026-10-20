@@ -493,3 +493,23 @@ feedback-promotion workflow), worked one at a time in dependency order.
   supersedes 0003's chat half. The CI `evals` job is deleted: it passed
   without evaluating anything. Evals are now run by an admin by hand
   (issue #25 comment), never as a per-PR job.
+- **AuraDB stale connections (2026-10-20).** Production logs kept showing
+  `Failed to read from defunct connection ... TimeoutError('read timed
+  out')` against Aura, and one tag save returned a 503 (it succeeded when
+  retried). Aura itself was healthy: `verify_connectivity()` took 0.55 s from
+  the Railway container. The cause was the connection pool. Aura, or the
+  network between Railway and Aura, silently drops a connection that sits
+  idle; the driver's defaults hand pooled connections out unchecked
+  (`liveness_check_timeout=None`) and keep them an hour
+  (`max_connection_lifetime=3600`); and every write was an auto-commit
+  `session.run`, which the driver never retries. A health ping before a
+  workload wouldn't help: it proves one pooled connection alive, not the
+  one the next query is handed. Fixed in `GraphClient`: the driver now
+  pings any connection idle over 30 s before handing it out and retires
+  connections after 5 minutes, and every write runs in a managed
+  `execute_write` transaction, which retries on `ServiceUnavailable` /
+  `SessionExpired`. Multi-statement writes (`replace_tray_sections`,
+  `replace_document_procedures`, `prune_stale_tray_memberships`,
+  `delete_unattributed_prose_facts`) are now one transaction each, so a
+  retry can't leave half a delete-then-recreate behind. Reads still use
+  `session.run`; the liveness check covers them.
