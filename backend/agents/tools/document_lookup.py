@@ -10,18 +10,33 @@ Each match carries its opening chunks with their citation ids (so the
 answer can cite and link the document directly) plus its document_id, which
 vector_search's document_ids filter takes to search within just that
 document.
+
+single_best_match is the strict form the deterministic workflow's
+documents_lookup fast path uses: it only names a document when one clearly
+wins, so a vague request still goes through retrieval and generation.
 """
+import math
 import re
 
 from langchain_core.tools import tool
 
 from documents.repository import DocumentRecord, list_chunks, list_documents
 
-# Filler words a rep naturally wraps a document name in ("the brochure for
-# MIS") that would otherwise match every filename containing them.
-_STOPWORDS = {"a", "an", "and", "doc", "document", "for", "of", "on", "the", "to"}
+# Filler words a rep naturally wraps a document name in ("pull the brochure
+# for MIS", "can you send me the MIS pdf") that would otherwise match every
+# filename containing them -- "pdf" included, since every PDF's filename
+# ends in it.
+_STOPWORDS = {
+    "a", "an", "and", "can", "copy", "could", "doc", "document", "file", "find", "for", "get",
+    "give", "i", "is", "me", "need", "of", "on", "open", "pdf", "please", "pull", "send", "show",
+    "the", "to", "up", "want", "you",
+}
 _OPENING_CHUNKS = 2
 _PREVIEW_CHARACTERS = 1500
+# single_best_match's floor: the winner has to carry at least this share of
+# the request's distinct words, so one shared family word ("MIS") can't
+# make a document the answer on its own.
+_MIN_MATCHED_SHARE = 0.5
 
 
 def _words(text: str) -> list[str]:
@@ -36,8 +51,10 @@ def _name_words(name: str) -> list[str]:
 
 def _document_words(document: DocumentRecord) -> list[str]:
     """What a document is known by: its filename, Product Family (catalog
-    and display name), and document-type tag, together.
+    and display name), document-type tag, and Tray tags (catalog and
+    display name), together.
     """
+    tray_names = [name for tray in document.trays for name in (tray.name, tray.display_name)]
     return _words(
         " ".join(
             filter(
@@ -47,6 +64,7 @@ def _document_words(document: DocumentRecord) -> list[str]:
                     document.product_family_name,
                     document.product_family_display_name,
                     document.document_type_name,
+                    *tray_names,
                 ],
             )
         )
@@ -72,19 +90,47 @@ def rank_documents_by_name(name: str, documents: list[DocumentRecord]) -> list[D
     tagged with the MIS Foot Recon family. A document matching none of the
     name's meaningful words is left out.
     """
+    return [document for _, document in _scored_matches(name, documents)]
+
+
+def _scored_matches(
+    name: str, documents: list[DocumentRecord]
+) -> list[tuple[tuple[bool, int], DocumentRecord]]:
+    """Each document matching any of `name`'s meaningful words with its
+    score -- (whole name appears in order, distinct words matched) --
+    best first, ties by filename.
+    """
     query_words = _name_words(name)
     if not query_words:
         return []
     query_phrase = " ".join(query_words)
-    scored: list[tuple[bool, int, DocumentRecord]] = []
+    scored: list[tuple[tuple[bool, int], DocumentRecord]] = []
     for document in documents:
         haystack_words = _document_words(document)
         haystack = " ".join(haystack_words)
-        matched_word_count = sum(1 for word in query_words if word in haystack_words)
+        matched_word_count = len(set(query_words) & set(haystack_words))
         if matched_word_count:
-            scored.append((query_phrase in haystack, matched_word_count, document))
-    scored.sort(key=lambda entry: (not entry[0], -entry[1], entry[2].filename.lower()))
-    return [document for _, _, document in scored]
+            scored.append(((query_phrase in haystack, matched_word_count), document))
+    scored.sort(key=lambda entry: (not entry[0][0], -entry[0][1], entry[1].filename.lower()))
+    return scored
+
+
+def single_best_match(name: str, documents: list[DocumentRecord]) -> DocumentRecord | None:
+    """The one document `name` clearly asks for, or None: the best-ranked
+    match has to score strictly above the runner-up and carry at least
+    _MIN_MATCHED_SHARE of the request's distinct words. A tie or a thin
+    match is None, not a guess.
+    """
+    scored = _scored_matches(name, documents)
+    if not scored:
+        return None
+    best_score, best_document = scored[0]
+    if len(scored) > 1 and scored[1][0] == best_score:
+        return None
+    distinct_query_words = len(set(_name_words(name)))
+    if best_score[1] < math.ceil(distinct_query_words * _MIN_MATCHED_SHARE):
+        return None
+    return best_document
 
 
 @tool

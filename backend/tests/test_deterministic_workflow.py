@@ -13,6 +13,7 @@ covered at the API layer instead -- see test_chat_routes.py's
 needs_openai_key tests.
 """
 import uuid
+from types import SimpleNamespace
 
 from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.checkpoint.memory import InMemorySaver
@@ -118,6 +119,7 @@ def test_build_graph_compiles_with_the_expected_nodes():
     assert nodes == {
         "detect_intent",
         "clarify_question_type",
+        "lookup_document",
         "resolve_synonyms",
         "hybrid_retrieve",
         "resolve_query_parts",
@@ -129,6 +131,91 @@ def test_build_graph_compiles_with_the_expected_nodes():
         "request_clarification",
         "finalize",
     }
+
+
+_REFLEX_FAMILY_ID = str(uuid.uuid4())
+
+
+def _patch_document_lookup(monkeypatch, documents: list) -> None:
+    """A documents_lookup turn in the REFLEX family, over `documents`, each
+    indexed with one chunk."""
+
+    async def fake_detect_intent(state):
+        return {
+            "resolved_family": "REFLEX HYBRID",
+            "resolved_family_id": _REFLEX_FAMILY_ID,
+            "detected_question_types": ["documents_lookup"],
+        }
+
+    async def fake_list_documents():
+        return documents
+
+    async def fake_list_chunks(document_id):
+        return [SimpleNamespace(chunk_index=0)]
+
+    monkeypatch.setattr(det, "detect_intent", fake_detect_intent)
+    monkeypatch.setattr(det, "list_documents", fake_list_documents)
+    monkeypatch.setattr(det, "list_chunks", fake_list_chunks)
+
+
+def _lookup_document_record(filename: str, family_id: str = _REFLEX_FAMILY_ID) -> SimpleNamespace:
+    return SimpleNamespace(
+        id=uuid.uuid4(),
+        filename=filename,
+        status="done",
+        product_family_id=uuid.UUID(family_id),
+        product_family_name="REFLEX HYBRID",
+        product_family_display_name="REFLEX HYBRID",
+        document_type_name="Tray Overhead Guide",
+        trays=[],
+    )
+
+
+async def test_a_document_lookup_answers_with_the_document_and_no_model_call(monkeypatch):
+    _patch_fixed_nodes(monkeypatch)
+    guide = _lookup_document_record("REFLEX HYBRID Tray Overhead Guide.pdf")
+    other_family_guide = _lookup_document_record(
+        "MIS Tray Overhead Guide.pdf", family_id=str(uuid.uuid4())
+    )
+    _patch_document_lookup(monkeypatch, [guide, other_family_guide])
+    model = _patch_model(monkeypatch, [])
+    hybrid_retrieve_calls = 0
+
+    async def counting_hybrid_retrieve(state):
+        nonlocal hybrid_retrieve_calls
+        hybrid_retrieve_calls += 1
+        return {"retrieved": []}
+
+    monkeypatch.setattr(det, "hybrid_retrieve", counting_hybrid_retrieve)
+
+    graph = det.build_graph(InMemorySaver())
+    thread_id, config = _thread_config()
+    result = await graph.ainvoke(
+        _initial_state(thread_id, "Pull the tray overhead guide for the reflex hybrid tray"), config
+    )
+
+    assert model.prompts == []
+    assert hybrid_retrieve_calls == 0
+    assert result["citations"] == [f"{guide.id}#0"]
+    assert "REFLEX HYBRID Tray Overhead Guide.pdf" in result["answer"]
+    # Committed like any answer, citations included.
+    assert result["messages"][-1].additional_kwargs["citations"] == [f"{guide.id}#0"]
+
+
+async def test_a_document_lookup_with_no_clear_match_answers_through_retrieval(monkeypatch):
+    _patch_fixed_nodes(monkeypatch)
+    _patch_document_lookup(
+        monkeypatch,
+        [_lookup_document_record("Brochure A.pdf"), _lookup_document_record("Brochure B.pdf")],
+    )
+    model = _patch_model(monkeypatch, [_RIGHT_THREAD_ANSWER])
+
+    graph = det.build_graph(InMemorySaver())
+    thread_id, config = _thread_config()
+    result = await graph.ainvoke(_initial_state(thread_id, "the reflex hybrid brochure"), config)
+
+    assert len(model.prompts) == 1
+    assert result["answer"] == _RIGHT_THREAD_ANSWER
 
 
 async def test_a_clean_answer_ships_with_one_model_call(monkeypatch):

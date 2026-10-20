@@ -43,6 +43,9 @@ yet is still reachable on a turn the classifier can't place.
 from dataclasses import dataclass
 
 UNCLASSIFIED = "unclassified"
+# The deterministic workflow answers this one without retrieval or a model
+# call when one document clearly matches (its lookup_document node).
+DOCUMENTS_LOOKUP = "documents_lookup"
 
 
 @dataclass(frozen=True)
@@ -55,7 +58,11 @@ QUESTION_TYPES: list[QuestionType] = [
     QuestionType("product_characteristics", "materials, dimensions, thread types, color, etc."),
     QuestionType("system_contents", "what's included in a set/system, SKUs, levels in the tray"),
     QuestionType("technique_procedural", "step-by-step surgical technique, procedural walkthrough, applications of products or parts, etc.",),
-    QuestionType("documents_lookup", "fast pull of a document by name, SKU, or other identifier"),
+    QuestionType(
+        DOCUMENTS_LOOKUP,
+        "pull up a whole document rather than ask about its contents, named by its title, "
+        "document type, product family, or tray (e.g. 'the REFLEX HYBRID tray overhead guide')",
+    ),
     QuestionType("compatibility_lookup", "which products/parts are compatible with which others, e.g. screws with plates, implants with instruments, etc.",),
     QuestionType("features_benefits", "product features and benefits, selling points, why choose this product"),
     QuestionType(UNCLASSIFIED, "none of the other question types clearly applies"),
