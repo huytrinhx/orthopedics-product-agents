@@ -1635,6 +1635,37 @@ dismissed, so it carries its own Dismiss control. */
   overflow-wrap: anywhere;
 }
 
+.citation-modal-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.citation-modal-icon-button {
+  display: inline-flex;
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 2px;
+  color: var(--steel);
+}
+
+.citation-modal-icon-button svg {
+  width: 18px;
+  height: 18px;
+  stroke: currentColor;
+}
+
+.citation-modal-icon-button:hover:not(:disabled) {
+  color: var(--ink);
+}
+
+.citation-modal-icon-button:disabled {
+  cursor: default;
+  opacity: 0.4;
+}
+
 .citation-modal-close {
   flex-shrink: 0;
   background: none;
