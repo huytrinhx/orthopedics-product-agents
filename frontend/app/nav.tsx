@@ -17,10 +17,10 @@ export function Nav() {
           <>
             <div className="nav-links">
               <Link href="/chat">Chat</Link>
+              {user.is_admin && <Link href="/documents">Documents</Link>}
+              {(user.is_admin || user.is_active) && <Link href="/evals">Evals</Link>}
               {user.is_admin && (
                 <>
-                  <Link href="/documents">Documents</Link>
-                  <Link href="/evals">Evals</Link>
                   <Link href="/users">Users</Link>
                   <Link href="/admin">Settings</Link>
                 </>

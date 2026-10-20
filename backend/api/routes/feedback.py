@@ -17,14 +17,16 @@ the frontend only ever sends an id it already got from the backend (the
 real security boundary that matters; a malformed message_id would just be a
 harmless orphan row nothing joins against.
 
-Ticket 15 (Eval tab) adds the admin-only routes below: GET / lists every
-feedback row, flagged or not, newest first, with its actual question/answer
-text (read from the checkpointer, the same source of truth GET
+Ticket 15 (Eval tab) adds the routes below: GET / lists every feedback
+row, flagged or not, newest first, with its actual question/answer text
+(read from the checkpointer, the same source of truth GET
 /chat/threads/{id} uses -- not duplicated into the feedback table) and the
-submitter's email; PATCH /{message_id}/resolved toggles the admin's
-"confirmed fixed" marker (the UI only offers it on flagged rows); DELETE
+submitter's email; PATCH /{message_id}/resolved toggles the "confirmed
+fixed" marker (the UI only offers it on flagged rows); DELETE
 /{message_id} removes an item outright (a duplicate, a misclick, or one no
-longer worth keeping).
+longer worth keeping). Listing and resolving are open to anyone with chat
+access -- every enabled rep sees every rep's feedback, emails included,
+and can confirm a fix -- while deleting stays admin-only.
 
 Rerunning an item used to be an inline, history-replaying POST /chat/rerun
 with its own per-item rerun history (GET /{message_id}/reruns). Both were
@@ -33,7 +35,7 @@ question pre-sent in a fresh conversation (see build-log.md).
 """
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
-from auth.dependencies import get_current_user, require_admin
+from auth.dependencies import get_current_user, require_admin, require_chat_access
 from auth.repository import UserRecord
 from chat_threads.repository import owns_thread
 from feedback.models import FeedbackListItemOut, FeedbackOut, FeedbackRequest, ResolvedRequest
@@ -90,7 +92,7 @@ def _question_and_answer(messages: list, message_id: str) -> tuple[str, str] | N
 
 @router.get("/", response_model=list[FeedbackListItemOut])
 async def list_feedback(
-    request: Request, admin: UserRecord = Depends(require_admin)
+    request: Request, user: UserRecord = Depends(require_chat_access)
 ) -> list[FeedbackListItemOut]:
     checkpointer = request.app.state.checkpointer
     out = []
@@ -118,7 +120,7 @@ async def list_feedback(
 
 @router.patch("/{message_id}/resolved", response_model=FeedbackOut)
 async def update_resolved(
-    message_id: str, body: ResolvedRequest, admin: UserRecord = Depends(require_admin)
+    message_id: str, body: ResolvedRequest, user: UserRecord = Depends(require_chat_access)
 ) -> FeedbackOut:
     record = await set_resolved(message_id, body.resolved)
     if record is None:

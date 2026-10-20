@@ -6,7 +6,8 @@
 // full question and answer. Resolved is only offered on a flagged row --
 // it means "the flagged issue was confirmed fixed" (the backend 404s it on
 // anything else). "Rerun with models" (issue #24) opens per-slot model
-// overrides for the rerun, when the gateway is configured.
+// overrides for the rerun, when the gateway is configured. Delete and
+// Rerun with models are admin-only; any enabled rep gets the rest.
 import { Fragment, useState } from "react";
 import { deleteFeedback, setFeedbackResolved } from "../../lib/feedback/api";
 import type { FeedbackListItem } from "../../lib/feedback/types";
@@ -24,13 +25,16 @@ function formatScore(value: number | undefined): string {
 export function FeedbackRow({
   item,
   chatSlots,
+  canDelete,
   onRerun,
   onResolvedChanged,
   onDeleted,
 }: {
   item: FeedbackListItem;
-  // Empty when model overrides aren't available (no OPENROUTER_API_KEY).
+  // Empty when model overrides aren't available (no OPENROUTER_API_KEY, or
+  // the viewer isn't an admin).
   chatSlots: ModelSlot[];
+  canDelete: boolean;
   onRerun: (question: string, modelOverrides?: ModelOverrides) => void;
   onResolvedChanged: (resolved: boolean) => void;
   onDeleted: () => void;
@@ -108,7 +112,7 @@ export function FeedbackRow({
               Rerun with models…
             </button>
           )}
-          {confirmingDelete ? (
+          {canDelete && confirmingDelete && (
             <span className="eval-delete-confirm">
               <button type="button" className="btn-text eval-delete" onClick={handleDelete} disabled={deleting}>
                 {deleting ? "Deleting…" : "Confirm"}
@@ -117,7 +121,8 @@ export function FeedbackRow({
                 Cancel
               </button>
             </span>
-          ) : (
+          )}
+          {canDelete && !confirmingDelete && (
             <button type="button" className="btn-text eval-delete" onClick={() => setConfirmingDelete(true)}>
               Delete
             </button>

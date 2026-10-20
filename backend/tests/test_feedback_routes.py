@@ -18,6 +18,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from api.main import app
+from auth.repository import set_user_active
 from chat_threads.repository import create_thread
 from feedback.repository import (
     get_feedback_for_thread,
@@ -189,14 +190,14 @@ async def test_submit_feedback_accepts_a_flag_or_comment_with_no_scores_at_all()
     assert body["comment"] == "What can I do better? More citations please."
 
 
-def test_feedback_list_requires_admin():
+def test_feedback_list_is_refused_to_a_rep_not_yet_enabled():
     with TestClient(app) as client:
         token = _signup(client)["access_token"]
         response = client.get("/feedback/", headers={"Authorization": f"Bearer {token}"})
     assert response.status_code == 403
 
 
-def test_resolved_toggle_requires_admin():
+def test_resolved_toggle_is_refused_to_a_rep_not_yet_enabled():
     with TestClient(app) as client:
         token = _signup(client)["access_token"]
         response = client.patch(
@@ -205,6 +206,37 @@ def test_resolved_toggle_requires_admin():
             json={"resolved": True},
         )
     assert response.status_code == 403
+
+
+async def test_an_enabled_rep_lists_everyones_feedback_and_resolves_it_but_cannot_delete():
+    """The Eval tab is open to reps: every rep's feedback, submitter email
+    included, plus the resolved toggle. Deleting stays admin-only."""
+    with TestClient(app) as client:
+        submitter = _signup(client)
+        submitter_id = uuid.UUID(submitter["user"]["id"])
+        thread_id = f"{submitter_id}:{uuid.uuid4().hex}"
+        message_id = str(uuid.uuid4())
+        await create_thread(thread_id, submitter_id, "test thread")
+        client.post(
+            "/feedback/",
+            headers={"Authorization": f"Bearer {submitter['access_token']}"},
+            json={"thread_id": thread_id, "message_id": message_id, "flagged": True, "scores": {}},
+        )
+
+        reader = _signup(client)
+        await set_user_active(uuid.UUID(reader["user"]["id"]), True)
+        reader_headers = {"Authorization": f"Bearer {reader['access_token']}"}
+
+        listing = client.get("/feedback/", headers=reader_headers)
+        resolved = client.patch(
+            f"/feedback/{message_id}/resolved", headers=reader_headers, json={"resolved": True}
+        )
+        deleted = client.delete(f"/feedback/{message_id}", headers=reader_headers)
+
+    assert listing.status_code == 200
+    assert resolved.status_code == 200
+    assert resolved.json()["resolved"] is True
+    assert deleted.status_code == 403
 
 
 async def test_resolved_toggle_updates_the_row_and_survives_a_feedback_resubmit(monkeypatch):

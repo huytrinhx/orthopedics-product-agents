@@ -42,26 +42,26 @@ export default function Home() {
           <span className="arrow">→</span>
         </Link>
         {user.is_admin && (
-          <>
-            <Link href="/documents" className="link-card">
-              <div>
-                <div className="title">Document Manager</div>
-                <p style={{ margin: "4px 0 0", color: "var(--ink-soft)", fontSize: "0.9rem" }}>
-                  Upload and track the documents OrthoMate answers from.
-                </p>
-              </div>
-              <span className="arrow">→</span>
-            </Link>
-            <Link href="/evals" className="link-card">
-              <div>
-                <div className="title">Evals</div>
-                <p style={{ margin: "4px 0 0", color: "var(--ink-soft)", fontSize: "0.9rem" }}>
-                  Review answer quality against the golden dataset.
-                </p>
-              </div>
-              <span className="arrow">→</span>
-            </Link>
-          </>
+          <Link href="/documents" className="link-card">
+            <div>
+              <div className="title">Document Manager</div>
+              <p style={{ margin: "4px 0 0", color: "var(--ink-soft)", fontSize: "0.9rem" }}>
+                Upload and track the documents OrthoMate answers from.
+              </p>
+            </div>
+            <span className="arrow">→</span>
+          </Link>
+        )}
+        {(user.is_admin || user.is_active) && (
+          <Link href="/evals" className="link-card">
+            <div>
+              <div className="title">Evals</div>
+              <p style={{ margin: "4px 0 0", color: "var(--ink-soft)", fontSize: "0.9rem" }}>
+                Review answer quality against the golden dataset.
+              </p>
+            </div>
+            <span className="arrow">→</span>
+          </Link>
         )}
       </div>
     </main>

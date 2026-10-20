@@ -146,6 +146,11 @@ picking this repo up cold, read this before making structural changes.
     `liveness_check_timeout`/`max_connection_lifetime` settings in
     `GraphClient.__init__` exist for the same reason; keep them. A retried
     transaction re-runs every statement, so writes stay MERGE/MATCH-based.
+    Reads go through `GraphClient._read` (`execute_read`) for the same
+    reason: an auto-commit read that hit a failed routing-table fetch
+    ("Unable to retrieve routing information") failed a document's
+    ingestion. `ping` is the one exception, so the health check reports
+    what it sees.
 - **Judge rubric is shared between offline evals and human feedback.**
   `backend/agents/judge.py` scores faithfulness/relevance/style/citation for
   the offline eval harness (`backend/evals/harness.py`) and the human
@@ -307,11 +312,14 @@ picking this repo up cold, read this before making structural changes.
   from `/auth/login` and `/auth/google/callback`) — so adding someone to the
   allowlist after they already have an account promotes them on their next
   sign-in, no DB edit needed. It's still not editable via any UI. Admin-gated
-  pages (Documents, Evals, Users) check this flag; regular chat access
+  pages (Documents, Users, Settings) check this flag; regular chat access
   doesn't require it, but does require `is_active` (the Users tab's
   Enable/Disable) — a new non-admin signup starts `is_active=False` and is
   blocked from chat (`auth.dependencies.require_chat_access`) until an admin
-  enables them. Admins bypass the `is_active` check entirely, so an admin's
+  enables them. The Evals tab is on that same chat-access gate: every
+  enabled rep sees everyone's feedback, submitter emails included, and can
+  rerun and mark items resolved; deleting feedback and "Rerun with models"
+  stay admin-only. Admins bypass the `is_active` check entirely, so an admin's
   row is read-only in the Users tab. The Users tab also shows `last_login_at`
   per account, which in practice means "last seen": it's stamped on signup,
   every login/OAuth callback, *and* any authenticated request
