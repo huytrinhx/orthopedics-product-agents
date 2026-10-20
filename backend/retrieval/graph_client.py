@@ -96,6 +96,20 @@ class GraphClient:
         async with self._driver.session() as session:
             return await session.execute_write(work)
 
+    async def _read(self, statement: str, **parameters) -> list[dict]:
+        """`_write`'s counterpart for lookups, in a managed read transaction
+        for the same reason: a dead pooled connection or a failed routing
+        table fetch ("Unable to retrieve routing information", seen in
+        production failing a document's ingestion seconds after a passing
+        health check) is retried instead of failing the caller."""
+
+        async def work(tx) -> list[dict]:
+            result = await tx.run(statement, **parameters)
+            return [record.data() async for record in result]
+
+        async with self._driver.session() as session:
+            return await session.execute_read(work)
+
     async def _write_transaction(self, work):
         """`work(tx)` in one managed write transaction -- for writes of
         several dependent statements (delete-then-recreate, read a count
@@ -360,12 +374,10 @@ class GraphClient:
         return bool(records)
 
     async def get_document_properties(self, document_id: str) -> dict | None:
-        async with self._driver.session() as session:
-            result = await session.run(
-                "MATCH (d:Document {id: $id}) RETURN properties(d) AS properties", id=document_id
-            )
-            record = await result.single()
-            return dict(record["properties"]) if record else None
+        records = await self._read(
+            "MATCH (d:Document {id: $id}) RETURN properties(d) AS properties", id=document_id
+        )
+        return dict(records[0]["properties"]) if records else None
 
     async def attach_differentiation(
         self, sku_a: str, sku_b: str, explanation: str, document_id: str
@@ -524,11 +536,10 @@ class GraphClient:
         return await self._write_transaction(work)
 
     async def document_exists(self, document_id: str) -> bool:
-        async with self._driver.session() as session:
-            result = await session.run(
-                "MATCH (d:Document {id: $id}) RETURN d.id AS id", id=document_id
-            )
-            return await result.single() is not None
+        records = await self._read(
+            "MATCH (d:Document {id: $id}) RETURN d.id AS id", id=document_id
+        )
+        return bool(records)
 
     # ---- Tray-layout visual extraction (ticket 25, backend/ingestion/tray_layout_extraction.py) ----
 
@@ -593,53 +604,47 @@ class GraphClient:
         # `product_family` is the exact catalog name -- ingestion
         # (pipeline.py, tray_layout_extraction.py) passes the document's
         # own Product Family.
-        async with self._driver.session() as session:
-            result = await session.run(
-                """
-                MATCH (p:Part)-[:BELONGS_TO_TRAY]->(:Tray)-[:BELONGS_TO_FAMILY]->(f:ProductFamily {name: $family})
-                RETURN p.sku AS sku, p.description AS description
-                """,
-                family=product_family,
-            )
-            return [dict(record) async for record in result]
+        return await self._read(
+            """
+            MATCH (p:Part)-[:BELONGS_TO_TRAY]->(:Tray)-[:BELONGS_TO_FAMILY]->(f:ProductFamily {name: $family})
+            RETURN p.sku AS sku, p.description AS description
+            """,
+            family=product_family,
+        )
 
     async def list_trays_for_family(self, product_family: str) -> list[str]:
-        async with self._driver.session() as session:
-            result = await session.run(
-                """
-                MATCH (t:Tray)-[:BELONGS_TO_FAMILY]->(:ProductFamily {name: $family})
-                RETURN t.name AS name
-                """,
-                family=product_family,
-            )
-            return [record["name"] async for record in result]
+        records = await self._read(
+            """
+            MATCH (t:Tray)-[:BELONGS_TO_FAMILY]->(:ProductFamily {name: $family})
+            RETURN t.name AS name
+            """,
+            family=product_family,
+        )
+        return [record["name"] for record in records]
 
     async def list_parts_for_families(self, product_families: list[str]) -> list[dict]:
         """list_parts_for_family over several families, each Part once.
         Prose extraction's scope (issue #28): the document's family plus
         every family its SKU index found parts of."""
-        async with self._driver.session() as session:
-            result = await session.run(
-                """
-                MATCH (p:Part)-[:BELONGS_TO_TRAY]->(:Tray)-[:BELONGS_TO_FAMILY]->(f:ProductFamily)
-                WHERE f.name IN $families
-                RETURN DISTINCT p.sku AS sku, p.description AS description
-                """,
-                families=product_families,
-            )
-            return [dict(record) async for record in result]
+        return await self._read(
+            """
+            MATCH (p:Part)-[:BELONGS_TO_TRAY]->(:Tray)-[:BELONGS_TO_FAMILY]->(f:ProductFamily)
+            WHERE f.name IN $families
+            RETURN DISTINCT p.sku AS sku, p.description AS description
+            """,
+            families=product_families,
+        )
 
     async def list_trays_by_family(self) -> dict[str, list[str]]:
         """Every family's catalog name -> its trays' names. What a
         technique's "requires <tray>" text is matched against."""
-        async with self._driver.session() as session:
-            result = await session.run(
-                """
-                MATCH (t:Tray)-[:BELONGS_TO_FAMILY]->(f:ProductFamily)
-                RETURN f.name AS family, collect(t.name) AS trays
-                """
-            )
-            return {record["family"]: sorted(record["trays"]) async for record in result}
+        records = await self._read(
+            """
+            MATCH (t:Tray)-[:BELONGS_TO_FAMILY]->(f:ProductFamily)
+            RETURN f.name AS family, collect(t.name) AS trays
+            """
+        )
+        return {record["family"]: sorted(record["trays"]) for record in records}
 
     async def list_part_descriptions_by_tray(self, product_family: str) -> dict[str, list[str]]:
         """Tray catalog name -> its Parts' descriptions, for one family
@@ -647,15 +652,14 @@ class GraphClient:
         diameters off these (issue #21's stated-diameter rule) rather than
         keeping a diameter -> tray table in code.
         """
-        async with self._driver.session() as session:
-            result = await session.run(
-                """
-                MATCH (p:Part)-[:BELONGS_TO_TRAY]->(t:Tray)-[:BELONGS_TO_FAMILY]->(:ProductFamily {name: $family})
-                RETURN t.name AS tray, collect(coalesce(p.description, '')) AS descriptions
-                """,
-                family=product_family,
-            )
-            return {record["tray"]: record["descriptions"] async for record in result}
+        records = await self._read(
+            """
+            MATCH (p:Part)-[:BELONGS_TO_TRAY]->(t:Tray)-[:BELONGS_TO_FAMILY]->(:ProductFamily {name: $family})
+            RETURN t.name AS tray, collect(coalesce(p.description, '')) AS descriptions
+            """,
+            family=product_family,
+        )
+        return {record["tray"]: record["descriptions"] for record in records}
 
     async def list_catalog_parts(self, skus: list[str] | None = None) -> list[dict]:
         """Every Part across the whole catalog (or just `skus`), each with its
@@ -666,30 +670,27 @@ class GraphClient:
         technique step resolution (backend/techniques/, issue #28), which
         reads the structured specs the seed stored.
         """
-        async with self._driver.session() as session:
-            result = await session.run(
-                """
-                MATCH (p:Part)
-                WHERE $skus IS NULL OR p.sku IN $skus
-                OPTIONAL MATCH (p)-[:BELONGS_TO_TRAY]->(:Tray)-[:BELONGS_TO_FAMILY]->(f:ProductFamily)
-                RETURN p.sku AS sku, p.description AS description,
-                       p.item_type AS item_type, p.thread AS thread,
-                       p.guidewire_spec AS guidewire_spec, p.pre_drill_spec AS pre_drill_spec,
-                       p.driver_spec AS driver_spec,
-                       collect(DISTINCT f.name) AS families
-                """,
-                skus=skus,
-            )
-            return [dict(record) async for record in result]
+        return await self._read(
+            """
+            MATCH (p:Part)
+            WHERE $skus IS NULL OR p.sku IN $skus
+            OPTIONAL MATCH (p)-[:BELONGS_TO_TRAY]->(:Tray)-[:BELONGS_TO_FAMILY]->(f:ProductFamily)
+            RETURN p.sku AS sku, p.description AS description,
+                   p.item_type AS item_type, p.thread AS thread,
+                   p.guidewire_spec AS guidewire_spec, p.pre_drill_spec AS pre_drill_spec,
+                   p.driver_spec AS driver_spec,
+                   collect(DISTINCT f.name) AS families
+            """,
+            skus=skus,
+        )
 
     async def list_part_skus(self) -> list[str]:
         """Every Part's SKU across the whole catalog, nothing else -- what
         catalog/catalog_skus.py caches so agents/fact_check.py can recognize
         a SKU its pattern can't (`SNAPWIRE`, `MA830`), issue #29.
         """
-        async with self._driver.session() as session:
-            result = await session.run("MATCH (p:Part) WHERE p.sku IS NOT NULL RETURN p.sku AS sku")
-            return [record["sku"] async for record in result]
+        records = await self._read("MATCH (p:Part) WHERE p.sku IS NOT NULL RETURN p.sku AS sku")
+        return [record["sku"] for record in records]
 
     async def list_part_descriptions_by_family(self, product_families: list[str]) -> dict[str, list[str]]:
         """Family catalog name -> its Parts' descriptions, one per Part even
@@ -697,17 +698,16 @@ class GraphClient:
         What catalog/family_descriptions.py describes the families from
         (issue #30) -- one query for all of them.
         """
-        async with self._driver.session() as session:
-            result = await session.run(
-                """
-                MATCH (p:Part)-[:BELONGS_TO_TRAY]->(:Tray)-[:BELONGS_TO_FAMILY]->(f:ProductFamily)
-                WHERE f.name IN $families
-                WITH DISTINCT f, p
-                RETURN f.name AS family, collect(coalesce(p.description, '')) AS descriptions
-                """,
-                families=product_families,
-            )
-            return {record["family"]: record["descriptions"] async for record in result}
+        records = await self._read(
+            """
+            MATCH (p:Part)-[:BELONGS_TO_TRAY]->(:Tray)-[:BELONGS_TO_FAMILY]->(f:ProductFamily)
+            WHERE f.name IN $families
+            WITH DISTINCT f, p
+            RETURN f.name AS family, collect(coalesce(p.description, '')) AS descriptions
+            """,
+            families=product_families,
+        )
+        return {record["family"]: record["descriptions"] for record in records}
 
     # ---- Query surface (backend/agents/tools/graph_query.py + synonym_resolve.py) ----
 
@@ -716,34 +716,33 @@ class GraphClient:
     ) -> list[dict]:
         if relationship is not None and relationship not in _RELATIONSHIP_TYPES:
             return []
-        async with self._driver.session() as session:
-            result = await session.run(
-                """
-                MATCH (e)
-                WHERE toLower(coalesce(e.sku, '')) = toLower($entity)
-                   OR toLower(coalesce(e.name, '')) = toLower($entity)
-                   OR toLower(coalesce(e.description, '')) CONTAINS toLower($entity)
-                WITH e
-                ORDER BY CASE WHEN toLower(coalesce(e.sku, e.name, '')) = toLower($entity) THEN 0 ELSE 1 END
-                LIMIT 1
-                CALL (e) {
-                    MATCH (e)-[r]->(related)
-                    WHERE $relationship IS NULL OR type(r) = $relationship
-                    RETURN type(r) AS relationship, 'outgoing' AS direction, r, related
-                    UNION
-                    MATCH (related)-[r]->(e)
-                    WHERE $relationship IS NULL OR type(r) = $relationship
-                    RETURN type(r) AS relationship, 'incoming' AS direction, r, related
-                }
-                RETURN relationship, direction, labels(related) AS related_labels,
-                       coalesce(related.sku, related.name, related.id) AS related_entity,
-                       properties(related) AS related_properties,
-                       properties(r) AS relationship_properties
-                """,
-                entity=entity,
-                relationship=relationship,
-            )
-            return [dict(record) async for record in result]
+        records = await self._read(
+            """
+            MATCH (e)
+            WHERE toLower(coalesce(e.sku, '')) = toLower($entity)
+               OR toLower(coalesce(e.name, '')) = toLower($entity)
+               OR toLower(coalesce(e.description, '')) CONTAINS toLower($entity)
+            WITH e
+            ORDER BY CASE WHEN toLower(coalesce(e.sku, e.name, '')) = toLower($entity) THEN 0 ELSE 1 END
+            LIMIT 1
+            CALL (e) {
+                MATCH (e)-[r]->(related)
+                WHERE $relationship IS NULL OR type(r) = $relationship
+                RETURN type(r) AS relationship, 'outgoing' AS direction, r, related
+                UNION
+                MATCH (related)-[r]->(e)
+                WHERE $relationship IS NULL OR type(r) = $relationship
+                RETURN type(r) AS relationship, 'incoming' AS direction, r, related
+            }
+            RETURN relationship, direction, labels(related) AS related_labels,
+                   coalesce(related.sku, related.name, related.id) AS related_entity,
+                   properties(related) AS related_properties,
+                   properties(r) AS relationship_properties
+            """,
+            entity=entity,
+            relationship=relationship,
+        )
+        return [dict(record) for record in records]
 
     async def find_parts(
         self, term: str, product_family: str | None = None, limit: int = 20
@@ -828,66 +827,64 @@ class GraphClient:
         # never spell the unit ("4.0 X 58"), so this word would otherwise
         # never contribute to any match count at all.
         stripped_term = re.sub(r"(\d+(?:\.\d+)?)mm\b", r"\1", term, flags=re.IGNORECASE)
-        async with self._driver.session() as session:
-            result = await session.run(
-                """
-                WITH split(toLower(coalesce($family, '')), ' ') AS family_words,
-                     [w IN split(toLower($stripped_term), ' ')
-                      WHERE size(w) > 1 AND NOT w IN split(toLower(coalesce($family, '')), ' ')]
-                     AS match_words
-                MATCH (p:Part)-[:BELONGS_TO_TRAY]->(t:Tray)-[:BELONGS_TO_FAMILY]->(f:ProductFamily)
-                WHERE ($family IS NULL OR f.name = $family)
-                  AND (
-                    toLower(p.sku) = toLower($term)
-                    OR toLower(p.description) CONTAINS toLower($term)
-                    OR ANY(word IN match_words WHERE toLower(p.description) CONTAINS word)
-                  )
-                WITH p, f, match_words, collect(DISTINCT t.name) AS trays
-                RETURN properties(p) AS part, f.name AS product_family, trays,
-                       size([word IN match_words WHERE toLower(p.description) CONTAINS word])
-                           AS word_match_count
-                ORDER BY CASE
-                    WHEN toLower(p.sku) = toLower($term) THEN 0
-                    WHEN toLower(p.description) CONTAINS toLower($term) THEN 1
-                    ELSE 2
-                END,
-                word_match_count DESC,
-                CASE WHEN p.item_type = 'Implant' THEN 0 ELSE 1 END,
-                p.sku
-                LIMIT $limit
-                """,
-                term=term,
-                stripped_term=stripped_term,
-                family=family,
-                limit=limit,
-            )
-            return [
-                {
-                    **record["part"],
-                    "product_family": record["product_family"],
-                    "trays": sorted(record["trays"]),
-                }
-                async for record in result
-            ]
+        records = await self._read(
+            """
+            WITH split(toLower(coalesce($family, '')), ' ') AS family_words,
+                 [w IN split(toLower($stripped_term), ' ')
+                  WHERE size(w) > 1 AND NOT w IN split(toLower(coalesce($family, '')), ' ')]
+                 AS match_words
+            MATCH (p:Part)-[:BELONGS_TO_TRAY]->(t:Tray)-[:BELONGS_TO_FAMILY]->(f:ProductFamily)
+            WHERE ($family IS NULL OR f.name = $family)
+              AND (
+                toLower(p.sku) = toLower($term)
+                OR toLower(p.description) CONTAINS toLower($term)
+                OR ANY(word IN match_words WHERE toLower(p.description) CONTAINS word)
+              )
+            WITH p, f, match_words, collect(DISTINCT t.name) AS trays
+            RETURN properties(p) AS part, f.name AS product_family, trays,
+                   size([word IN match_words WHERE toLower(p.description) CONTAINS word])
+                       AS word_match_count
+            ORDER BY CASE
+                WHEN toLower(p.sku) = toLower($term) THEN 0
+                WHEN toLower(p.description) CONTAINS toLower($term) THEN 1
+                ELSE 2
+            END,
+            word_match_count DESC,
+            CASE WHEN p.item_type = 'Implant' THEN 0 ELSE 1 END,
+            p.sku
+            LIMIT $limit
+            """,
+            term=term,
+            stripped_term=stripped_term,
+            family=family,
+            limit=limit,
+        )
+        return [
+            {
+                **record["part"],
+                "product_family": record["product_family"],
+                "trays": sorted(record["trays"]),
+            }
+            for record in records
+        ]
 
     async def get_synonym_groups(self) -> list[list[str]]:
         """Canonical synonym clusters, source of truth for query-time expansion
         via backend/agents/tools/synonym_resolve.py. Each group includes the
         canonical name itself plus every ALIAS_OF/ABBREVIATION_OF term —
         callers don't need to distinguish the two relationship types."""
-        async with self._driver.session() as session:
-            result = await session.run(
-                """
-                MATCH (c:CanonicalTerm)
-                OPTIONAL MATCH (t:Term)-[:ALIAS_OF|ABBREVIATION_OF]->(c)
-                RETURN c.name AS canonical, collect(t.name) AS variants
-                """
-            )
-            groups = []
-            async for record in result:
-                group = [record["canonical"], *[variant for variant in record["variants"] if variant]]
-                groups.append(group)
-            return groups
+        records = await self._read(
+            """
+            MATCH (c:CanonicalTerm)
+            OPTIONAL MATCH (t:Term)-[:ALIAS_OF|ABBREVIATION_OF]->(c)
+            RETURN c.name AS canonical, collect(t.name) AS variants
+            """
+        )
+        groups = []
+        for record in records:
+            group = [record["canonical"], *[variant for variant in record["variants"] if variant]]
+            groups.append(group)
+        return groups
 
     async def ping(self) -> None:
         """Round-trips to AuraDB and back -- backs the Document Manager's
