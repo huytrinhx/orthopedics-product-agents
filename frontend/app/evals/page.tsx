@@ -11,6 +11,10 @@
 // build-log.md). "Rerun with models" (issue #24) adds per-slot model
 // overrides to that rerun (`&models=`) to compare models on the same
 // question; it's only offered when OPENROUTER_API_KEY is set.
+//
+// Open to every enabled rep, not just admins: they see everyone's feedback
+// (submitter emails included), can rerun and mark items resolved. Delete
+// and "Rerun with models" stay admin-only, as the backend enforces.
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
@@ -35,11 +39,14 @@ export default function EvalsPage() {
   const [error, setError] = useState<string | null>(null);
   const [chatSlots, setChatSlots] = useState<ModelSlot[]>([]);
 
+  const canView = Boolean(user && (user.is_admin || user.is_active));
+
   useEffect(() => {
-    if (!user?.is_admin) return;
+    if (!canView) return;
     listFeedback()
       .then(setFeedback)
       .catch((caughtError) => setError(caughtError instanceof Error ? caughtError.message : "Couldn't load feedback"));
+    if (!user?.is_admin) return;
     // Model overrides are an extra: without them (or the gateway), Rerun
     // works as before.
     getModelAssignments()
@@ -51,7 +58,7 @@ export default function EvalsPage() {
         )
       )
       .catch(() => setChatSlots([]));
-  }, [user]);
+  }, [user, canView]);
 
   function updateItem(messageId: string, patch: Partial<FeedbackListItem>) {
     setFeedback((previous) =>
@@ -70,11 +77,11 @@ export default function EvalsPage() {
 
   if (loading) return <main className="page-wide"><p>Loading…</p></main>;
 
-  if (!user || !user.is_admin) {
+  if (!user || !canView) {
     return (
       <main className="page-wide">
         <h1>Eval tab</h1>
-        <p>This page is admin-only.</p>
+        <p>Your account is waiting for an admin to enable it.</p>
         <Link href="/">Back home</Link>
       </main>
     );
@@ -90,9 +97,13 @@ export default function EvalsPage() {
       <p className="lede">
         Every score, comment, and flag reps have left on an answer, newest first. Click a row to read
         the full answer. Rerun asks the same question again in a fresh chat on the current default
-        workflow; Rerun with models first picks per-slot models for that one conversation, and its
-        answer shows what it ran on. Mark a flagged item resolved once the rerun confirms it&rsquo;s
-        fixed.
+        workflow{user.is_admin && (
+          <>
+            ; Rerun with models first picks per-slot models for that one conversation, and its answer
+            shows what it ran on
+          </>
+        )}
+        . Mark a flagged item resolved once the rerun confirms it&rsquo;s fixed.
       </p>
 
       <div className="eval-filter" role="group" aria-label="Filter feedback">
@@ -146,6 +157,7 @@ export default function EvalsPage() {
                   key={item.message_id}
                   item={item}
                   chatSlots={chatSlots}
+                  canDelete={user.is_admin}
                   onRerun={rerun}
                   onResolvedChanged={(resolved) => updateItem(item.message_id, { resolved })}
                   onDeleted={() => removeItem(item.message_id)}
