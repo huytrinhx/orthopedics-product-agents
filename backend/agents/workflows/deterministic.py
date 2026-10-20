@@ -1,6 +1,10 @@
 """Deterministic retrieval workflow: fixed pipeline, no agentic tool choice.
 
-query -> detect_intent -> clarify_question_type -> resolve_synonyms
+query -> detect_intent -> clarify_question_type
+       -> (documents_lookup only: lookup_document, which answers with the
+           one document clearly asked for and goes straight to finalize --
+           or, with no clear match, carries on below)
+       -> resolve_synonyms
        -> (if a term is genuinely ambiguous between canonical concepts:
            request_clarification, then back to resolve_synonyms)
        -> hybrid_retrieve -> resolve_query_parts -> rerank -> resolve_skus
@@ -23,6 +27,14 @@ clarify_question_type (issue #19) narrows detect_intent's classified
   which resolves to `unclassified`), so every turn follows one predictable
   doc-type retrieval path. Runs after the family question, so a turn
   needing both asks family first, then question type -- once each.
+
+lookup_document: a rep asking for a document ("pull the REFLEX HYBRID
+  tray overhead guide") wants the document, not a summary of it. When one
+  document in the turn's family clearly matches by filename, document
+  type, family and tray tags (agents/tools/document_lookup.py's
+  single_best_match), the answer is a fixed sentence citing it -- no
+  retrieval, no model call, no fact check -- and the citation opens the
+  whole PDF in the viewer.
 
 resolve_synonyms/_should_clarify_synonyms: when a single
   extracted word matches more than one distinct canonical concept (the
@@ -83,9 +95,16 @@ from pydantic import BaseModel, Field, PrivateAttr
 from agents.citations import extract_citations, strip_citations
 from agents.fact_check import check_answer, format_issues_for_correction
 from agents.intent_decisions import decide_intent, decide_or_fall_back, decide_question_type_reply
-from agents.question_types import QUESTION_TYPE_NAMES, QUESTION_TYPES, UNCLASSIFIED, QuestionType
+from agents.question_types import (
+    DOCUMENTS_LOOKUP,
+    QUESTION_TYPE_NAMES,
+    QUESTION_TYPES,
+    UNCLASSIFIED,
+    QuestionType,
+)
 from agents.registry import register
 from agents.state import BaseAgentState, RetrievedPassage
+from agents.tools.document_lookup import single_best_match
 from agents.tools.part_lookup import part_lookup
 from agents.tools.term_extraction import extract_candidate_terms, with_singular_variants
 from agents.tools.vector_search import vector_search
@@ -95,6 +114,7 @@ from catalog.family_descriptions import load_family_descriptions
 from catalog.repository import ProductFamilyRecord, TrayRecord, list_families_with_trays
 from config.llm_clients import get_chat_model
 from doc_type_hierarchy.repository import RankedDocumentType, list_hierarchy
+from documents.repository import DocumentRecord, list_chunks, list_documents
 from memory.thread_memory import (
     build_turn_record,
     remembered_part_lines,
@@ -215,6 +235,12 @@ class DeterministicState(BaseAgentState, total=False):
     # type id -> rerank's additive priority bonus for this turn's question
     # type. Carried to rerank in state so the table is read once per turn.
     document_type_bonuses: dict[str, float]
+    # Set by lookup_document, which only runs on a documents_lookup turn:
+    # the id of the document it answered with, or None when no document
+    # clearly matched and the turn carries on through retrieval. Always
+    # written when the node runs, and only read right after it, so a
+    # previous turn's value never decides anything.
+    looked_up_document_id: str | None
 
 
 class _IntentClassification(BaseModel):
@@ -696,6 +722,62 @@ async def clarify_question_type(state: DeterministicState) -> dict:
     if resolved is None:
         resolved = await _classify_question_type_reply(state["query"], reply)
     return {"resolved_question_type": resolved}
+
+
+def _after_question_type(
+    state: DeterministicState,
+) -> Literal["lookup_document", "resolve_synonyms"]:
+    if state.get("resolved_question_type") == DOCUMENTS_LOOKUP:
+        return "lookup_document"
+    return "resolve_synonyms"
+
+
+def _document_lookup_answer(document: DocumentRecord, citation: str) -> str:
+    """The fixed sentence a looked-up document comes back as: its filename,
+    and its document type and family when tagged, with the citation that
+    opens it in the viewer."""
+    tags = ", ".join(
+        filter(None, [document.document_type_name, document.product_family_display_name])
+    )
+    described = f"**{document.filename}** ({tags})" if tags else f"**{document.filename}**"
+    return f"Here's {described}. Open it below to view the whole document. [{citation}]"
+
+
+async def lookup_document(state: DeterministicState) -> dict:
+    """The documents_lookup fast path: a rep asking for a document wants
+    the document itself, which retrieval and generate used to answer with
+    a summary of whatever chunks ranked highest. Matches the request
+    against every indexed document's filename and document type, family
+    and tray tags (single_best_match), within the turn's family when one
+    resolved. One clear winner answers the turn with no model call; a tie,
+    a thin match or no match leaves looked_up_document_id None and the
+    turn goes through retrieval and generate as before.
+
+    The answer cites the document's first chunk, which is where the
+    citation viewer opens it. It skips self_eval: the sentence is built
+    from the document's own record, so there's nothing to fact-check.
+    """
+    family_id = state.get("resolved_family_id")
+    documents = [
+        document
+        for document in await list_documents()
+        if document.status == "done"
+        and (family_id is None or str(document.product_family_id) == family_id)
+    ]
+    document = single_best_match(state["query"], documents)
+    chunks = await list_chunks(document.id) if document else []
+    if document is None or not chunks:
+        return {"looked_up_document_id": None}
+    citation = f"{document.id}#{chunks[0].chunk_index}"
+    return {
+        "looked_up_document_id": str(document.id),
+        "answer": _document_lookup_answer(document, citation),
+        "citations": [citation],
+    }
+
+
+def _after_document_lookup(state: DeterministicState) -> Literal["finalize", "resolve_synonyms"]:
+    return "finalize" if state.get("looked_up_document_id") else "resolve_synonyms"
 
 
 async def resolve_synonyms(state: DeterministicState) -> dict:
@@ -1537,6 +1619,7 @@ def build_graph(checkpointer):
     graph = StateGraph(DeterministicState)
     graph.add_node("detect_intent", detect_intent)
     graph.add_node("clarify_question_type", clarify_question_type)
+    graph.add_node("lookup_document", lookup_document)
     graph.add_node("resolve_synonyms", resolve_synonyms)
     graph.add_node("hybrid_retrieve", hybrid_retrieve)
     graph.add_node("resolve_query_parts", resolve_query_parts)
@@ -1550,7 +1633,8 @@ def build_graph(checkpointer):
 
     graph.set_entry_point("detect_intent")
     graph.add_edge("detect_intent", "clarify_question_type")
-    graph.add_edge("clarify_question_type", "resolve_synonyms")
+    graph.add_conditional_edges("clarify_question_type", _after_question_type)
+    graph.add_conditional_edges("lookup_document", _after_document_lookup)
     graph.add_conditional_edges("resolve_synonyms", _should_clarify_synonyms)
     graph.add_edge("hybrid_retrieve", "resolve_query_parts")
     graph.add_edge("resolve_query_parts", "rerank")

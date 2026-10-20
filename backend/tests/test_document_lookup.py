@@ -4,8 +4,9 @@ no-mocking approach as test_vector_store.py)."""
 import uuid
 from datetime import UTC, datetime
 
-from agents.tools.document_lookup import document_lookup, rank_documents_by_name
+from agents.tools.document_lookup import document_lookup, rank_documents_by_name, single_best_match
 from auth.repository import create_user
+from catalog.repository import TrayRecord
 from documents.repository import DocumentRecord, create_document, delete_document, set_status
 from retrieval.vector_store import get_vector_store
 
@@ -68,6 +69,48 @@ def test_filler_words_alone_match_nothing():
 
 def test_unrelated_documents_are_left_out():
     assert rank_documents_by_name("torque chart", [_record("MIS Brochure.pdf")]) == []
+
+
+def _tray(name: str) -> TrayRecord:
+    return TrayRecord(id=uuid.uuid4(), name=name, display_name=name)
+
+
+def test_tray_tags_count_as_what_a_document_is_known_by():
+    overhead_guide = _record("Overhead Guide.pdf", product_family_display_name="REFLEX HYBRID")
+    overhead_guide.trays = [_tray("Implant System Tray")]
+    brochure = _record("Brochure.pdf", product_family_display_name="REFLEX HYBRID")
+    ranked = rank_documents_by_name(
+        "REFLEX HYBRID implant system tray guide", [brochure, overhead_guide]
+    )
+    assert _filenames(ranked) == ["Overhead Guide.pdf", "Brochure.pdf"]
+
+
+_REFLEX_HYBRID = "REFLEX HYBRID"
+
+
+def test_single_best_match_names_the_one_clear_winner_and_ignores_request_filler():
+    documents = [
+        _record("REFLEX HYBRID Tray Overhead Guide.pdf", product_family_display_name=_REFLEX_HYBRID),
+        _record("REFLEX HYBRID Surgical Technique.pdf", product_family_display_name=_REFLEX_HYBRID),
+    ]
+    match = single_best_match("Pull the tray overhead guide for the reflex hybrid tray", documents)
+    assert match is not None
+    assert match.filename == "REFLEX HYBRID Tray Overhead Guide.pdf"
+
+
+def test_single_best_match_refuses_a_tie():
+    documents = [
+        _record("Brochure.pdf", product_family_display_name="MIS Foot Recon"),
+        _record("Brochure.pdf", product_family_display_name="MIS Foot Recon"),
+    ]
+    assert single_best_match("MIS brochure", documents) is None
+
+
+def test_single_best_match_refuses_a_match_on_too_few_of_the_request_words():
+    # Only "mis" of mis/procedure/guide/torque matches: a shared family
+    # word isn't enough to hand back a whole document.
+    documents = [_record("MIS Brochure.pdf"), _record("REFLEX Brochure.pdf")]
+    assert single_best_match("MIS procedure guide torque", documents) is None
 
 
 async def test_tool_returns_the_named_document_with_citable_opening_chunks():
